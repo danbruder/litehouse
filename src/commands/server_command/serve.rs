@@ -227,15 +227,6 @@ async fn admin_interface(state: Arc<RwLock<ProxyState>>) -> Response<Body> {
     html.push_str(
         r#"
     </table>
-    <h2>API Endpoints</h2>
-    <ul>
-        <li>GET /api/apps - List all apps</li>
-        <li>POST /api/apps - Create a new app</li>
-        <li>GET /api/apps/:id - Get app details</li>
-        <li>DELETE /api/apps/:id - Delete an app</li>
-        <li>POST /api/apps/:id/start - Start an app</li>
-        <li>POST /api/apps/:id/stop - Stop an app</li>
-    </ul>
 </body>
 </html>
 "#,
