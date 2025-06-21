@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::api_client::ApiClient;
 use crate::commands::server_command::serve;
@@ -10,6 +10,12 @@ use crate::config::{ClientConfig, ServerConfig};
 pub struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Args)]
+struct PodmanArgs {
+    #[command(subcommand)]
+    command: PodmanCmd,
 }
 
 #[derive(Subcommand)]
@@ -92,6 +98,14 @@ enum Commands {
     Serve,
 
     Config,
+
+    Podman(PodmanArgs),
+}
+
+#[derive(Subcommand)]
+enum PodmanCmd {
+    /// Show podman version
+    Version,
 }
 
 #[tracing::instrument]
@@ -137,22 +151,20 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
         Commands::Serve => {
-            let config = ServerConfig::load()?;
+            let config = ServerConfig::default();
             serve::execute(config).await
         }
         Commands::Config => {
             let client_config = ClientConfig::load()?;
             let client_config_path = ClientConfig::get_config_path()?;
-            let server_config = ServerConfig::load()?;
-            let server_config_path = ServerConfig::get_config_path()?;
 
             println!("Client config: {}", client_config_path.display());
             println!("{}", toml::to_string(&client_config)?);
 
-            println!("Server config: {}", server_config_path.display());
-            println!("{}", toml::to_string(&server_config)?);
-
             Ok(())
         }
+        Commands::Podman(args) => match args.command {
+            PodmanCmd::Version => api_client.get_podman_version().await,
+        },
     }
 }

@@ -1,6 +1,7 @@
+use crate::providers::podman;
 use sha2::{Digest, Sha256};
 use sqlx::{Pool, Sqlite};
-use std::fs;
+use std::{fs, path::PathBuf};
 use tracing::{info, instrument};
 
 use crate::config;
@@ -18,6 +19,10 @@ pub enum DeployError {
     ConfigError(#[from] crate::config::ConfigError),
     #[error("DatabaseError: {0}")]
     DatabaseError(#[from] crate::db::DatabaseError),
+    #[error("Dockerfile error: {0}")]
+    DockerfileError(String),
+    #[error("Podman error: {0}")]
+    PodmanError(String),
 }
 
 type Result<T> = anyhow::Result<T, DeployError>;
@@ -42,8 +47,15 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, binary_data: &[u8]) ->
     let target_path = config::get_app_binary_path(app_name)?
         .to_string_lossy()
         .to_string();
+
+    let app_dir = config::get_app_dir(app_name)?;
+    let binary_path = app_dir.join("app");
+    let dockerfile_path = app_dir.join("Dockerfile");
+
     info!("Target path for deployment: {}", target_path);
-    copy_and_set_permissions(&target_path, binary_data)?;
+    copy_and_set_permissions(&binary_path.to_string_lossy(), binary_data)?;
+    create_dockerfile(&dockerfile_path, &binary_path)?;
+    podman::build_image(&app_dir, &app_name).await.map_err(|e| DeployError::PodmanError(e.to_string()))?;
 
     // Update and save to database
     let app = app.deployed(target_path, hash);
@@ -77,5 +89,21 @@ fn copy_and_set_permissions(target_path: &str, binary_data: &[u8]) -> Result<()>
         fs::set_permissions(&target_path, perms)
             .map_err(|err| DeployError::PermissionError(err.to_string()))?;
     }
+    Ok(())
+}
+
+fn create_dockerfile(dockerfile_path: &PathBuf, binary_path: &PathBuf) -> Result<()> {
+    let dockerfile = format!(
+        r#"
+    FROM alpine:latest
+    COPY {} /binary
+    ENTRYPOINT ["/binary"]
+    "#,
+        binary_path.display()
+    );
+
+    fs::write(dockerfile_path, dockerfile)
+        .map_err(|err| DeployError::DockerfileError(err.to_string()))?;
+
     Ok(())
 }

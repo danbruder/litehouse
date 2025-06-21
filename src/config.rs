@@ -61,12 +61,7 @@ pub fn get_config_dir() -> Result<PathBuf, ConfigError> {
     if let Some(dir) = TEST_CONFIG_DIR.get() {
         return Ok(dir.clone());
     }
-
-    let config_dir = dirs::config_dir()
-        .ok_or(ConfigError::IoError(
-            "Could not determine config directory".to_string(),
-        ))?
-        .join("binarydrop");
+    let config_dir = get_base_dir().join("config");
 
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)
@@ -82,11 +77,7 @@ pub fn get_data_dir() -> Result<PathBuf, ConfigError> {
         return Ok(dir.clone());
     }
 
-    let data_dir = dirs::data_dir()
-        .ok_or(ConfigError::IoError(
-            "Could not determine data directory".to_string(),
-        ))?
-        .join("binarydrop");
+    let data_dir = get_base_dir().join("data");
 
     if !data_dir.exists() {
         fs::create_dir_all(&data_dir)
@@ -172,48 +163,6 @@ pub fn get_app_log_path(app_name: &str) -> Result<PathBuf, ConfigError> {
     Ok(get_app_dir(app_name)?.join(format!("{}.log", app_name)))
 }
 
-impl ServerConfig {
-    #[tracing::instrument]
-    pub fn load() -> Result<Self, ConfigError> {
-        let config_path = Self::get_config_path()?;
-        tracing::info!("Loading server config from {}", config_path.display());
-
-        if !config_path.exists() {
-            let config = Self::default();
-            config.save()?;
-            return Ok(config);
-        }
-
-        let contents = fs::read_to_string(config_path)
-            .map_err(|_| ConfigError::IoError("Failed to read config file".to_string()))?;
-        let config: Self =
-            toml::from_str(&contents).map_err(|e| ConfigError::TomlError(e.to_string()))?;
-        Ok(config)
-    }
-
-    #[tracing::instrument]
-    pub fn save(&self) -> Result<(), ConfigError> {
-        let config_path = Self::get_config_path()?;
-        let contents =
-            toml::to_string_pretty(self).map_err(|e| ConfigError::TomlError(e.to_string()))?;
-        tracing::info!("Saving server config to {}", config_path.display());
-        fs::write(config_path, contents)
-            .map_err(|_| ConfigError::IoError("Failed to write config file".to_string()))?;
-        Ok(())
-    }
-
-    #[instrument]
-    pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-        let mut path = dirs::config_dir()
-            .ok_or_else(|| ConfigError::IoError("Could not find config directory".to_string()))?;
-        path.push("bindrop");
-        fs::create_dir_all(&path)
-            .map_err(|_| ConfigError::IoError("Failed to create config directory".to_string()))?;
-        path.push("server-config.toml");
-        Ok(path)
-    }
-}
-
 impl ClientConfig {
     #[tracing::instrument]
     pub fn load() -> Result<Self, ConfigError> {
@@ -244,15 +193,20 @@ impl ClientConfig {
         Ok(())
     }
 
-    #[instrument]
     pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-        let mut path = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))
-            .map_err(|e| ConfigError::IoError(e.to_string()))?;
-        path.push("bindrop");
-        fs::create_dir_all(&path)
-            .map_err(|_| ConfigError::IoError("Failed to create config directory".to_string()))?;
-        path.push("client-config.toml");
-        Ok(path)
+        Ok(get_config_dir()?.join("client-config.toml"))
+    }
+}
+
+fn get_base_dir() -> PathBuf {
+    // if on osx, use the home directory
+    if cfg!(target_os = "macos") {
+        return std::env::current_dir().unwrap();
+    }
+
+    if std::env::var("BINDROP_DIR").is_ok() {
+        PathBuf::from(std::env::var("BINDROP_DIR").unwrap())
+    } else {
+        PathBuf::from("/opt/bindrop")
     }
 }

@@ -38,6 +38,7 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/env", post(set_env))
+        .route("/podman/version", get(get_podman_version))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
         .with_state(state)
 }
@@ -145,7 +146,8 @@ async fn restart_app(
     State(_state): State<Arc<RwLock<ProxyState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match restart::execute(&name).await {
+    let pool = _state.read().await.db_pool.clone();
+    match restart::execute(&pool, &name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
             format!("App '{}' restarted", name),
@@ -395,5 +397,12 @@ async fn set_env(
             format!("Failed to set environment variable: {}", e),
         )
             .into_response(),
+    }
+}
+
+async fn get_podman_version() -> impl IntoResponse {
+    match crate::providers::podman::get_podman_version().await {
+        Ok(version) => (StatusCode::OK, version).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

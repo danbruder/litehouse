@@ -1,4 +1,5 @@
 pub mod cmd;
+pub mod podman;
 
 use crate::models::App;
 use anyhow::Result;

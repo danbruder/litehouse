@@ -125,7 +125,7 @@ fn follow_logs(log_path: &std::path::Path) -> Result<()> {
     // Seek to end of file
     reader.seek(SeekFrom::End(0))?;
 
-    println!("Following logs (press Ctrl+C to stop)...");
+    tracing::info!("Following logs (press Ctrl+C to stop)...");
 
     // Read new lines as they are added
     let mut line = String::new();
