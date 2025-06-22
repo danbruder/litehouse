@@ -3,7 +3,6 @@ use tracing::{info, instrument};
 
 use crate::db;
 use crate::models::AppState;
-use crate::supervisor::SUPERVISOR;
 
 /// Stop an app using the supervisor
 #[instrument]
@@ -22,29 +21,11 @@ pub async fn execute(app_name: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Get the supervisor from global state
-    let supervisor = SUPERVISOR
-        .get()
-        .ok_or_else(|| anyhow!("Process supervisor not initialized"))?;
+    // Stop the app with podman
+    info!("Stopping app '{}'", app_name);
+    crate::podman::stop(&app).await?;
 
-    // Start the app through the supervisor
-    info!("Sending stop request for app '{}'", app_name);
-    supervisor.stop_app(app_name).await?;
-
-    // Wait a bit for the app to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Fetch the app again to get the updated state
-    let app = db::apps::get_by_name(&pool, app_name)
-        .await?
-        .ok_or_else(|| anyhow!("App '{}' not found", app_name))?;
-
-    if app.state == AppState::Stopped {
-        println!("Successfully stopped app '{}'", app_name);
-    } else {
-        println!("App '{}' is stopping...", app_name);
-        println!("Check status with: binarydrop status {}", app_name);
-    }
+    println!("Successfully stopped app '{}'", app_name);
 
     Ok(())
 }

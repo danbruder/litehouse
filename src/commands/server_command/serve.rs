@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Client, Request, Response, Server};
+use hyper::{Body, Request, Response, Server};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -14,7 +14,6 @@ use crate::api;
 use crate::config::ServerConfig;
 use crate::db;
 use crate::models::AppState;
-use crate::supervisor;
 
 // Message types for communication between servers
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +51,8 @@ pub struct ProxyState {
 pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
-    supervisor::init(pool.clone()).await?;
+    // TODO: Initialize supervisor when available
+    info!("Starting server without supervisor (not yet implemented)");
 
     // Create shared state
     let proxy_state = Arc::new(RwLock::new(ProxyState {
@@ -221,9 +221,9 @@ async fn admin_interface(state: Arc<RwLock<ProxyState>>) -> Response<Body> {
 
 /// Proxy request to app
 async fn proxy_to_app(
-    state: Arc<RwLock<ProxyState>>,
-    app_name: &str,
-    req: Request<Body>,
+    _state: Arc<RwLock<ProxyState>>,
+    _app_name: &str,
+    _req: Request<Body>,
 ) -> anyhow::Result<Response<Body>> {
     // let pool = state.read().await.db_pool.clone();
     // let app = db::apps::get_by_name(&pool, app_name)

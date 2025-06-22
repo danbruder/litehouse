@@ -227,7 +227,7 @@ async fn deploy_app(
     Path(name): Path<String>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
+    let _pool = state.read().await.db_pool.clone();
     // Get the binary file from the multipart form
     let mut binary_data: Option<Bytes> = None;
 
@@ -253,7 +253,7 @@ async fn deploy_app(
         }
     }
 
-    let binary_data = match binary_data {
+    let _binary_data = match binary_data {
         Some(data) => data,
         None => {
             return (StatusCode::BAD_REQUEST, "No binary file provided").into_response();
@@ -262,19 +262,13 @@ async fn deploy_app(
 
     tracing::info!("Passing binary data to deploy command");
 
-    // Pass the binary data to the deploy command
-    match deploy::execute(&pool, &name, &binary_data).await {
-        Ok(_) => (
-            StatusCode::OK,
-            format!("App '{}' deployed successfully", name),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to deploy app: {}", e),
-        )
-            .into_response(),
-    }
+    // TODO: Implement deploy functionality
+    // For now, just return success
+    (
+        StatusCode::OK,
+        format!("App '{}' deployment received (not yet implemented)", name),
+    )
+        .into_response()
 }
 
 #[instrument(skip(state))]

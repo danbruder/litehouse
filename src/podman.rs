@@ -1,7 +1,7 @@
 use crate::models::App;
 use anyhow::Result;
+use futures_util::TryStreamExt;
 use podman_api::Podman;
-use std::collections::HashMap;
 use std::path::Path;
 use tracing::{info, instrument};
 
@@ -19,34 +19,25 @@ pub enum PodmanError {
 pub async fn build(directory: &str, tag: &str) -> Result<()> {
     info!("Building app in: {}", directory);
 
-    let podman = Podman::unix("/run/podman/podman.sock")?;
+    let podman = Podman::unix("/run/podman/podman.sock");
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    let build_opts = podman_api::opts::ImageBuildOpts::builder()
+    let build_opts = podman_api::opts::ImageBuildOpts::builder(directory)
         .dockerfile("Dockerfile")
-        .context(directory)
         .tag(tag)
         .build();
 
     info!("Starting container image build...");
-    let build_stream = podman.images().build(&build_opts)?;
+    let images = podman.images();
+    let build_stream = images.build(&build_opts)?;
 
-    for result in build_stream {
-        match result {
-            Ok(info) => {
-                if let Some(stream) = info.stream {
-                    info!("Build: {}", stream.trim());
-                }
-                if let Some(error) = info.error {
-                    return Err(PodmanError::BuildError(error).into());
-                }
-            }
-            Err(e) => return Err(PodmanError::BuildStreamError(e.to_string()).into()),
-        }
+    let mut stream = build_stream;
+    while let Some(result) = stream.try_next().await? {
+        info!("Build: {}", result.stream.trim());
     }
 
     info!("Container image build completed successfully");
@@ -64,7 +55,7 @@ pub async fn run(app: &App) -> Result<()> {
 #[instrument]
 pub async fn remove(tag: &str) -> Result<()> {
     // Placeholder for actual teardown logic
-    info!("Tearing down app: {}", app.name);
+    info!("Removing container with tag: {}", tag);
 
     Ok(())
 }
@@ -72,7 +63,7 @@ pub async fn remove(tag: &str) -> Result<()> {
 #[instrument]
 pub async fn stop(app: &App) -> Result<()> {
     // Placeholder for actual teardown logic
-    info!("Tearing down app: {}", app.name);
+    info!("Stopping app: {}", app.name);
 
     Ok(())
 }

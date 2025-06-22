@@ -1,8 +1,5 @@
-use anyhow::{anyhow, Result};
-use chrono::Utc;
-use tracing::{info, instrument};
-
-use crate::db;
+use anyhow::Result;
+use tracing::instrument;
 
 #[instrument]
 pub async fn set_env(app_name: &str, key: &str, val: &str, delete: bool) -> Result<()> {
@@ -34,5 +31,4 @@ pub async fn set_env(app_name: &str, key: &str, val: &str, delete: bool) -> Resu
     Ok(())
     */
     panic!("todo");
-    Ok(())
 }

@@ -3,7 +3,6 @@ use tracing::{info, instrument};
 
 use crate::db;
 use crate::podman;
-use crate::providers::{Handle, Provider};
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum StartError {
@@ -45,21 +44,11 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
         return Err(StartError::AppNotDeployed(app.name.clone()));
     }
 
-    // Start
-    let (app, change) = app.started();
-    db::apps::save(pool, &app).await?;
-    db::app_state_change::save(pool, &change).await?;
+    // Start the app with podman
 
-    podman::run(&app).await?;
+    podman::run(&app).await.map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 
-    // Check it is running, then update running
-
-    // Update app with process ID
-    let (app, change) = app.running();
-    db::apps::save(pool, &app).await?;
-    db::app_state_change::save(pool, &change).await?;
-
-    info!("Started app '{}' with PID {}", app.name, process_id);
+    info!("Started app '{}'", app.name);
 
     Ok(())
 }
