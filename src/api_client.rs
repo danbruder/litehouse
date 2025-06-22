@@ -85,25 +85,6 @@ impl ApiClient {
         }
     }
 
-    pub async fn restart_app(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!(
-                "{}/apps/{}/restart",
-                self.config.base_url, app_name
-            ))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            println!("App '{}' restarted successfully", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to restart app: {}", error))
-        }
-    }
-
     pub async fn delete_app(&self, app_name: &str) -> Result<()> {
         let response = self
             .client

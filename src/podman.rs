@@ -29,13 +29,7 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
     let build_opts = podman_api::opts::ImageBuildOpts::builder()
         .dockerfile("Dockerfile")
         .context(directory)
-        .tag(&format!(
-            tag,
-            Path::new(directory)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-        ))
+        .tag(tag)
         .build();
 
     info!("Starting container image build...");
@@ -68,7 +62,7 @@ pub async fn run(app: &App) -> Result<()> {
 }
 
 #[instrument]
-pub async fn remove(app: &App) -> Result<()> {
+pub async fn remove(tag: &str) -> Result<()> {
     // Placeholder for actual teardown logic
     info!("Tearing down app: {}", app.name);
 

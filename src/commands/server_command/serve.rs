@@ -40,8 +40,6 @@ struct AppInfo {
     id: String,
     name: String,
     state: String,
-    host: String,
-    port: Option<u16>,
 }
 
 /// Shared state for the proxy server
@@ -227,54 +225,55 @@ async fn proxy_to_app(
     app_name: &str,
     req: Request<Body>,
 ) -> anyhow::Result<Response<Body>> {
-    let pool = state.read().await.db_pool.clone();
-    let app = db::apps::get_by_name(&pool, app_name)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("App '{}' not found", app_name))?;
+    // let pool = state.read().await.db_pool.clone();
+    // let app = db::apps::get_by_name(&pool, app_name)
+    //     .await?
+    //     .ok_or_else(|| anyhow::anyhow!("App '{}' not found", app_name))?;
 
-    // Check if app is running
-    if app.state != AppState::Running {
-        return Ok(Response::builder()
-            .status(503)
-            .body(Body::from(format!("App '{}' is not running", app_name)))
-            .unwrap());
-    }
+    // // Check if app is running
+    // if app.state != AppState::Running {
+    //     return Ok(Response::builder()
+    //         .status(503)
+    //         .body(Body::from(format!("App '{}' is not running", app_name)))
+    //         .unwrap());
+    // }
 
-    // Create URI for proxying
-    let path_and_query = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("");
-    let uri = format!(
-        "http://{}:{}{}",
-        app.host,
-        app.port.map_or("".to_string(), |p| p.to_string()),
-        path_and_query
-    );
+    // // Create URI for proxying
+    // let path_and_query = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("");
+    // let uri = format!(
+    //     "http://{}:{}{}",
+    //     app.host,
+    //     app.port.map_or("".to_string(), |p| p.to_string()),
+    //     path_and_query
+    // );
 
-    // Create new request
-    let (parts, body) = req.into_parts();
-    let mut new_req = Request::builder().method(parts.method).uri(uri);
+    // // Create new request
+    // let (parts, body) = req.into_parts();
+    // let mut new_req = Request::builder().method(parts.method).uri(uri);
 
-    // Copy headers
-    for (name, value) in parts.headers.iter() {
-        if name != "host" {
-            new_req = new_req.header(name, value);
-        }
-    }
+    // // Copy headers
+    // for (name, value) in parts.headers.iter() {
+    //     if name != "host" {
+    //         new_req = new_req.header(name, value);
+    //     }
+    // }
 
-    // Add custom headers
-    if let Some(host) = parts.headers.get("host") {
-        new_req = new_req.header("X-Forwarded-Host", host);
-    }
-    new_req = new_req.header("X-Forwarded-Proto", "http");
+    // // Add custom headers
+    // if let Some(host) = parts.headers.get("host") {
+    //     new_req = new_req.header("X-Forwarded-Host", host);
+    // }
+    // new_req = new_req.header("X-Forwarded-Proto", "http");
 
-    // Build request
-    let new_req = new_req.body(body).context("Failed to build request")?;
+    // // Build request
+    // let new_req = new_req.body(body).context("Failed to build request")?;
 
-    // Send request
-    let client = Client::new();
-    let resp = client
-        .request(new_req)
-        .await
-        .context("Proxy request failed")?;
+    // // Send request
+    // let client = Client::new();
+    // let resp = client
+    //     .request(new_req)
+    //     .await
+    //     .context("Proxy request failed")?;
 
-    Ok(resp)
+    // Ok(resp)
+    anyhow::bail!("Proxying to app is not implemented yet");
 }

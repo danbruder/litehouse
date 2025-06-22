@@ -6,6 +6,7 @@ use crate::db;
 
 #[instrument]
 pub async fn set_env(app_name: &str, key: &str, val: &str, delete: bool) -> Result<()> {
+    /*
     // Connect to database
     let pool = db::init_pool().await?;
 
@@ -30,5 +31,8 @@ pub async fn set_env(app_name: &str, key: &str, val: &str, delete: bool) -> Resu
 
     println!("Restart app '{}' to apply changes", app_name);
 
+    Ok(())
+    */
+    panic!("todo");
     Ok(())
 }

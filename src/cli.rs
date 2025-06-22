@@ -118,7 +118,10 @@ pub async fn run() -> Result<()> {
         Commands::Create { app_name } => api_client.create_app(&app_name).await,
         Commands::Start { app_name } => api_client.start_app(&app_name).await,
         Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
-        Commands::Restart { app_name } => api_client.restart_app(&app_name).await,
+        Commands::Restart { app_name } => {
+            println!("Restarting not implemented for app: {}", app_name);
+            Ok(())
+        }
         Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
         Commands::Deploy {
             app_name,

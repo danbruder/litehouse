@@ -5,7 +5,7 @@ pub struct GitPullResult {
     pub commit: String,
 }
 
-pub fn pull(remote_name: &str, branch: &str, directory: &str) -> Result<GitPullResult> {
+pub async fn pull(remote_name: &str, branch: &str, directory: &str) -> Result<GitPullResult> {
     let repo = Repository::open(directory)?;
 
     let remote = repo

@@ -1,8 +1,6 @@
 use crate::commands::app_command::app_env;
 use crate::commands::app_command::create;
 use crate::commands::app_command::delete;
-use crate::commands::app_command::deploy;
-use crate::commands::app_command::restart;
 use crate::commands::app_command::{start, stop};
 use crate::commands::server_command::serve::ProxyState;
 use crate::db;
@@ -34,7 +32,6 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
         .route("/apps/:name", delete(delete_app))
         .route("/apps/:name/start", post(start_app))
         .route("/apps/:name/stop", post(stop_app))
-        .route("/apps/:name/restart", post(restart_app))
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/env", post(set_env))
@@ -54,9 +51,6 @@ async fn list_apps(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoRes
                     id: app.id.to_string(),
                     name: app.name,
                     state: app.state.to_string(),
-                    host: app.host,
-                    port: app.port,
-                    process_id: app.process_id,
                 })
                 .collect::<Vec<AppInfo>>();
             Json(app_infos).into_response()
@@ -81,9 +75,6 @@ async fn get_app(
                 id: app.id.to_string(),
                 name: app.name,
                 state: app.state.to_string(),
-                host: app.host,
-                port: app.port,
-                process_id: app.process_id,
             };
             Json(app_info).into_response()
         }
@@ -105,10 +96,9 @@ async fn start_app(
     State(state): State<Arc<RwLock<ProxyState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    use crate::providers::cmd::CmdProvider;
     let pool = state.read().await.db_pool.clone();
 
-    match start::execute(&pool, &name, CmdProvider {}).await {
+    match start::execute(&pool, &name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
             format!("App '{}' started", name),
@@ -136,26 +126,6 @@ async fn stop_app(
         Err(e) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to stop app: {}", e),
-        )
-            .into_response(),
-    }
-}
-
-#[instrument(skip(_state))]
-async fn restart_app(
-    State(_state): State<Arc<RwLock<ProxyState>>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    let pool = _state.read().await.db_pool.clone();
-    match restart::execute(&pool, &name).await {
-        Ok(_) => (
-            axum::http::StatusCode::OK,
-            format!("App '{}' restarted", name),
-        )
-            .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to restart app: {}", e),
         )
             .into_response(),
     }
@@ -313,8 +283,7 @@ async fn delete_app(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    use crate::providers::cmd::CmdProvider;
-    match delete::execute(&pool, &name, CmdProvider {}).await {
+    match delete::execute(&pool, &name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
             format!("App '{}' deleted", name),
@@ -339,8 +308,7 @@ async fn create_app(
     Json(payload): Json<CreateAppRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    use crate::providers::cmd::CmdProvider;
-    match create::execute(&pool, &payload.name, CmdProvider {}).await {
+    match create::execute(&pool, &payload.name).await {
         Ok(_) => (
             axum::http::StatusCode::CREATED,
             format!("App '{}' created", payload.name),
@@ -359,9 +327,6 @@ struct AppInfo {
     id: String,
     name: String,
     state: String,
-    host: String,
-    port: Option<u16>,
-    process_id: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,8 +366,9 @@ async fn set_env(
 }
 
 async fn get_podman_version() -> impl IntoResponse {
-    match crate::providers::podman::get_podman_version().await {
-        Ok(version) => (StatusCode::OK, version).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    // match crate::providers::podman::get_podman_version().await {
+    //     Ok(version) => (StatusCode::OK, version).into_response(),
+    //     Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    // }
+    "lol"
 }
