@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{error, info, instrument, warn};
 
-use crate::commands::app_command;
+use crate::commands;
 use crate::db;
 use crate::models::{App, AppState, HealthCheckType};
 
@@ -189,7 +189,7 @@ impl Supervisor {
     ) -> Result<()> {
         use crate::providers::cmd::CmdProvider;
 
-        match app_command::start::execute(db_pool, &app.name, CmdProvider {}).await {
+        match commands::start::execute(db_pool, &app.name, CmdProvider {}).await {
             Ok(handle) => {
                 let mut process_map = processes.lock().unwrap();
                 process_map.insert(

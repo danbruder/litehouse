@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 
 use crate::api_client::ApiClient;
-use crate::commands::server_command::serve;
+use crate::commands::server;
 use crate::config::{ClientConfig, ServerConfig};
 
 #[derive(Parser)]
@@ -155,7 +155,7 @@ pub async fn run() -> Result<()> {
         }
         Commands::Serve => {
             let config = ServerConfig::default();
-            serve::execute(config).await
+            server::execute(config).await
         }
         Commands::Config => {
             let client_config = ClientConfig::load()?;
