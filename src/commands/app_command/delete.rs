@@ -3,6 +3,7 @@ use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
 use crate::db;
+use crate::podman;
 use crate::providers::{Handle, Provider};
 
 #[derive(Debug, thiserror::Error)]
@@ -22,12 +23,8 @@ pub enum DeleteError {
 type DeleteResult<T> = Result<T, DeleteError>;
 
 /// Delete an app
-#[instrument(skip(pool, provider))]
-pub async fn execute<H: Handle>(
-    pool: &Pool<Sqlite>,
-    app_name: &str,
-    provider: impl Provider<Handle = H>,
-) -> DeleteResult<()> {
+#[instrument(skip(pool))]
+pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     // Get app
     let app = db::apps::get_by_name(pool, app_name)
         .await?
@@ -38,8 +35,8 @@ pub async fn execute<H: Handle>(
         return Err(DeleteError::AppRunning(app_name.to_string()));
     }
 
-    // Remove app directory
-    provider.teardown(&app).await?;
+    // Do the provider teardown here
+    podman::teardown(&app).await?;
 
     // Delete app from database
     db::apps::delete_by_app_id(pool, &app.id).await?;

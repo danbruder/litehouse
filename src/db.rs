@@ -2,10 +2,8 @@ use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::PathBuf;
 use tracing::{debug, info, instrument};
 
-use crate::models::ProcessHistory;
-
 use crate::config;
-use crate::models::{App, AppState};
+use crate::models::{parse_app_state, App, AppState, AppStateChange};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
@@ -67,70 +65,28 @@ pub async fn init_pool() -> Result<Pool<Sqlite>> {
 
 /// App database operations
 pub mod apps {
-
     use super::*;
 
     /// Save an app to the database
     #[instrument(skip(pool, app))]
     pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
-        // Serialize health check to JSON if present
-        let health_check_json = match &app.health_check {
-            Some(hc) => Some(serde_json::to_string(hc)?),
-            None => None,
-        };
-
-        // Serialize environment variables to JSON
-        let env_json = serde_json::to_string(&app.environment)?;
-
         // Update or insert
         let state = app.state.to_string();
-        let restart_policy = app.restart_policy.to_string();
         let result = sqlx::query!(
             r#"
             INSERT INTO apps (
-                id, name, created_at, updated_at, state, binary_path, binary_hash, 
-                port, environment, process_id, host, restart_policy, max_restarts,
-                restart_count, last_exit_code, last_exit_time, startup_timeout,
-                shutdown_timeout, health_check
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, name, created_at, updated_at, state 
+            ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 updated_at = excluded.updated_at,
-                state = excluded.state,
-                binary_path = excluded.binary_path,
-                binary_hash = excluded.binary_hash,
-                port = excluded.port,
-                environment = excluded.environment,
-                process_id = excluded.process_id,
-                host = excluded.host,
-                restart_policy = excluded.restart_policy,
-                max_restarts = excluded.max_restarts,
-                restart_count = excluded.restart_count,
-                last_exit_code = excluded.last_exit_code,
-                last_exit_time = excluded.last_exit_time,
-                startup_timeout = excluded.startup_timeout,
-                shutdown_timeout = excluded.shutdown_timeout,
-                health_check = excluded.health_check
+                state = excluded.state
             "#,
             app.id,
             app.name,
             app.created_at,
             app.updated_at,
             state,
-            app.binary_path,
-            app.binary_hash,
-            app.port,
-            env_json,
-            app.process_id,
-            app.host,
-            restart_policy,
-            app.max_restarts,
-            app.restart_count,
-            app.last_exit_code,
-            app.last_exit_time,
-            app.startup_timeout,
-            app.shutdown_timeout,
-            health_check_json,
         )
         .execute(pool)
         .await?;
@@ -149,10 +105,7 @@ pub mod apps {
     pub async fn get_by_name(pool: &Pool<Sqlite>, name: &str) -> Result<Option<App>> {
         let record = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state, binary_path, binary_hash,
-                   port, environment, process_id, host, restart_policy, max_restarts,
-                   restart_count, last_exit_code, last_exit_time, startup_timeout,
-                   shutdown_timeout, health_check
+            SELECT id, name, created_at, updated_at, state
             FROM apps 
             WHERE name = ?
             "#,
@@ -163,57 +116,13 @@ pub mod apps {
 
         match record {
             Some(record) => {
-                // Parse environment JSON
-                let environment = serde_json::from_str(&record.environment)?;
-
-                // Parse health check JSON if present
-                let health_check = match record.health_check {
-                    Some(json) => Some(serde_json::from_str(&json)?),
-                    None => None,
-                };
-
-                // Parse app state
-                let state = match record.state.as_str() {
-                    "created" => AppState::Created,
-                    "deployed" => AppState::Deployed,
-                    "starting" => AppState::Starting,
-                    "running" => AppState::Running,
-                    "stopping" => AppState::Stopping,
-                    "stopped" => AppState::Stopped,
-                    "failed" => AppState::Failed,
-                    "restarting" => AppState::Restarting,
-                    "crashed" => AppState::Crashed,
-                    _ => AppState::Created,
-                };
-
-                // Parse restart policy
-                let restart_policy = match record.restart_policy.as_str() {
-                    "always" => crate::models::RestartPolicy::Always,
-                    "on-failure" => crate::models::RestartPolicy::OnFailure,
-                    "never" => crate::models::RestartPolicy::Never,
-                    _ => crate::models::RestartPolicy::OnFailure,
-                };
-
+                let state = parse_app_state(&record.state);
                 Ok(Some(App {
                     id: record.id,
                     name: record.name,
                     created_at: record.created_at.parse()?,
                     updated_at: record.updated_at.parse()?,
                     state,
-                    binary_path: record.binary_path,
-                    binary_hash: record.binary_hash,
-                    port: record.port.map(|p| p as u16),
-                    environment,
-                    process_id: record.process_id.map(|id| id as u32),
-                    host: record.host,
-                    restart_policy,
-                    max_restarts: record.max_restarts.map(|m| m as u32),
-                    restart_count: record.restart_count as u32,
-                    last_exit_code: record.last_exit_code,
-                    last_exit_time: record.last_exit_time.map(|t| t.and_utc()),
-                    startup_timeout: record.startup_timeout as u32,
-                    shutdown_timeout: record.shutdown_timeout as u32,
-                    health_check,
                 }))
             }
             None => Ok(None),
@@ -227,10 +136,7 @@ pub mod apps {
 
         let records = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state, binary_path, binary_hash,
-                   port, environment, process_id, host, restart_policy, max_restarts,
-                   restart_count, last_exit_code, last_exit_time, startup_timeout,
-                   shutdown_timeout, health_check
+            SELECT id, name, created_at, updated_at, state
             FROM apps 
             WHERE state = ?
             "#,
@@ -242,22 +148,7 @@ pub mod apps {
         let mut apps = Vec::new();
 
         for record in records {
-            // Parse environment JSON
-            let environment = serde_json::from_str(&record.environment)?;
-
-            // Parse health check JSON if present
-            let health_check = match record.health_check {
-                Some(json) => Some(serde_json::from_str(&json)?),
-                None => None,
-            };
-
-            // Parse restart policy
-            let restart_policy = match record.restart_policy.as_str() {
-                "always" => crate::models::RestartPolicy::Always,
-                "on-failure" => crate::models::RestartPolicy::OnFailure,
-                "never" => crate::models::RestartPolicy::Never,
-                _ => crate::models::RestartPolicy::OnFailure,
-            };
+            let state = parse_app_state(&record.state);
 
             apps.push(App {
                 id: record.id,
@@ -265,20 +156,6 @@ pub mod apps {
                 created_at: record.created_at.parse()?,
                 updated_at: record.updated_at.parse()?,
                 state,
-                binary_path: record.binary_path,
-                binary_hash: record.binary_hash,
-                port: record.port.map(|p| p as u16),
-                environment,
-                process_id: record.process_id.map(|id| id as u32),
-                host: record.host,
-                restart_policy,
-                max_restarts: record.max_restarts.map(|m| m as u32),
-                restart_count: record.restart_count as u32,
-                last_exit_code: record.last_exit_code,
-                last_exit_time: record.last_exit_time.map(|t| t.and_utc()),
-                startup_timeout: record.startup_timeout as u32,
-                shutdown_timeout: record.shutdown_timeout as u32,
-                health_check,
             });
         }
 
@@ -290,13 +167,9 @@ pub mod apps {
     pub async fn delete_by_app_id(pool: &Pool<Sqlite>, id: &str) -> Result<()> {
         let _ = sqlx::query!(
             r#"
-            DELETE FROM process_history
-            WHERE app_id = ?;
-
             DELETE FROM apps
             WHERE id = ?;
             "#,
-            id,
             id
         )
         .execute(pool)
@@ -310,10 +183,7 @@ pub mod apps {
     pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
         let records = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state, binary_path, binary_hash,
-                   port, environment, process_id, host, restart_policy, max_restarts,
-                   restart_count, last_exit_code, last_exit_time, startup_timeout,
-                   shutdown_timeout, health_check
+            SELECT id, name, created_at, updated_at, state
             FROM apps 
             ORDER BY name
             "#
@@ -324,57 +194,13 @@ pub mod apps {
         let mut apps = Vec::new();
 
         for record in records {
-            // Parse environment JSON
-            let environment = serde_json::from_str(&record.environment)?;
-
-            // Parse health check JSON if present
-            let health_check = match record.health_check {
-                Some(json) => Some(serde_json::from_str(&json)?),
-                None => None,
-            };
-
-            // Parse app state
-            let state = match record.state.as_str() {
-                "created" => AppState::Created,
-                "deployed" => AppState::Deployed,
-                "starting" => AppState::Starting,
-                "running" => AppState::Running,
-                "stopping" => AppState::Stopping,
-                "stopped" => AppState::Stopped,
-                "failed" => AppState::Failed,
-                "restarting" => AppState::Restarting,
-                "crashed" => AppState::Crashed,
-                _ => AppState::Created,
-            };
-
-            // Parse restart policy
-            let restart_policy = match record.restart_policy.as_str() {
-                "always" => crate::models::RestartPolicy::Always,
-                "on-failure" => crate::models::RestartPolicy::OnFailure,
-                "never" => crate::models::RestartPolicy::Never,
-                _ => crate::models::RestartPolicy::OnFailure,
-            };
-
+            let state = parse_app_state(&record.state);
             apps.push(App {
                 id: record.id,
                 name: record.name,
                 created_at: record.created_at.parse()?,
                 updated_at: record.updated_at.parse()?,
                 state,
-                binary_path: record.binary_path,
-                binary_hash: record.binary_hash,
-                port: record.port.map(|p| p as u16),
-                environment,
-                process_id: record.process_id.map(|id| id as u32),
-                host: record.host,
-                restart_policy,
-                max_restarts: record.max_restarts.map(|m| m as u32),
-                restart_count: record.restart_count as u32,
-                last_exit_code: record.last_exit_code,
-                last_exit_time: record.last_exit_time.map(|t| t.and_utc()),
-                startup_timeout: record.startup_timeout as u32,
-                shutdown_timeout: record.shutdown_timeout as u32,
-                health_check,
             });
         }
 
@@ -383,56 +209,39 @@ pub mod apps {
 }
 
 /// Process history repository
-pub mod process_history {
+pub mod app_state_change {
     use super::*;
 
     /// Save a process history entry
-    #[instrument(skip(pool, history))]
-    pub async fn save(pool: &Pool<Sqlite>, history: &ProcessHistory) -> Result<()> {
-        if history.ended_at.is_none() {
-            // Insert new entry
-            sqlx::query!(
-                r#"
-                INSERT INTO process_history (
-                    id, app_id, started_at, ended_at, exit_code, exit_reason
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                "#,
-                history.id,
-                history.app_id,
-                history.started_at,
-                history.ended_at,
-                history.exit_code,
-                history.exit_reason
-            )
-            .execute(pool)
-            .await?;
-        } else {
-            // Update existing entry
-            sqlx::query!(
-                r#"
-                UPDATE process_history 
-                SET ended_at = ?, exit_code = ?, exit_reason = ?
-                WHERE id = ?
-                "#,
-                history.ended_at,
-                history.exit_code,
-                history.exit_reason,
-                history.id
-            )
-            .execute(pool)
-            .await?;
-        }
+    #[instrument(skip(pool, change))]
+    pub async fn save(pool: &Pool<Sqlite>, change: &AppStateChange) -> Result<()> {
+        // Insert new entry
+        sqlx::query!(
+            r#"
+            INSERT INTO app_state_change (
+                id, app_id, created_at, state, last_state, last_error
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+            change.id,
+            change.app_id,
+            change.created_at,
+            change.state.to_string(),
+            change.last_state.map(|s| s.to_string()),
+            change.last_error,
+        )
+        .execute(pool)
+        .await?;
 
         Ok(())
     }
 
     /// Get process history for an app
     #[instrument(skip(pool))]
-    pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<ProcessHistory>> {
+    pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<AppStateChange>> {
         let records = sqlx::query!(
             r#"
-            SELECT id, app_id, started_at, ended_at, exit_code, exit_reason
-            FROM process_history
+            SELECT id, app_id, created_at, state, last_state, last_error
+            FROM app_state_change
             WHERE app_id = ?
             ORDER BY started_at DESC
             "#,
@@ -441,78 +250,20 @@ pub mod process_history {
         .fetch_all(pool)
         .await?;
 
-        let mut history_entries = Vec::new();
+        let mut changes = Vec::new();
 
         for record in records {
-            history_entries.push(ProcessHistory {
+            changes.push(AppStateChange {
                 id: record.id,
                 app_id: record.app_id,
-                started_at: record.started_at.and_utc(),
-                ended_at: record.ended_at.map(|dt| dt.and_utc()),
-                exit_code: record.exit_code,
-                exit_reason: record.exit_reason,
+                created_at: record.created_at.and_utc(),
+                state: parse_app_state(&record.state),
+                last_state: record.last_state.map(parse_app_state),
+                last_error: record.last_error,
             });
         }
 
-        Ok(history_entries)
-    }
-
-    /// Get recent process history entries
-    #[instrument(skip(pool))]
-    pub async fn get_recent(pool: &Pool<Sqlite>, limit: i64) -> Result<Vec<ProcessHistory>> {
-        let records = sqlx::query!(
-            r#"
-            SELECT id, app_id, started_at, ended_at, exit_code, exit_reason
-            FROM process_history
-            ORDER BY started_at DESC
-            LIMIT ?
-            "#,
-            limit
-        )
-        .fetch_all(pool)
-        .await?;
-
-        let mut history_entries = Vec::new();
-
-        for record in records {
-            history_entries.push(ProcessHistory {
-                id: record.id,
-                app_id: record.app_id,
-                started_at: record.started_at.and_utc(),
-                ended_at: record.ended_at.map(|dt| dt.and_utc()),
-                exit_code: record.exit_code,
-                exit_reason: record.exit_reason,
-            });
-        }
-
-        Ok(history_entries)
-    }
-
-    /// Get a process history entry by ID
-    #[instrument(skip(pool))]
-    pub async fn get_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Option<ProcessHistory>> {
-        let record = sqlx::query!(
-            r#"
-            SELECT id, app_id, started_at, ended_at, exit_code, exit_reason
-            FROM process_history
-            WHERE id = ?
-            "#,
-            id
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        match record {
-            Some(record) => Ok(Some(ProcessHistory {
-                id: record.id,
-                app_id: record.app_id,
-                started_at: record.started_at.and_utc(),
-                ended_at: record.ended_at.map(|dt| dt.and_utc()),
-                exit_code: record.exit_code,
-                exit_reason: record.exit_reason,
-            })),
-            None => Ok(None),
-        }
+        Ok(changes)
     }
 
     /// Delete process history for an app

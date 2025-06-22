@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::default::Default;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,28 +9,15 @@ pub struct App {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub state: AppState,
-    pub binary_path: Option<String>,
-    pub binary_hash: Option<String>,
-    pub port: Option<u16>,
-    pub environment: HashMap<String, String>,
-    pub process_id: Option<u32>,
-    pub host: String,
-    pub restart_policy: RestartPolicy,
-    pub max_restarts: Option<u32>,
-    pub restart_count: u32,
-    pub last_exit_code: Option<i64>,
-    pub last_exit_time: Option<DateTime<Utc>>,
-    pub startup_timeout: u32,  // Seconds
-    pub shutdown_timeout: u32, // Seconds
-    pub health_check: Option<HealthCheck>,
+
+    pub image_id: Option<String>,
+    pub last_built_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("Invalid app name: {0}. App names must be lowercase alphanumeric with optional hyphens or underscores.")]
     InvalidName(String),
-    #[error("Invalid port number: {0}")]
-    InvalidPort(u16),
 }
 
 impl App {
@@ -47,102 +34,15 @@ impl App {
             created_at: now,
             updated_at: now,
             state: AppState::Created,
-            environment: HashMap::new(),
-            // Where to find it
-            port: None,
-            host: "0.0.0.0".to_string(),
-            // How to handle failure
-            restart_policy: RestartPolicy::OnFailure,
-            health_check: Some(HealthCheck::default()),
-            max_restarts: Some(5),
-            restart_count: 0,
-            // Cmd config stuff
-            binary_path: None,
-            binary_hash: None,
-            startup_timeout: 30,
-            shutdown_timeout: 10,
-            // runtime state
-            process_id: None,
-            last_exit_code: None,
-            last_exit_time: None,
         })
     }
 
-    // Check if app should be restarted based on its policy
-    pub fn should_restart(&self) -> bool {
-        match self.restart_policy {
-            RestartPolicy::Always => true,
-            RestartPolicy::Never => false,
-            RestartPolicy::OnFailure => {
-                // Only restart on non-zero exit codes
-                self.last_exit_code.unwrap_or(0) != 0
-            }
-        }
-    }
-
-    pub fn with_port(&self, port: u16) -> Self {
-        Self {
-            port: Some(port),
-            ..self.clone()
-        }
-    }
-
-    pub fn url(&self) -> String {
-        match self.port {
-            Some(port) => format!("http://{}:{}", self.host, port),
-            None => format!("http://{}", self.host),
-        }
-    }
-
-    // Check if max restarts has been reached
-    pub fn reached_max_restarts(&self) -> bool {
-        if let Some(max) = self.max_restarts {
-            self.restart_count >= max
-        } else {
-            false
-        }
-    }
-
     pub fn is_running(&self) -> bool {
-        matches!(self.state, AppState::Running)
+        matches!(self.state, AppState::Running | AppState::Starting)
     }
 
-    pub fn is_deployed(&self) -> bool {
-        self.binary_path.is_some() && self.binary_hash.is_some()
-    }
-
-    pub fn is_hash_changed(&self, new_hash: &str) -> bool {
-        match &self.binary_hash {
-            Some(current_hash) => current_hash != new_hash,
-            None => true, // If no hash is set, consider it changed
-        }
-    }
-
-    pub fn deployed(&self, binary_path: String, binary_hash: String) -> Self {
-        Self {
-            binary_path: Some(binary_path),
-            binary_hash: Some(binary_hash),
-            updated_at: Utc::now(),
-            state: AppState::Deployed,
-            ..self.clone()
-        }
-    }
-
-    pub fn started(&self) -> Self {
-        Self {
-            updated_at: Utc::now(),
-            state: AppState::Starting,
-            ..self.clone()
-        }
-    }
-
-    pub fn running(&self, process_id: u32) -> Self {
-        Self {
-            process_id: Some(process_id),
-            state: AppState::Running,
-            updated_at: Utc::now(),
-            ..self.clone()
-        }
+    pub fn is_built(&self) -> bool {
+        app.image_id.is_some()
     }
 }
 
@@ -188,74 +88,52 @@ impl std::fmt::Display for AppState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RestartPolicy {
-    Always,
-    OnFailure,
-    Never,
-}
+pub fn parse_app_state(state_str: &str) -> AppState {
+    let state = match state_str {
+        "created" => AppState::Created,
+        "deployed" => AppState::Deployed,
+        "starting" => AppState::Starting,
+        "running" => AppState::Running,
+        "stopping" => AppState::Stopping,
+        "stopped" => AppState::Stopped,
+        "failed" => AppState::Failed,
+        "restarting" => AppState::Restarting,
+        "crashed" => AppState::Crashed,
+        _ => AppState::Created,
+    };
 
-impl std::fmt::Display for RestartPolicy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RestartPolicy::Always => write!(f, "always"),
-            RestartPolicy::OnFailure => write!(f, "on-failure"),
-            RestartPolicy::Never => write!(f, "never"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthCheck {
-    pub check_type: HealthCheckType,
-    pub interval: u32, // Seconds
-    pub timeout: u32,  // Seconds
-    pub retries: u32,
-    pub start_period: u32, // Seconds to wait after starting before performing health checks
+    state
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum HealthCheckType {
-    HttpGet { path: String, expected_status: u16 },
-}
-
-impl Default for HealthCheck {
-    fn default() -> Self {
-        Self {
-            check_type: HealthCheckType::HttpGet {
-                path: "/".into(),
-                expected_status: 200,
-            },
-            interval: 10,
-            timeout: 10,
-            retries: 10,
-            start_period: 10,
-        }
-    }
-}
-
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessHistory {
+pub struct AppStateChange {
     pub id: String,
     pub app_id: String,
-    pub started_at: DateTime<Utc>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub exit_code: Option<i64>,
-    pub exit_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub state: AppState,
+    pub last_state: Option<AppState>,
+    pub last_error: String,
 }
 
-impl ProcessHistory {
-    pub fn new(app_id: &str) -> Self {
+impl AppStateChange {
+    pub fn new(app_id: &str, new_state: AppState) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             app_id: app_id.to_string(),
-            started_at: Utc::now(),
-            ended_at: None,
-            exit_code: None,
-            exit_reason: None,
+            created_at: Utc::now(),
+            last_state: None,
+            state: new_state,
+            last_error: String::new(),
         }
+    }
+
+    pub fn with_last_error(mut self, error: &str) -> Self {
+        self.last_error = error.to_string();
+        self
+    }
+
+    pub fn with_last_state(mut self, last_state: AppState) -> Self {
+        self.last_state = Some(last_state);
+        self
     }
 }

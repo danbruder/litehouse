@@ -2,7 +2,7 @@ use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
 use crate::db;
-use crate::models::ProcessHistory;
+use crate::podman;
 use crate::providers::{Handle, Provider};
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -34,36 +34,24 @@ impl From<crate::db::DatabaseError> for StartError {
 }
 
 /// Start an app using the supervisor
-#[instrument(skip(pool, provider))]
-pub async fn execute<H: Handle>(
-    pool: &Pool<Sqlite>,
-    app_name: &str,
-    provider: impl Provider<Handle = H>,
-) -> Result<H> {
+#[instrument(skip(pool))]
+pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     // VALIDATION
     let app = db::apps::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
-    if !app.is_deployed() {
+    if !app.is_built() {
         return Err(StartError::AppNotDeployed(app.name.clone()));
     }
 
     // Start
-    let app = app.started();
-    db::apps::save(pool, &app).await?;
+    let (app, change) = app.started();
+    db::app_state_change::save(pool, &change).await?;
 
-    let handle = provider
-        .start(&app)
-        .await
-        .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
-    let process_id = handle.id();
-
-    // SAVE STATE
+    podman::run(&app).await?;
 
     // Record process history
-    let history = ProcessHistory::new(&app.id);
-    db::process_history::save(pool, &history).await?;
 
     // Update app with process ID
     let app = app.running(process_id);
