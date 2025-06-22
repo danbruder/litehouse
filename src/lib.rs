@@ -4,8 +4,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod git;
 pub mod models;
 pub mod podman;
-#[allow(async_fn_in_trait)]
-pub mod providers;
-pub mod supervisor;
+// pub mod supervisor;

@@ -6,23 +6,31 @@ CREATE TABLE IF NOT EXISTS app (
     name TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    restart_policy TEXT NOT NULL DEFAULT 'on-failure';
+
+    -- Git config
+    git_directory TEXT,
+    git_remote TEXT,
+    git_branch TEXT,
 
     -- Current state
     state TEXT,
+
+    -- Last deploy
     image_id TEXT,
-    last_built_at TEXT,
+    image_tag TEXT,
+    git_commit TEXT,
+    last_built_at TEXT
 );
 
 -- Create index on app name
-CREATE INDEX IF NOT EXISTS idx_apps_name ON apps(name);
+CREATE INDEX IF NOT EXISTS idx_app_name ON app(name);
 
 CREATE TABLE IF NOT EXISTS app_environment_var (
     id TEXT PRIMARY KEY NOT NULL,
     app_id TEXT NOT NULL,
     key TEXT NOT NULL,
     value TEXT NOT NULL,
-    FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
+    FOREIGN KEY (app_id) REFERENCES app(id) ON DELETE CASCADE
 );
 
 -- Create index on app_id and key for quick lookups
@@ -35,7 +43,7 @@ CREATE TABLE IF NOT EXISTS app_state_change (
     state TEXT NOT NULL,
     last_state TEXT NULL,
     last_error TEXT NULL,
-    FOREIGN KEY (app_id) REFERENCES apps(id) ON DELETE CASCADE
+    FOREIGN KEY (app_id) REFERENCES app(id) ON DELETE CASCADE
 );
 
 -- Create index on app_id for quick lookups

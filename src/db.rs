@@ -72,21 +72,39 @@ pub mod apps {
     pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         // Update or insert
         let state = app.state.to_string();
+        let created_at_str = app.created_at.to_rfc3339();
+        let updated_at_str = app.updated_at.to_rfc3339();
+        let last_built_at_str = app.last_built_at.map(|dt| dt.to_rfc3339());
+        
         let result = sqlx::query!(
             r#"
-            INSERT INTO apps (
-                id, name, created_at, updated_at, state 
-            ) VALUES (?, ?, ?, ?, ?)
+            INSERT INTO app (
+                id, name, created_at, updated_at, state, git_directory, git_remote, git_branch, image_id, image_tag, git_commit, last_built_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 updated_at = excluded.updated_at,
-                state = excluded.state
+                state = excluded.state,
+                git_directory = excluded.git_directory,
+                git_remote = excluded.git_remote,
+                git_branch = excluded.git_branch,
+                image_id = excluded.image_id,
+                image_tag = excluded.image_tag,
+                git_commit = excluded.git_commit,
+                last_built_at = excluded.last_built_at
             "#,
             app.id,
             app.name,
-            app.created_at,
-            app.updated_at,
+            created_at_str,
+            updated_at_str,
             state,
+            app.git_directory,
+            app.git_remote,
+            app.git_branch,
+            app.image_id,
+            app.image_tag,
+            app.git_commit,
+            last_built_at_str,
         )
         .execute(pool)
         .await?;
@@ -105,8 +123,8 @@ pub mod apps {
     pub async fn get_by_name(pool: &Pool<Sqlite>, name: &str) -> Result<Option<App>> {
         let record = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state
-            FROM apps 
+            SELECT id, name, created_at, updated_at, state, git_directory, git_remote, git_branch, image_id, image_tag, git_commit, last_built_at
+            FROM app 
             WHERE name = ?
             "#,
             name
@@ -116,13 +134,20 @@ pub mod apps {
 
         match record {
             Some(record) => {
-                let state = parse_app_state(&record.state);
+                let state = parse_app_state(record.state.as_deref().unwrap_or("created"));
                 Ok(Some(App {
                     id: record.id,
                     name: record.name,
                     created_at: record.created_at.parse()?,
                     updated_at: record.updated_at.parse()?,
                     state,
+                    git_directory: record.git_directory,
+                    git_remote: record.git_remote,
+                    git_branch: record.git_branch,
+                    image_id: record.image_id,
+                    image_tag: record.image_tag,
+                    git_commit: record.git_commit,
+                    last_built_at: record.last_built_at.and_then(|s| s.parse().ok()),
                 }))
             }
             None => Ok(None),
@@ -136,8 +161,8 @@ pub mod apps {
 
         let records = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state
-            FROM apps 
+            SELECT id, name, created_at, updated_at, state, git_directory, git_remote, git_branch, image_id, image_tag, git_commit, last_built_at
+            FROM app 
             WHERE state = ?
             "#,
             state_str
@@ -148,7 +173,7 @@ pub mod apps {
         let mut apps = Vec::new();
 
         for record in records {
-            let state = parse_app_state(&record.state);
+            let state = parse_app_state(record.state.as_deref().unwrap_or("created"));
 
             apps.push(App {
                 id: record.id,
@@ -156,6 +181,13 @@ pub mod apps {
                 created_at: record.created_at.parse()?,
                 updated_at: record.updated_at.parse()?,
                 state,
+                git_directory: record.git_directory,
+                git_remote: record.git_remote,
+                git_branch: record.git_branch,
+                image_id: record.image_id,
+                image_tag: record.image_tag,
+                git_commit: record.git_commit,
+                last_built_at: record.last_built_at.and_then(|s| s.parse().ok()),
             });
         }
 
@@ -167,7 +199,7 @@ pub mod apps {
     pub async fn delete_by_app_id(pool: &Pool<Sqlite>, id: &str) -> Result<()> {
         let _ = sqlx::query!(
             r#"
-            DELETE FROM apps
+            DELETE FROM app
             WHERE id = ?;
             "#,
             id
@@ -183,8 +215,8 @@ pub mod apps {
     pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
         let records = sqlx::query!(
             r#"
-            SELECT id, name, created_at, updated_at, state
-            FROM apps 
+            SELECT id, name, created_at, updated_at, state, git_directory, git_remote, git_branch, image_id, image_tag, git_commit, last_built_at
+            FROM app 
             ORDER BY name
             "#
         )
@@ -194,13 +226,20 @@ pub mod apps {
         let mut apps = Vec::new();
 
         for record in records {
-            let state = parse_app_state(&record.state);
+            let state = parse_app_state(record.state.as_deref().unwrap_or("created"));
             apps.push(App {
                 id: record.id,
                 name: record.name,
                 created_at: record.created_at.parse()?,
                 updated_at: record.updated_at.parse()?,
                 state,
+                git_directory: record.git_directory,
+                git_remote: record.git_remote,
+                git_branch: record.git_branch,
+                image_id: record.image_id,
+                image_tag: record.image_tag,
+                git_commit: record.git_commit,
+                last_built_at: record.last_built_at.and_then(|s| s.parse().ok()),
             });
         }
 
@@ -216,6 +255,10 @@ pub mod app_state_change {
     #[instrument(skip(pool, change))]
     pub async fn save(pool: &Pool<Sqlite>, change: &AppStateChange) -> Result<()> {
         // Insert new entry
+        let created_at_str = change.created_at.to_rfc3339();
+        let state_str = change.state.to_string();
+        let last_state_str = change.last_state.map(|s| s.to_string());
+        
         sqlx::query!(
             r#"
             INSERT INTO app_state_change (
@@ -224,9 +267,9 @@ pub mod app_state_change {
             "#,
             change.id,
             change.app_id,
-            change.created_at,
-            change.state.to_string(),
-            change.last_state.map(|s| s.to_string()),
+            created_at_str,
+            state_str,
+            last_state_str,
             change.last_error,
         )
         .execute(pool)
@@ -243,7 +286,7 @@ pub mod app_state_change {
             SELECT id, app_id, created_at, state, last_state, last_error
             FROM app_state_change
             WHERE app_id = ?
-            ORDER BY started_at DESC
+            ORDER BY created_at DESC
             "#,
             app_id
         )
@@ -256,10 +299,10 @@ pub mod app_state_change {
             changes.push(AppStateChange {
                 id: record.id,
                 app_id: record.app_id,
-                created_at: record.created_at.and_utc(),
+                created_at: record.created_at.parse()?,
                 state: parse_app_state(&record.state),
-                last_state: record.last_state.map(parse_app_state),
-                last_error: record.last_error,
+                last_state: record.last_state.as_deref().map(parse_app_state),
+                last_error: record.last_error.unwrap_or_default(),
             });
         }
 
@@ -271,7 +314,7 @@ pub mod app_state_change {
     pub async fn delete_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<u64> {
         let result = sqlx::query!(
             r#"
-            DELETE FROM process_history
+            DELETE FROM app_state_change
             WHERE app_id = ?
             "#,
             app_id

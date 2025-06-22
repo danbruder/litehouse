@@ -47,15 +47,17 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
 
     // Start
     let (app, change) = app.started();
+    db::apps::save(pool, &app).await?;
     db::app_state_change::save(pool, &change).await?;
 
     podman::run(&app).await?;
 
-    // Record process history
+    // Check it is running, then update running
 
     // Update app with process ID
-    let app = app.running(process_id);
+    let (app, change) = app.running();
     db::apps::save(pool, &app).await?;
+    db::app_state_change::save(pool, &change).await?;
 
     info!("Started app '{}' with PID {}", app.name, process_id);
 

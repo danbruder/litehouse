@@ -36,7 +36,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     }
 
     // Do the provider teardown here
-    podman::teardown(&app).await?;
+    podman::remove(&app).await?;
 
     // Delete app from database
     db::apps::delete_by_app_id(pool, &app.id).await?;
@@ -56,9 +56,7 @@ mod test {
     #[tokio::test]
     async fn test_deleting_non_existant_app() {
         let pool = get_test_pool().await;
-        let got = execute(&pool, "non_existant_app", TestProvider {})
-            .await
-            .unwrap_err();
+        let got = execute(&pool, "non_existant_app").await.unwrap_err();
         let want = DeleteError::AppNotFound("non_existant_app".to_string());
 
         assert_eq!(format!("{}", got), format!("{}", want));
@@ -73,7 +71,7 @@ mod test {
         let app = App::new(app_name).unwrap().running(1234);
         db::apps::save(&pool, &app).await.unwrap();
 
-        let got = execute(&pool, app_name, TestProvider {}).await.unwrap_err();
+        let got = execute(&pool, app_name).await.unwrap_err();
         let want = DeleteError::AppRunning(app_name.to_string());
 
         assert_eq!(format!("{}", got), format!("{}", want));
@@ -89,7 +87,7 @@ mod test {
         db::apps::save(&pool, &app).await.unwrap();
 
         // Delete the app
-        execute(&pool, app_name, TestProvider {}).await.unwrap();
+        execute(&pool, app_name).await.unwrap();
 
         // Verify app is deleted from database
         let app = db::apps::get_by_name(&pool, app_name).await.unwrap();

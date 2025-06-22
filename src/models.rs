@@ -8,9 +8,15 @@ pub struct App {
     pub name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+
+    pub git_directory: Option<String>,
+    pub git_remote: Option<String>,
+    pub git_branch: Option<String>,
     pub state: AppState,
 
     pub image_id: Option<String>,
+    pub image_tag: Option<String>,
+    pub git_commit: Option<String>,
     pub last_built_at: Option<DateTime<Utc>>,
 }
 
@@ -18,6 +24,13 @@ pub struct App {
 pub enum AppError {
     #[error("Invalid app name: {0}. App names must be lowercase alphanumeric with optional hyphens or underscores.")]
     InvalidName(String),
+}
+
+#[derive(Debug)]
+pub struct AppBuild {
+    pub image_id: String,
+    pub image_tag: String,
+    pub git_commit: String,
 }
 
 impl App {
@@ -33,7 +46,14 @@ impl App {
             name: name.to_string(),
             created_at: now,
             updated_at: now,
+            git_directory: None,
+            git_remote: None,
+            git_branch: None,
             state: AppState::Created,
+            image_id: None,
+            image_tag: None,
+            git_commit: None,
+            last_built_at: None,
         })
     }
 
@@ -42,7 +62,33 @@ impl App {
     }
 
     pub fn is_built(&self) -> bool {
-        app.image_id.is_some()
+        self.image_id.is_some()
+    }
+
+    pub fn started(mut self) -> (Self, AppStateChange) {
+        let change = AppStateChange::new(&self.id, AppState::Starting).with_last_state(self.state);
+        self.state = AppState::Starting;
+        self.updated_at = Utc::now();
+
+        (self, change)
+    }
+
+    pub fn running(mut self) -> (Self, AppStateChange) {
+        let change = AppStateChange::new(&self.id, AppState::Running).with_last_state(self.state);
+        self.state = AppState::Running;
+        self.updated_at = Utc::now();
+
+        (self, change)
+    }
+
+    pub fn built(mut self, build: AppBuild) -> Self {
+        self.image_id = Some(build.image_id);
+        self.image_tag = Some(build.image_tag);
+        self.git_commit = Some(build.git_commit);
+        self.last_built_at = Some(Utc::now());
+        self.updated_at = Utc::now();
+
+        self
     }
 }
 

@@ -42,7 +42,6 @@ struct AppInfo {
     state: String,
     host: String,
     port: Option<u16>,
-    process_id: Option<u32>,
 }
 
 /// Shared state for the proxy server
@@ -198,28 +197,12 @@ async fn admin_interface(state: Arc<RwLock<ProxyState>>) -> Response<Body> {
             _ => "created",
         };
 
-        let pid = match app.process_id {
-            Some(pid) => pid.to_string(),
-            None => "-".to_string(),
-        };
-
         html.push_str(&format!(
             r#"<tr>
             <td>{}</td>
             <td class="{}">{}</td>
-            <td>{}</td>
-            <td>{}</td>
-            <td><a href="http://{}:{}" target="_blank">http://{}:{}</a></td>
         </tr>"#,
-            app.name,
-            status_class,
-            app.state,
-            app.port.map_or("-".to_string(), |p| p.to_string()),
-            pid,
-            app.host,
-            app.port.map_or("-".to_string(), |p| p.to_string()),
-            app.host,
-            app.port.map_or("-".to_string(), |p| p.to_string()),
+            app.name, status_class, app.state,
         ));
     }
 
