@@ -45,25 +45,82 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
 }
 
 #[instrument]
-pub async fn run(app: &App) -> Result<()> {
-    // Placeholder for actual teardown logic
-    info!("Running app: {}", app.name);
+pub async fn run(name: &str, image_tag: &str) -> Result<()> {
+    info!("Running app: {}", name);
+
+    let podman = Podman::unix("/run/podman/podman.sock");
+    let containers = podman.containers();
+
+    let container_name = format!("{}-container", name);
+
+    let create_opts = podman_api::opts::ContainerCreateOpts::builder()
+        .image(image_tag)
+        .name(&container_name)
+        .build();
+
+    info!("Creating container: {}", container_name);
+    let container_info = containers.create(&create_opts).await?;
+
+    info!("Starting container: {}", container_info.id);
+    containers.get(&container_info.id).start(None).await?;
+
+    info!("Container {} started successfully", container_name);
 
     Ok(())
 }
 
 #[instrument]
 pub async fn remove(tag: &str) -> Result<()> {
-    // Placeholder for actual teardown logic
-    info!("Removing container with tag: {}", tag);
+    info!("Removing container image with tag: {}", tag);
 
-    Ok(())
+    let podman = Podman::unix("/run/podman/podman.sock");
+    let images = podman.images();
+
+    match images.get(tag).remove().await {
+        Ok(_) => {
+            info!("Successfully removed image: {}", tag);
+            Ok(())
+        }
+        Err(e) => {
+            info!("Failed to remove image {}: {}", tag, e);
+            Err(e.into())
+        }
+    }
 }
 
 #[instrument]
 pub async fn stop(app: &App) -> Result<()> {
-    // Placeholder for actual teardown logic
     info!("Stopping app: {}", app.name);
+
+    let podman = Podman::unix("/run/podman/podman.sock");
+    let containers = podman.containers();
+    let container_name = format!("{}-container", app.name);
+
+    let list_opts = podman_api::opts::ContainerListOpts::builder()
+        .all(true)
+        .build();
+
+    let container_list = containers.list(&list_opts).await?;
+
+    for container in container_list {
+        if let Some(names) = &container.names {
+            if names.iter().any(|name| name.contains(&container_name)) {
+                info!(
+                    "Stopping container: {}",
+                    container.id.as_ref().unwrap_or(&"unknown".to_string())
+                );
+
+                if let Some(id) = &container.id {
+                    let stop_opts = podman_api::opts::ContainerStopOpts::builder()
+                        .timeout(10)
+                        .build();
+
+                    containers.get(id).stop(&stop_opts).await?;
+                    info!("Successfully stopped container: {}", id);
+                }
+            }
+        }
+    }
 
     Ok(())
 }

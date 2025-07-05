@@ -34,7 +34,9 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
 
     if let Some(tag) = app.image_tag {
         // Do the provider teardown here
-        podman::remove(&tag).await.map_err(|e| DeleteError::AppNotFound(format!("Remove failed: {}", e)))?;
+        podman::remove(&tag)
+            .await
+            .map_err(|e| DeleteError::AppNotFound(format!("Remove failed: {}", e)))?;
 
         // Delete app from database
         db::apps::delete_by_app_id(pool, &app.id).await?;

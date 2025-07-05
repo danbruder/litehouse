@@ -26,30 +26,25 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
         .await?
         .ok_or_else(|| BuildError::AppNotFound(app_name.to_string()))?;
 
-    let (git_remote, git_branch, git_directory) =
-        match (&app.git_remote, &app.git_branch, &app.git_directory) {
-            (Some(remote), Some(branch), Some(directory)) => (remote, branch, directory),
-            _ => {
-                return Err(BuildError::AppNotConfigured(
-                    "App's git configuration is not set up yet".to_string(),
-                ))
-            }
-        };
+    let remote = db::apps::get_remote_by_app_id(pool, &app.id)
+        .await?
+        .ok_or_else(|| {
+            BuildError::AppNotConfigured(format!(
+                "Remote configuration for app '{}' not found",
+                app_name
+            ))
+        })?;
 
-    let git_result = git::pull(git_remote, git_branch, git_directory)
+    let git_result = git::pull(remote)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Git pull failed: {}", e)))?;
 
     let tag = format!("{}:{}", app.name, &git_result.commit);
-    podman::build(git_directory, &tag)
+    podman::build(remote.git_directory, &tag)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Build failed: {}", e)))?;
 
-    // Update app with new image tag and commit
-    // For now, just log success - you may want to update the app record
     info!("Built image with tag: {}", tag);
-
-    info!("Built app '{}'", &app.name);
 
     Ok(())
 }

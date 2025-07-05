@@ -40,13 +40,15 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
         .await?
         .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
-    if !app.is_built() {
-        return Err(StartError::AppNotDeployed(app.name.clone()));
-    }
+    // Get latest build
+    let build = db::build::get_latest_by_app(pool, app.id)
+        .await?
+        .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
     // Start the app with podman
-
-    podman::run(&app).await.map_err(|e| StartError::AppStartFailed(e.to_string()))?;
+    podman::run(&app.name, &build.image_tag)
+        .await
+        .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 
     info!("Started app '{}'", app.name);
 
@@ -55,7 +57,6 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod test {
-    use crate::db::apps;
     use crate::models::App;
 
     #[tokio::test]
