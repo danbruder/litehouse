@@ -1,9 +1,8 @@
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::db;
-use crate::podman;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteError {
@@ -32,44 +31,20 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         return Err(DeleteError::AppRunning(app_name.to_string()));
     }
 
-    if let Some(tag) = app.image_tag {
-        // Do the provider teardown here
-        podman::remove(&tag)
-            .await
-            .map_err(|e| DeleteError::AppNotFound(format!("Remove failed: {}", e)))?;
+    // if let Some(tag) = app.image_tag {
+    //     podman::remove(&tag)
+    //         .await
+    //         .map_err(|e| DeleteError::AppNotFound(format!("Remove failed: {}", e)))?;
 
-        // Delete app from database
-        db::apps::delete_by_app_id(pool, &app.id).await?;
+    //     // Delete app from database
+    //     db::apps::delete_by_app_id(pool, &app.id).await?;
 
-        info!("Deleted app '{}'", &app.name);
+    //     info!("Deleted app '{}'", &app.name);
 
-        Ok(())
-    } else {
-        return Err(DeleteError::AppNotBuilt(app.name.clone()));
-    }
-}
+    //     Ok(())
+    // } else {
+    //     return Err(DeleteError::AppNotBuilt(app.name.clone()));
+    // }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::db::test::get_test_pool;
-
-    #[tokio::test]
-    async fn test_deleting_non_existant_app() {
-        let pool = get_test_pool().await;
-        let got = execute(&pool, "non_existant_app").await.unwrap_err();
-        let want = DeleteError::AppNotFound("non_existant_app".to_string());
-
-        assert_eq!(format!("{}", got), format!("{}", want));
-    }
-
-    #[tokio::test]
-    async fn test_deleting_running_app() {
-        todo!("Implement test for deleting running app");
-    }
-
-    #[tokio::test]
-    async fn test_delete_happy_path() {
-        todo!("Implement test for happy path delete");
-    }
+    todo!("Teardown");
 }

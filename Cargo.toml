@@ -8,7 +8,7 @@ authors = ["Dan Bruder <danbruder@hey.com>"]
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "time"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "time", "macros"] }
 tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

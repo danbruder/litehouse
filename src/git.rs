@@ -9,15 +9,23 @@ pub struct GitPullResult {
 }
 
 #[instrument]
-pub async fn pull(remote: &Remote) -> Result<GitPullResult> {
+pub async fn pull(
+    Remote {
+        name,
+        remote,
+        branch,
+        directory,
+        ..
+    }: &Remote,
+) -> Result<GitPullResult> {
     info!(
         "Starting git pull for remote: {}, branch: {}, directory: {}",
-        remote_name, branch, directory
+        name, branch, directory
     );
 
     // Change to the git directory
     let output = Command::new("git")
-        .args(["-C", directory, "pull", remote_name, branch])
+        .args(["-C", directory, "pull", name, branch])
         .output()?;
 
     if !output.status.success() {

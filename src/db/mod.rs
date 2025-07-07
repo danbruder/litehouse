@@ -2,7 +2,8 @@ use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 use std::path::PathBuf;
 use tracing::{debug, info, instrument};
 
-pub mod apps;
+pub mod app;
+pub mod remote;
 pub mod state_change;
 
 use crate::config;

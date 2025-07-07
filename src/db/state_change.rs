@@ -2,7 +2,7 @@ use super::*;
 
 /// Save a process history entry
 #[instrument(skip(pool, change))]
-pub async fn save(pool: &Pool<Sqlite>, change: &AppStateChange) -> Result<()> {
+pub async fn save(pool: &Pool<Sqlite>, change: &StateChange) -> Result<()> {
     // Insert new entry
     let created_at_str = change.created_at.to_rfc3339();
     let state_str = change.state.to_string();
@@ -29,7 +29,7 @@ pub async fn save(pool: &Pool<Sqlite>, change: &AppStateChange) -> Result<()> {
 
 /// Get process history for an app
 #[instrument(skip(pool))]
-pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<AppStateChange>> {
+pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<StateChange>> {
     let records = sqlx::query!(
         r#"
             SELECT id, app_id, created_at, state, last_state, last_error
@@ -45,7 +45,7 @@ pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<AppS
     let mut changes = Vec::new();
 
     for record in records {
-        changes.push(AppStateChange {
+        changes.push(StateChange {
             id: record.id,
             app_id: record.app_id,
             created_at: record.created_at.parse()?,
