@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO state_change (\n                id, app_id, created_at, state, last_state, last_error\n            ) VALUES (?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "28f999dc8fbef4bd4ee7663db9c8f132d6416abbb32b6108ec488fc32ef97e39"
+}

@@ -12,7 +12,7 @@ pub async fn execute(app_name: Option<&str>) -> Result<()> {
     match app_name {
         Some(name) => {
             // Show status for a specific app
-            let app = db::apps::get_by_name(&pool, name)
+            let app = db::app::get_by_name(&pool, name)
                 .await?
                 .ok_or_else(|| anyhow!("App '{}' not found", name))?;
 
@@ -21,7 +21,7 @@ pub async fn execute(app_name: Option<&str>) -> Result<()> {
         }
         None => {
             // Show status for all apps
-            let apps = db::apps::get_all(&pool).await?;
+            let apps = db::app::get_all(&pool).await?;
 
             if apps.is_empty() {
                 println!("No apps found");

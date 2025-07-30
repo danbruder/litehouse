@@ -11,7 +11,7 @@ pub async fn execute(app_name: &str) -> Result<()> {
     let pool = db::init_pool().await?;
 
     // Get app
-    let app = db::apps::get_by_name(&pool, app_name)
+    let app = db::app::get_by_name(&pool, app_name)
         .await?
         .ok_or_else(|| anyhow!("App '{}' not found", app_name))?;
 

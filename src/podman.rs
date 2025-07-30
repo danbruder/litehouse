@@ -48,7 +48,7 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
     info!("Running app: {}", name);
 
-    let podman = Podman::unix("/run/podman/podman.sock");
+    let podman = Podman::unix("ssh://core@127.0.0.1:65176/run/user/502/podman/podman.sock");
     let containers = podman.containers();
 
     let container_name = format!("{}-container", name);

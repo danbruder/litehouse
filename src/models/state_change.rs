@@ -1,15 +1,16 @@
 use super::AppState;
-use chrono::{DateTime, Utc};
+use crate::models::{now, UtcDateTime};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateChange {
     pub id: String,
     pub app_id: String,
-    pub created_at: DateTime<Utc>,
     pub state: AppState,
     pub last_state: Option<AppState>,
     pub last_error: String,
+
+    pub created_at: UtcDateTime,
 }
 
 impl StateChange {
@@ -17,7 +18,7 @@ impl StateChange {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             app_id: app_id.to_string(),
-            created_at: Utc::now(),
+            created_at: now(),
             last_state: None,
             state: new_state,
             last_error: String::new(),

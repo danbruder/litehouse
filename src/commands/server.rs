@@ -153,7 +153,7 @@ async fn handle_request(
 /// Admin interface handler
 async fn admin_interface(state: Arc<RwLock<ProxyState>>) -> Response<Body> {
     let pool = state.read().await.db_pool.clone();
-    let apps = db::apps::get_all(&pool).await.unwrap_or_else(|_| vec![]);
+    let apps = db::app::get_all(&pool).await.unwrap_or_else(|_| vec![]);
 
     // Build HTML response
     let mut html = String::from(

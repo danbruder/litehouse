@@ -19,13 +19,13 @@ pub type Result<T> = std::result::Result<T, AppCreateError>;
 /// Create a new app
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
-    if let Some(_) = db::apps::get_by_name(pool, app_name).await? {
+    if let Some(_) = db::app::get_by_name(pool, app_name).await? {
         return Err(AppCreateError::AppAlreadyExists(app_name.to_string()));
     }
 
     // Create app
     let app = App::new(app_name)?;
-    db::apps::save(pool, &app).await?;
+    db::app::save(pool, &app).await?;
 
     info!("Created app '{}'", app.name);
 

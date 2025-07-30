@@ -22,25 +22,23 @@ type BuildResult<T> = Result<T, BuildError>;
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
     // Get app
-    let app = db::apps::get_by_name(pool, app_name)
+    let app = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| BuildError::AppNotFound(app_name.to_string()))?;
 
-    let remote = db::apps::get_remote_by_app_id(pool, &app.id)
-        .await?
-        .ok_or_else(|| {
-            BuildError::AppNotConfigured(format!(
-                "Remote configuration for app '{}' not found",
-                app_name
-            ))
-        })?;
+    let remote = db::remote::get_by_app(pool, &app.id).await.map_err(|_| {
+        BuildError::AppNotConfigured(format!(
+            "Remote configuration for app '{}' not found",
+            app_name
+        ))
+    })?;
 
-    let git_result = git::pull(remote)
+    let git_result = git::pull(&remote)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Git pull failed: {}", e)))?;
 
     let tag = format!("{}:{}", app.name, &git_result.commit);
-    podman::build(remote.git_directory, &tag)
+    podman::build(&remote.directory, &tag)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Build failed: {}", e)))?;
 

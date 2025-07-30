@@ -1,5 +1,6 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::models::UtcDateTime;
 
 #[derive(Debug, sqlx::FromRow, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Remote {
@@ -10,6 +11,6 @@ pub struct Remote {
     pub branch: String,
     pub directory: String,
 
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: UtcDateTime,
+    pub updated_at: UtcDateTime,
 }

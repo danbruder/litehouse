@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT *\n            FROM build\n            WHERE app_id = ?\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "image_tag",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "git_commit",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a748e5612e89067c9bb6a6ba1ab6662eb70e68742956cd3ea9ae01bdba5ef128"
+}

@@ -36,16 +36,19 @@ impl From<crate::db::DatabaseError> for StartError {
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     // VALIDATION
-    let app = db::apps::get_by_name(pool, app_name)
+    tracing::debug!("Geting app {app_name}");
+    let app = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
     // Get latest build
-    let build = db::build::get_latest_by_app(pool, app.id)
+    tracing::debug!("Geting build for app id {}", app.id);
+    let build = db::build::get_latest_by_app(pool, &app.id)
         .await?
         .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
     // Start the app with podman
+    tracing::debug!("Running {} for {}", &app.name, &build.image_tag);
     podman::run(&app.name, &build.image_tag)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
@@ -53,24 +56,4 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     info!("Started app '{}'", app.name);
 
     Ok(())
-}
-
-#[cfg(test)]
-mod test {
-    use crate::models::App;
-
-    #[tokio::test]
-    async fn test_starting_non_existant_app() {
-        todo!("Implement test for starting non-existant app");
-    }
-
-    #[tokio::test]
-    async fn test_starting_not_deployed_app() {
-        todo!("Implement test for starting non-existant app");
-    }
-
-    #[tokio::test]
-    async fn test_start_happy_path() {
-        todo!("Implement test for starting non-existant app");
-    }
 }

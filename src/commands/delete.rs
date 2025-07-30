@@ -22,7 +22,7 @@ type DeleteResult<T> = Result<T, DeleteError>;
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     // Get app
-    let app = db::apps::get_by_name(pool, app_name)
+    let app = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| DeleteError::AppNotFound(app_name.to_string()))?;
 

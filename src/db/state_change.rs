@@ -4,19 +4,18 @@ use super::*;
 #[instrument(skip(pool, change))]
 pub async fn save(pool: &Pool<Sqlite>, change: &StateChange) -> Result<()> {
     // Insert new entry
-    let created_at_str = change.created_at.to_rfc3339();
     let state_str = change.state.to_string();
     let last_state_str = change.last_state.map(|s| s.to_string());
 
     sqlx::query!(
         r#"
-            INSERT INTO app_state_change (
+            INSERT INTO state_change (
                 id, app_id, created_at, state, last_state, last_error
             ) VALUES (?, ?, ?, ?, ?, ?)
             "#,
         change.id,
         change.app_id,
-        created_at_str,
+        change.created_at,
         state_str,
         last_state_str,
         change.last_error,
@@ -33,7 +32,7 @@ pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Stat
     let records = sqlx::query!(
         r#"
             SELECT id, app_id, created_at, state, last_state, last_error
-            FROM app_state_change
+            FROM state_change
             WHERE app_id = ?
             ORDER BY created_at DESC
             "#,
@@ -48,7 +47,7 @@ pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Stat
         changes.push(StateChange {
             id: record.id,
             app_id: record.app_id,
-            created_at: record.created_at.parse()?,
+            created_at: record.created_at.into(),
             state: parse_app_state(&record.state),
             last_state: record.last_state.as_deref().map(parse_app_state),
             last_error: record.last_error.unwrap_or_default(),
@@ -63,7 +62,7 @@ pub async fn get_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Stat
 pub async fn delete_by_app_id(pool: &Pool<Sqlite>, app_id: &str) -> Result<u64> {
     let result = sqlx::query!(
         r#"
-            DELETE FROM app_state_change
+            DELETE FROM state_change
             WHERE app_id = ?
             "#,
         app_id

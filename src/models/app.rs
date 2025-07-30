@@ -1,15 +1,16 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::models::{AppBuild, AppState, AppStateChange};
+use crate::models::{now, UtcDateTime};
+use crate::models::{AppState, StateChange};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct App {
     pub id: String,
     pub name: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
+    pub created_at: UtcDateTime,
+    pub updated_at: UtcDateTime,
 
     pub state: AppState,
 }
@@ -22,7 +23,7 @@ pub enum AppError {
 
 impl App {
     pub fn new(name: &str) -> Result<Self, AppError> {
-        let now = Utc::now();
+        let now = now();
 
         if !is_valid_app_name(name) {
             return Err(AppError::InvalidName(name.to_string()));
@@ -31,7 +32,7 @@ impl App {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             name: name.to_string(),
-            created_at: now,
+            created_at: now.clone(),
             updated_at: now,
             state: AppState::Stopped,
         })
@@ -41,18 +42,18 @@ impl App {
         matches!(self.state, AppState::Running | AppState::Starting)
     }
 
-    pub fn started(mut self) -> (Self, AppStateChange) {
-        let change = AppStateChange::new(&self.id, AppState::Starting).with_last_state(self.state);
+    pub fn started(mut self) -> (Self, StateChange) {
+        let change = StateChange::new(&self.id, AppState::Starting).with_last_state(self.state);
         self.state = AppState::Starting;
-        self.updated_at = Utc::now();
+        self.updated_at = now();
 
         (self, change)
     }
 
-    pub fn running(mut self) -> (Self, AppStateChange) {
-        let change = AppStateChange::new(&self.id, AppState::Running).with_last_state(self.state);
+    pub fn running(mut self) -> (Self, StateChange) {
+        let change = StateChange::new(&self.id, AppState::Running).with_last_state(self.state);
         self.state = AppState::Running;
-        self.updated_at = Utc::now();
+        self.updated_at = now();
 
         (self, change)
     }

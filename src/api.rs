@@ -1,8 +1,8 @@
 use crate::commands::app_env;
 use crate::commands::create;
 use crate::commands::delete;
-use crate::commands::{start, stop};
 use crate::commands::server::ProxyState;
+use crate::commands::{start, stop};
 use crate::db;
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
@@ -43,7 +43,7 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
 #[instrument(skip(state))]
 async fn list_apps(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match db::apps::get_all(&pool).await {
+    match db::app::get_all(&pool).await {
         Ok(apps) => {
             let app_infos = apps
                 .into_iter()
@@ -69,13 +69,25 @@ async fn get_app(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match db::apps::get_by_name(&pool, &name).await {
+
+    match db::app::get_by_name(&pool, &name).await {
         Ok(Some(app)) => {
+            let input = crate::models::BuildInput {
+                app_id: app.id.to_string(),
+                image_id: "hello".into(),
+                image_tag: "nginx:latest".into(),
+                git_commit: "heyo".into(),
+            };
+
+            let build = crate::models::Build::new(input);
+            db::build::save(&pool, &build).await.unwrap();
+
             let app_info = AppInfo {
                 id: app.id.to_string(),
                 name: app.name,
                 state: app.state.to_string(),
             };
+
             Json(app_info).into_response()
         }
         Ok(None) => (
