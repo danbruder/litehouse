@@ -43,7 +43,7 @@ mod test {
         let pool = get_test_pool().await;
         let app_name = "test_app";
         let app = App::new(app_name).unwrap();
-        db::apps::save(&pool, &app).await.unwrap();
+        db::app::save(&pool, &app).await.unwrap();
 
         let got = execute(&pool, app_name).await.unwrap_err();
         match got {
@@ -57,7 +57,7 @@ mod test {
         let pool = get_test_pool().await;
         let app_name = "test_app_happy";
         execute(&pool, app_name).await.unwrap();
-        let app = db::apps::get_by_name(&pool, app_name).await.unwrap();
+        let app = db::app::get_by_name(&pool, app_name).await.unwrap();
         assert!(app.is_some());
     }
 
