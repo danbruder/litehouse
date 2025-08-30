@@ -78,8 +78,8 @@ pub async fn seed() {
 
     let input = BuildInput {
         app_id: app.id,
-        image_id: "redis".to_string(),
-        image_tag: "latest".to_string(),
+        image_id: "1234".to_string(),
+        image_tag: "redis:latest".to_string(),
         git_commit: "hey".to_string(),
     };
 
