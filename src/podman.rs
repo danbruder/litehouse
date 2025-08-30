@@ -68,9 +68,11 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
     for container in all_containers {
         if let Some(names) = &container.names {
             info!("Checking container names: {:?}", names);
+            info!("Looking for container name: {}", container_name);
             if names.iter().any(|n| n.contains(&container_name)) {
                 // Check if the container is running or has been started before
                 if let Some(state) = &container.state {
+                    info!("Found container '{}' with state: {}", container_name, state);
                     if state == "running" || state == "exited" {
                         info!(
                             "Container '{}' is already {} (ID: {}). Skipping startup.",
@@ -457,6 +459,9 @@ mod tests {
 
         // Verify container exists
         assert!(is_container_started(&container_name)?);
+
+        // Wait a moment for the container to be fully registered in podman
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
         // Second run: should skip startup and return immediately
         let start_time = std::time::Instant::now();
