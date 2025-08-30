@@ -3,6 +3,7 @@ use tracing::{info, instrument};
 
 use crate::db;
 use crate::models::AppState;
+use crate::podman;
 
 /// Stop an app using the supervisor
 #[instrument]
@@ -23,7 +24,7 @@ pub async fn execute(app_name: &str) -> Result<()> {
 
     // Stop the app with podman
     info!("Stopping app '{}'", app_name);
-    crate::podman::stop(&app).await?;
+    podman::stop(&app).await?;
 
     println!("Successfully stopped app '{}'", app_name);
 
