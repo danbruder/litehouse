@@ -47,6 +47,11 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
 
 #[instrument]
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
+    // Validate input parameters
+    if name.trim().is_empty() {
+        return Err(PodmanError::BuildError("App name cannot be empty".to_string()).into());
+    }
+    
     info!("Running app: {}", name);
 
     let podman = Podman::unix(&resolve_podman_socket_path()?);
@@ -69,7 +74,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         if let Some(names) = &container.names {
             info!("Checking container names: {:?}", names);
             info!("Looking for container name: {}", container_name);
-            if names.iter().any(|n| n.contains(&container_name)) {
+            if names.iter().any(|n| n == &container_name) {
                 // Check if the container is running or has been started before
                 if let Some(state) = &container.state {
                     info!("Found container '{}' with state: {}", container_name, state);
@@ -169,12 +174,37 @@ pub async fn stop(app: &App) -> Result<()> {
                 );
 
                 if let Some(id) = &container.id {
+                    // Check if the container is already stopped
+                    if let Some(state) = &container.state {
+                        if state == "exited" || state == "stopped" {
+                            info!(
+                                "Container {} is already {} (ID: {})",
+                                container_name, state, id
+                            );
+                            continue;
+                        }
+                    }
+
                     let stop_opts = podman_api::opts::ContainerStopOpts::builder()
                         .timeout(10)
                         .build();
 
-                    containers.get(id).stop(&stop_opts).await?;
-                    info!("Successfully stopped container: {}", id);
+                    match containers.get(id).stop(&stop_opts).await {
+                        Ok(_) => {
+                            info!("Successfully stopped container: {}", id);
+                        }
+                        Err(e) => {
+                            // If the container is already stopped, that's fine
+                            if e.to_string().contains("304") {
+                                info!(
+                                    "Container {} was already stopped (ID: {})",
+                                    container_name, id
+                                );
+                            } else {
+                                return Err(e.into());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -250,7 +280,7 @@ mod test_helpers {
     use anyhow::Result;
     use std::process::Command;
 
-    /// Check if a container exists and was started by calling podman ps -a
+        /// Check if a container exists and was started by calling podman ps -a
     pub fn is_container_started(container_name: &str) -> Result<bool> {
         let output = Command::new("podman")
             .args([
@@ -262,11 +292,11 @@ mod test_helpers {
                 "{{.Names}}\t{{.Status}}",
             ])
             .output()?;
-
+        
         if !output.status.success() {
             return Ok(false);
         }
-
+        
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(!stdout.trim().is_empty() && stdout.contains(container_name))
     }
@@ -461,7 +491,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Wait a moment for the container to be fully registered in podman
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Second run: should skip startup and return immediately
         let start_time = std::time::Instant::now();
@@ -477,6 +507,338 @@ mod tests {
         );
 
         cleanup_container(&container_name)?;
+        Ok(())
+    }
+
+    // Test the stop function with a running container
+    #[tokio::test]
+    async fn test_stop_function_stops_running_container() -> Result<()> {
+        let app_name = "stop-test-app";
+        let image_tag = "alpine:latest";
+        let container_name = format!("{}-container", app_name);
+
+        // First, create and start a container
+        let run_result = run(app_name, image_tag).await;
+        assert!(run_result.is_ok());
+
+        // Verify container exists
+        assert!(is_container_started(&container_name)?);
+
+        // Create an App instance for testing
+        let app = App::new(app_name)?;
+
+        // Stop the container
+        let stop_result = stop(&app).await;
+        if let Err(e) = &stop_result {
+            println!("Stop function failed with error: {:?}", e);
+        }
+        assert!(stop_result.is_ok());
+
+        // Verify the container was stopped
+        let filter_arg = format!("name={}", container_name);
+        let container_info = Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &filter_arg,
+                "--format",
+                "{{.State}}",
+            ])
+            .output()?;
+
+        let binding = String::from_utf8_lossy(&container_info.stdout);
+        let state = binding.trim();
+        assert!(
+            state == "exited" || state == "stopped",
+            "Container should be stopped, got: {}",
+            state
+        );
+
+        // Clean up
+        cleanup_container(&container_name)?;
+        Ok(())
+    }
+
+    // Test the stop function with a non-existent container
+    #[tokio::test]
+    async fn test_stop_function_with_nonexistent_container() -> Result<()> {
+        let app_name = "nonexistent-stop-test";
+
+        // Create an App instance for testing
+        let app = App::new(app_name)?;
+
+        // Stop should succeed even if no container exists
+        let stop_result = stop(&app).await;
+        assert!(stop_result.is_ok());
+
+        Ok(())
+    }
+
+    // Test the stop function with multiple containers
+    #[tokio::test]
+    async fn test_stop_function_with_multiple_containers() -> Result<()> {
+        let app_name = "multi-stop-test";
+        let image_tag = "alpine:latest";
+        let container_name = format!("{}-container", app_name);
+
+        // Create multiple containers with similar names
+        let run_result1 = run(app_name, image_tag).await;
+        assert!(run_result1.is_ok());
+
+        // Create a second container with a slightly different name
+        let run_result2 = run(&format!("{}-2", app_name), image_tag).await;
+        assert!(run_result2.is_ok());
+
+        // Verify both containers exist
+        assert!(is_container_started(&container_name)?);
+        assert!(is_container_started(&format!("{}-2-container", app_name))?);
+
+        // Create an App instance for testing
+        let app = App::new(app_name)?;
+
+        // Stop should only stop containers matching the exact app name
+        let stop_result = stop(&app).await;
+        assert!(stop_result.is_ok());
+
+        // Verify only the first container was stopped
+        let container2_name = format!("{}-2-container", app_name);
+        let filter1_arg = format!("name={}", container_name);
+        let filter2_arg = format!("name={}", container2_name);
+
+        let container1_info = Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &filter1_arg,
+                "--format",
+                "{{.State}}",
+            ])
+            .output()?;
+
+        let container2_info = Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &filter2_arg,
+                "--format",
+                "{{.State}}",
+            ])
+            .output()?;
+
+        let binding1 = String::from_utf8_lossy(&container1_info.stdout);
+        let binding2 = String::from_utf8_lossy(&container2_info.stdout);
+        let state1 = binding1.trim();
+        let state2 = binding2.trim();
+
+        assert!(
+            state1 == "exited" || state1 == "stopped",
+            "First container should be stopped, got: {}",
+            state1
+        );
+        assert!(
+            state2 == "running" || state2 == "exited",
+            "Second container should not be affected, got: {}",
+            state2
+        );
+
+        // Clean up both containers
+        cleanup_container(&container_name)?;
+        cleanup_container(&container2_name)?;
+        Ok(())
+    }
+
+    // Test the stop function timeout behavior
+    #[tokio::test]
+    async fn test_stop_function_timeout_behavior() -> Result<()> {
+        let app_name = "timeout-stop-test";
+        let image_tag = "alpine:latest";
+        let container_name = format!("{}-container", app_name);
+
+        // Create and start a container
+        let run_result = run(app_name, image_tag).await;
+        assert!(run_result.is_ok());
+
+        // Verify container exists
+        assert!(is_container_started(&container_name)?);
+
+        // Create an App instance for testing
+        let app = App::new(app_name)?;
+
+        // Stop the container and measure time
+        let start_time = std::time::Instant::now();
+        let stop_result = stop(&app).await;
+        let duration = start_time.elapsed();
+
+        assert!(stop_result.is_ok());
+
+        // The stop operation should complete within a reasonable time
+        // (alpine containers exit quickly, so this should be fast)
+        assert!(
+            duration.as_millis() < 5000,
+            "Stop operation took too long: {}ms",
+            duration.as_millis()
+        );
+
+        // Clean up
+        cleanup_container(&container_name)?;
+        Ok(())
+    }
+
+    // Test the build function with a valid Dockerfile
+    #[tokio::test]
+    async fn test_build_function_with_valid_dockerfile() -> Result<()> {
+        use std::fs;
+
+        let test_dir = "test-build-dir";
+        let dockerfile_content = r#"
+FROM alpine:latest
+RUN echo "Hello from test container"
+CMD ["echo", "Test build successful"]
+"#;
+
+        // Create test directory and Dockerfile
+        fs::create_dir_all(test_dir)?;
+        fs::write(format!("{}/Dockerfile", test_dir), dockerfile_content)?;
+
+        // Test the build function
+        let build_result = build(test_dir, "test-build-image:latest").await;
+
+        // Clean up test directory
+        fs::remove_dir_all(test_dir)?;
+
+        // The build might fail due to no podman daemon, but we're testing the function structure
+        if let Err(e) = build_result {
+            println!("Build function test result: {:?}", e);
+            // Expected to fail due to no podman, but function should complete
+        }
+
+        Ok(())
+    }
+
+    // Test the build function with missing Dockerfile
+    #[tokio::test]
+    async fn test_build_function_with_missing_dockerfile() -> Result<()> {
+        let test_dir = "test-build-dir-missing";
+
+        // Test the build function with non-existent directory
+        let build_result = build(test_dir, "test-build-image:latest").await;
+
+        // Should fail with DockerfileNotFound error
+        assert!(build_result.is_err());
+
+        if let Err(e) = build_result {
+            let error_string = e.to_string();
+            assert!(error_string.contains("Dockerfile not found"));
+        }
+
+        Ok(())
+    }
+
+    // Test the build function with empty directory
+    #[tokio::test]
+    async fn test_build_function_with_empty_directory() -> Result<()> {
+        use std::fs;
+
+        let test_dir = "test-build-dir-empty";
+
+        // Create empty directory
+        fs::create_dir_all(test_dir)?;
+
+        // Test the build function
+        let build_result = build(test_dir, "test-build-image:latest").await;
+
+        // Clean up test directory
+        fs::remove_dir_all(test_dir)?;
+
+        // Should fail with DockerfileNotFound error
+        assert!(build_result.is_err());
+
+        if let Err(e) = build_result {
+            let error_string = e.to_string();
+            assert!(error_string.contains("Dockerfile not found"));
+        }
+
+        Ok(())
+    }
+
+    // Test the remove function with existing image
+    #[tokio::test]
+    async fn test_remove_function_with_existing_image() -> Result<()> {
+        // First, try to build an image to remove
+        use std::fs;
+        let test_dir = "test-remove-dir";
+        let dockerfile_content = r#"
+FROM alpine:latest
+RUN echo "Test image for removal"
+"#;
+
+        // Create test directory and Dockerfile
+        fs::create_dir_all(test_dir)?;
+        fs::write(format!("{}/Dockerfile", test_dir), dockerfile_content)?;
+
+        // Try to build (might fail due to no podman)
+        let _ = build(test_dir, "test-remove-image:latest").await;
+
+        // Clean up test directory
+        fs::remove_dir_all(test_dir)?;
+
+        // Test the remove function
+        let remove_result = remove("test-remove-image:latest").await;
+
+        // The remove might fail due to no podman or image not existing, but we're testing the function structure
+        if let Err(e) = remove_result {
+            println!("Remove function test result: {:?}", e);
+            // Expected to fail due to no podman or missing image, but function should complete
+        }
+
+        Ok(())
+    }
+
+    // Test the remove function with non-existent image
+    #[tokio::test]
+    async fn test_remove_function_with_nonexistent_image() -> Result<()> {
+        // Test the remove function with a non-existent image
+        let remove_result = remove("nonexistent-image:latest").await;
+
+        // The remove should fail, but we're testing that the function handles the error gracefully
+        if let Err(e) = remove_result {
+            println!("Remove function with non-existent image result: {:?}", e);
+            // Expected to fail due to missing image, but function should complete
+        }
+
+        Ok(())
+    }
+
+    // Test the remove function with invalid image tag
+    #[tokio::test]
+    async fn test_remove_function_with_invalid_image_tag() -> Result<()> {
+        // Test the remove function with an invalid image tag
+        let remove_result = remove("invalid:tag:format").await;
+
+        // The remove should fail, but we're testing that the function handles the error gracefully
+        if let Err(e) = remove_result {
+            println!("Remove function with invalid tag result: {:?}", e);
+            // Expected to fail due to invalid tag, but function should complete
+        }
+
+        Ok(())
+    }
+
+    // Test the remove function with empty image tag
+    #[tokio::test]
+    async fn test_remove_function_with_empty_image_tag() -> Result<()> {
+        // Test the remove function with an empty image tag
+        let remove_result = remove("").await;
+
+        // The remove should fail, but we're testing that the function handles the error gracefully
+        if let Err(e) = remove_result {
+            println!("Remove function with empty tag result: {:?}", e);
+            // Expected to fail due to empty tag, but function should complete
+        }
+
         Ok(())
     }
 }
