@@ -51,8 +51,23 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
 
     let podman = Podman::unix(&resolve_podman_socket_path()?);
     let containers = podman.containers();
-    dbg!(&containers);
 
+    // If the container exists
+    let all_containers = containers.list(&Default::default()).await?;
+    for container in all_containers {
+        if let Some(names) = &container.names {
+            if names.iter().any(|n| n.contains(name)) {
+                info!(
+                    "Container with name '{}' already exists. Removing it.",
+                    name
+                );
+                if let Some(id) = &container.id {
+                    containers.get(id).remove().await?;
+                    info!("Removed existing container with ID: {}", id);
+                }
+            }
+        }
+    }
     let container_name = format!("{}-container", name);
 
     let create_opts = podman_api::opts::ContainerCreateOpts::builder()
@@ -175,9 +190,7 @@ fn resolve_podman_socket_path() -> Result<String> {
                             ])
                             .output()?;
                         if inspect.status.success() {
-                            let path = String::from_utf8_lossy(&inspect.stdout)
-                                .trim()
-                                .to_string();
+                            let path = String::from_utf8_lossy(&inspect.stdout).trim().to_string();
                             if !path.is_empty() {
                                 return Ok(path);
                             }

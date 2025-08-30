@@ -16,12 +16,6 @@ pub async fn execute(app_name: &str) -> Result<()> {
         .await?
         .ok_or_else(|| anyhow!("App '{}' not found", app_name))?;
 
-    // Check if app is already running
-    if app.state == AppState::Stopped {
-        println!("App '{}' is already stopped", app_name);
-        return Ok(());
-    }
-
     // Stop the app with podman
     info!("Stopping app '{}'", app_name);
     podman::stop(&app).await?;

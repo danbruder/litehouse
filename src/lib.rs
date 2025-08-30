@@ -8,3 +8,5 @@ pub mod git;
 pub mod models;
 pub mod podman;
 
+#[cfg(test)]
+mod tests;
