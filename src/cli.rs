@@ -100,12 +100,17 @@ enum Commands {
     Config,
 
     Podman(PodmanArgs),
+
+    /// Seed the database for testing
+    Seed,
 }
 
 #[derive(Subcommand)]
 enum PodmanCmd {
     /// Show podman version
     Version,
+    /// Run a test container
+    Run,
 }
 
 #[tracing::instrument]
@@ -168,6 +173,14 @@ pub async fn run() -> Result<()> {
         }
         Commands::Podman(args) => match args.command {
             PodmanCmd::Version => api_client.get_podman_version().await,
+            PodmanCmd::Run => crate::podman::run("yeet", "redis:latest").await,
         },
+
+        Commands::Seed => {
+            println!("Seeding the database...");
+            crate::db::seed().await;
+
+            Ok(())
+        }
     }
 }

@@ -19,7 +19,9 @@ pub enum PodmanError {
 pub async fn build(directory: &str, tag: &str) -> Result<()> {
     info!("Building app in: {}", directory);
 
-    let podman = Podman::unix("/run/podman/podman.sock");
+    let podman = Podman::unix(
+        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
+    );
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
@@ -48,8 +50,11 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
     info!("Running app: {}", name);
 
-    let podman = Podman::unix("ssh://core@127.0.0.1:65176/run/user/502/podman/podman.sock");
+    let podman = Podman::unix(&std::env::var("PODMAN_SSH_SOCK").unwrap_or_else(|_| {
+        "ssh://core@127.0.0.1:65176/run/user/502/podman/podman.sock".to_string()
+    }));
     let containers = podman.containers();
+    dbg!(&containers);
 
     let container_name = format!("{}-container", name);
 
@@ -59,8 +64,9 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         .build();
 
     info!("Creating container: {}", container_name);
-    let container_info = containers.create(&create_opts).await?;
+    let container_info = containers.create(&create_opts).await.unwrap();
 
+    dbg!(&container_info);
     info!("Starting container: {}", container_info.id);
     containers.get(&container_info.id).start(None).await?;
 
@@ -73,7 +79,9 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
 pub async fn remove(tag: &str) -> Result<()> {
     info!("Removing container image with tag: {}", tag);
 
-    let podman = Podman::unix("/run/podman/podman.sock");
+    let podman = Podman::unix(
+        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
+    );
     let images = podman.images();
 
     match images.get(tag).remove().await {
@@ -92,7 +100,9 @@ pub async fn remove(tag: &str) -> Result<()> {
 pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
-    let podman = Podman::unix("/run/podman/podman.sock");
+    let podman = Podman::unix(
+        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
+    );
     let containers = podman.containers();
     let container_name = format!("{}-container", app.name);
 

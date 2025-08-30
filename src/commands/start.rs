@@ -12,6 +12,8 @@ pub enum StartError {
     AppAlreadyRunning(String),
     #[error("App not deployed: {0}")]
     AppNotDeployed(String),
+    #[error("App Build missing: {0}")]
+    AppBuildMissing(String),
     #[error("Failed to start app: {0}")]
     AppStartFailed(String),
     #[error("App log broken: {0}")]
@@ -45,7 +47,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     tracing::debug!("Geting build for app id {}", app.id);
     let build = db::build::get_latest_by_app(pool, &app.id)
         .await?
-        .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
+        .ok_or_else(|| StartError::AppBuildMissing(app_name.to_string()))?;
 
     // Start the app with podman
     tracing::debug!("Running {} for {}", &app.name, &build.image_tag);
