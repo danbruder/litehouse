@@ -204,3 +204,91 @@ fn resolve_podman_socket_path() -> Result<String> {
     // Fallback to well-known default
     Ok("/run/podman/podman.sock".to_string())
 }
+
+#[cfg(test)]
+mod test_helpers {
+    use anyhow::Result;
+    use std::process::Command;
+
+    /// Check if a container is running by calling podman ps
+    pub fn is_container_running(container_name: &str) -> Result<bool> {
+        let output = Command::new("podman")
+            .args([
+                "ps",
+                "--filter",
+                &format!("name={}", container_name),
+                "--format",
+                "{{.Names}}\t{{.Status}}",
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Ok(false);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(!stdout.trim().is_empty() && stdout.contains(container_name))
+    }
+
+    /// Clean up a test container by stopping and removing it
+    pub fn cleanup_container(container_name: &str) -> Result<()> {
+        // Stop the container
+        let stop_result = Command::new("podman")
+            .args(["stop", container_name])
+            .output();
+
+        if let Err(e) = stop_result {
+            println!(
+                "Warning: Failed to stop container {}: {:?}",
+                container_name, e
+            );
+        }
+
+        // Remove the container
+        let remove_result = Command::new("podman").args(["rm", container_name]).output();
+
+        if let Err(e) = remove_result {
+            println!(
+                "Warning: Failed to remove container {}: {:?}",
+                container_name, e
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_helpers::{cleanup_container, is_container_running};
+    use super::*;
+    use anyhow::Result;
+
+    // Test the happy path: run function creates and starts a container, then verify it's running
+    #[tokio::test]
+    async fn test_run_function_happy_path() -> Result<()> {
+        let app_name = "test-run-app";
+        let image_tag = "alpine:latest";
+        let container_name = format!("{}-container", app_name);
+
+        // Clean up any existing test container first
+        let _ = cleanup_container(&container_name);
+
+        // Step 1: Call the run function
+        let run_result = run(app_name, image_tag).await;
+        assert!(
+            run_result.is_ok(),
+            "Run function should succeed: {:?}",
+            run_result
+        );
+
+        // Step 2: Verify the container is actually running by calling podman
+        let is_running = is_container_running(&container_name)?;
+        assert!(is_running, "Container should be running after run function");
+
+        // Clean up: stop and remove the test container
+        cleanup_container(&container_name)?;
+
+        Ok(())
+    }
+}
