@@ -51,7 +51,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
     if name.trim().is_empty() {
         return Err(PodmanError::BuildError("App name cannot be empty".to_string()).into());
     }
-    
+
     info!("Running app: {}", name);
 
     let podman = Podman::unix(&resolve_podman_socket_path()?);
@@ -280,7 +280,7 @@ mod test_helpers {
     use anyhow::Result;
     use std::process::Command;
 
-        /// Check if a container exists and was started by calling podman ps -a
+    /// Check if a container exists and was started by calling podman ps -a
     pub fn is_container_started(container_name: &str) -> Result<bool> {
         let output = Command::new("podman")
             .args([
@@ -292,11 +292,11 @@ mod test_helpers {
                 "{{.Names}}\t{{.Status}}",
             ])
             .output()?;
-        
+
         if !output.status.success() {
             return Ok(false);
         }
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(!stdout.trim().is_empty() && stdout.contains(container_name))
     }
@@ -304,9 +304,7 @@ mod test_helpers {
     /// Clean up a test container by stopping and removing it
     pub fn cleanup_container(container_name: &str) -> Result<()> {
         // Stop the container
-        let stop_result = Command::new("podman")
-            .args(["stop", container_name])
-            .output();
+        let stop_result = podman_stop(container_name);
 
         if let Err(e) = stop_result {
             println!(
@@ -316,7 +314,7 @@ mod test_helpers {
         }
 
         // Remove the container
-        let remove_result = Command::new("podman").args(["rm", container_name]).output();
+        let remove_result = podman_rm(container_name);
 
         if let Err(e) = remove_result {
             println!(
@@ -326,6 +324,86 @@ mod test_helpers {
         }
 
         Ok(())
+    }
+
+    /// Stop a container using podman
+    pub fn podman_stop(container_name: &str) -> Result<()> {
+        let output = Command::new("podman")
+            .args(["stop", container_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to stop container: {}",
+                container_name
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Remove a container using podman
+    pub fn podman_rm(container_name: &str) -> Result<()> {
+        let output = Command::new("podman")
+            .args(["rm", container_name])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to remove container: {}",
+                container_name
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Get container state using podman ps
+    pub fn get_container_state(container_name: &str) -> Result<String> {
+        let output = Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &format!("name={}", container_name),
+                "--format",
+                "{{.State}}",
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to get container state for: {}",
+                container_name
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.trim().to_string())
+    }
+
+    /// Get container info using podman ps with custom format
+    pub fn get_container_info(container_name: &str, format: &str) -> Result<String> {
+        let output = Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--filter",
+                &format!("name={}", container_name),
+                "--format",
+                format,
+            ])
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to get container info for: {}",
+                container_name
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.trim().to_string())
     }
 }
 
@@ -535,20 +613,7 @@ mod tests {
         assert!(stop_result.is_ok());
 
         // Verify the container was stopped
-        let filter_arg = format!("name={}", container_name);
-        let container_info = Command::new("podman")
-            .args([
-                "ps",
-                "-a",
-                "--filter",
-                &filter_arg,
-                "--format",
-                "{{.State}}",
-            ])
-            .output()?;
-
-        let binding = String::from_utf8_lossy(&container_info.stdout);
-        let state = binding.trim();
+        let state = test_helpers::get_container_state(&container_name)?;
         assert!(
             state == "exited" || state == "stopped",
             "Container should be stopped, got: {}",
@@ -603,35 +668,9 @@ mod tests {
 
         // Verify only the first container was stopped
         let container2_name = format!("{}-2-container", app_name);
-        let filter1_arg = format!("name={}", container_name);
-        let filter2_arg = format!("name={}", container2_name);
 
-        let container1_info = Command::new("podman")
-            .args([
-                "ps",
-                "-a",
-                "--filter",
-                &filter1_arg,
-                "--format",
-                "{{.State}}",
-            ])
-            .output()?;
-
-        let container2_info = Command::new("podman")
-            .args([
-                "ps",
-                "-a",
-                "--filter",
-                &filter2_arg,
-                "--format",
-                "{{.State}}",
-            ])
-            .output()?;
-
-        let binding1 = String::from_utf8_lossy(&container1_info.stdout);
-        let binding2 = String::from_utf8_lossy(&container2_info.stdout);
-        let state1 = binding1.trim();
-        let state2 = binding2.trim();
+        let state1 = test_helpers::get_container_state(&container_name)?;
+        let state2 = test_helpers::get_container_state(&container2_name)?;
 
         assert!(
             state1 == "exited" || state1 == "stopped",
