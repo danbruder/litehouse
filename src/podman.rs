@@ -3,6 +3,7 @@ use anyhow::Result;
 use futures_util::TryStreamExt;
 use podman_api::Podman;
 use std::path::Path;
+use std::process::Command;
 use tracing::{info, instrument};
 
 #[derive(Debug, thiserror::Error)]
@@ -19,9 +20,7 @@ pub enum PodmanError {
 pub async fn build(directory: &str, tag: &str) -> Result<()> {
     info!("Building app in: {}", directory);
 
-    let podman = Podman::unix(
-        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
-    );
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
@@ -50,9 +49,7 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
     info!("Running app: {}", name);
 
-    let podman = Podman::unix(&std::env::var("PODMAN_SSH_SOCK").unwrap_or_else(|_| {
-        "ssh://core@127.0.0.1:65176/run/user/502/podman/podman.sock".to_string()
-    }));
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
     let containers = podman.containers();
     dbg!(&containers);
 
@@ -64,7 +61,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         .build();
 
     info!("Creating container: {}", container_name);
-    let container_info = containers.create(&create_opts).await.unwrap();
+    let container_info = containers.create(&create_opts).await?;
 
     dbg!(&container_info);
     info!("Starting container: {}", container_info.id);
@@ -79,9 +76,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
 pub async fn remove(tag: &str) -> Result<()> {
     info!("Removing container image with tag: {}", tag);
 
-    let podman = Podman::unix(
-        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
-    );
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
     let images = podman.images();
 
     match images.get(tag).remove().await {
@@ -100,9 +95,7 @@ pub async fn remove(tag: &str) -> Result<()> {
 pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
-    let podman = Podman::unix(
-        &std::env::var("PODMAN_SOCK").unwrap_or_else(|_| "/run/podman/podman.sock".to_string()),
-    );
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
     let containers = podman.containers();
     let container_name = format!("{}-container", app.name);
 
@@ -133,4 +126,68 @@ pub async fn stop(app: &App) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_podman_socket_path() -> Result<String> {
+    // User-provided overrides
+    if let Ok(sock) = std::env::var("PODMAN_SSH_SOCK") {
+        return Ok(sock);
+    }
+    if let Ok(sock) = std::env::var("PODMAN_SOCK") {
+        return Ok(sock);
+    }
+    if let Ok(ch) = std::env::var("CONTAINER_HOST") {
+        if let Some(path) = ch.strip_prefix("unix://") {
+            return Ok(path.to_string());
+        }
+    }
+
+    // Discover from default connection
+    let list = Command::new("podman")
+        .args([
+            "system",
+            "connection",
+            "ls",
+            "--format",
+            "{{.Name}} {{.Default}} {{.URI}}",
+        ])
+        .output()?;
+
+    if list.status.success() {
+        let stdout = String::from_utf8_lossy(&list.stdout);
+        for line in stdout.lines() {
+            let mut parts = line.split_whitespace();
+            if let (Some(name), Some(default_flag), Some(uri)) =
+                (parts.next(), parts.next(), parts.next())
+            {
+                if default_flag == "true" {
+                    if let Some(path) = uri.strip_prefix("unix://") {
+                        return Ok(path.to_string());
+                    } else if uri.starts_with("ssh://") {
+                        // On macOS with Podman Machine, use the local forwarded API socket
+                        let inspect = Command::new("podman")
+                            .args([
+                                "machine",
+                                "inspect",
+                                name,
+                                "--format",
+                                "{{.ConnectionInfo.PodmanSocket.Path}}",
+                            ])
+                            .output()?;
+                        if inspect.status.success() {
+                            let path = String::from_utf8_lossy(&inspect.stdout)
+                                .trim()
+                                .to_string();
+                            if !path.is_empty() {
+                                return Ok(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to well-known default
+    Ok("/run/podman/podman.sock".to_string())
 }
