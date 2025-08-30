@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use tracing::{info, instrument};
 
 use crate::db;
-use crate::models::AppState;
 use crate::podman;
 
 /// Stop an app using the supervisor

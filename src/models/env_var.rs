@@ -1,7 +1,6 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{now, UtcDateTime};
+use crate::models::UtcDateTime;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvVar {
