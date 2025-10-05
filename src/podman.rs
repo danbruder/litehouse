@@ -42,13 +42,13 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
     }
 
     info!("Container image build completed successfully");
-    
+
     // Get the image ID by inspecting the built image
     let image_info = images.get(tag).inspect().await?;
     let image_id = image_info.id.ok_or_else(|| {
         PodmanError::BuildError("Failed to get image ID from build result".to_string())
     })?;
-    
+
     info!("Built image ID: {}", image_id);
     Ok(image_id)
 }
@@ -86,7 +86,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
                 // Check if the container is running or has been started before
                 if let Some(state) = &container.state {
                     info!("Found container '{}' with state: {}", container_name, state);
-                    if state == "running" || state == "exited" {
+                    if state == "running" {
                         info!(
                             "Container '{}' is already {} (ID: {}). Skipping startup.",
                             container_name,
