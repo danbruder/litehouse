@@ -17,7 +17,7 @@ pub enum PodmanError {
 }
 
 #[instrument]
-pub async fn build(directory: &str, tag: &str) -> Result<()> {
+pub async fn build(directory: &str, tag: &str) -> Result<String> {
     info!("Building app in: {}", directory);
 
     let podman = Podman::unix(&resolve_podman_socket_path()?);
@@ -42,7 +42,15 @@ pub async fn build(directory: &str, tag: &str) -> Result<()> {
     }
 
     info!("Container image build completed successfully");
-    Ok(())
+    
+    // Get the image ID by inspecting the built image
+    let image_info = images.get(tag).inspect().await?;
+    let image_id = image_info.id.ok_or_else(|| {
+        PodmanError::BuildError("Failed to get image ID from build result".to_string())
+    })?;
+    
+    info!("Built image ID: {}", image_id);
+    Ok(image_id)
 }
 
 #[instrument]
@@ -749,9 +757,14 @@ CMD ["echo", "Test build successful"]
         fs::remove_dir_all(test_dir)?;
 
         // The build might fail due to no podman daemon, but we're testing the function structure
-        if let Err(e) = build_result {
-            println!("Build function test result: {:?}", e);
-            // Expected to fail due to no podman, but function should complete
+        match build_result {
+            Ok(image_id) => {
+                println!("Build function test succeeded with image ID: {}", image_id);
+            }
+            Err(e) => {
+                println!("Build function test result: {:?}", e);
+                // Expected to fail due to no podman, but function should complete
+            }
         }
 
         Ok(())

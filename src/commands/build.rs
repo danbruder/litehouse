@@ -5,9 +5,9 @@ use tracing::{info, instrument};
 
 use crate::db;
 use crate::git;
-use crate::podman;
 use crate::models::Build;
 use crate::models::BuildInput;
+use crate::podman;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
@@ -45,11 +45,11 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
     let git_result = git::pull(&remote, &build_dir).await?;
 
     let tag = format!("{}:{}", app.name, &git_result.commit);
-    podman::build(&build_dir.to_str().unwrap(), &tag)
+    let image_id = podman::build(&build_dir.to_str().unwrap(), &tag)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Build failed: {}", e)))?;
 
-    info!("Built image with tag: {}", tag);
+    info!("Built image with tag: {} and ID: {}", tag, image_id);
 
     let build = Build::new(BuildInput {
         app_id: app.id,
