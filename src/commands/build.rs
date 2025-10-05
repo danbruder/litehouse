@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
+use crate::config;
 use tracing::{info, instrument};
 
 use crate::db;
@@ -14,6 +15,8 @@ pub enum BuildError {
     AppNotConfigured(String),
     #[error("Database error: {0}")]
     DatabaseError(#[from] crate::db::DatabaseError),
+    #[error("Config error: {0}")]
+    ConfigError(#[from] crate::config::ConfigError),
 }
 
 type BuildResult<T> = Result<T, BuildError>;
@@ -33,7 +36,9 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
         ))
     })?;
 
-    let git_result = git::pull(&remote)
+    let build_dir = config::get_app_build_dir(&app.name)?;
+
+    let git_result = git::pull(&remote, &build_dir)
         .await
         .map_err(|e| BuildError::AppNotFound(format!("Git pull failed: {}", e)))?;
 

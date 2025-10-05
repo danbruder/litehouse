@@ -135,6 +135,15 @@ pub fn get_app_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
     Ok(app_dir)
 }
 
+pub fn get_app_build_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
+    let build_dir = get_app_dir(app_name)?.join("build");
+    if !build_dir.exists() {
+        fs::create_dir_all(&build_dir)
+            .map_err(|_| ConfigError::IoError("Failed to create app build directory".to_string()))?;
+    }
+    Ok(build_dir)
+}
+
 /// Get the app binary path
 #[instrument]
 pub fn get_app_binary_path(app_name: &str) -> Result<PathBuf, ConfigError> {
@@ -201,7 +210,8 @@ impl ClientConfig {
 fn get_base_dir() -> PathBuf {
     // if on osx, use the home directory
     if cfg!(target_os = "macos") {
-        return std::env::current_dir().unwrap();
+        return "/Users/dan/Desktop/bindrop-data".into();
+        //return std::env::current_dir().unwrap();
     }
 
     if std::env::var("BINDROP_DIR").is_ok() {
