@@ -224,7 +224,7 @@ impl ApiClient {
         }
     }
 
-    pub async fn remote(&self, app_name: &str, remote: &str) -> Result<()> {
+    pub async fn remote_add(&self, app_name: &str, remote: &str) -> Result<()> {
         let response = self
             .client
             .post(&format!("{}/apps/{}/remote", self.config.base_url, app_name))
@@ -237,6 +237,22 @@ impl ApiClient {
         } else {
             let error = response.text().await?;
             Err(anyhow!("Failed to configure remote: {}", error))
+        }
+    }
+
+    pub async fn remote_remove(&self, app_name: &str) -> Result<()> {
+        let response = self
+            .client
+            .delete(&format!("{}/apps/{}/remote", self.config.base_url, app_name))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            println!("Remote removed for app '{}'", app_name);
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to remove remote: {}", error))
         }
     }
 

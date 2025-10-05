@@ -49,3 +49,35 @@ pub async fn save(pool: &Pool<Sqlite>, remote: &Remote) -> Result<()> {
 
     Ok(())
 }
+
+/// Delete a remote by ID
+#[instrument(skip(pool))]
+pub async fn delete_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<()> {
+    let _ = sqlx::query!(
+        r#"
+            DELETE FROM remote
+            WHERE id = ?;
+            "#,
+        id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Delete a remote by app ID
+#[instrument(skip(pool))]
+pub async fn delete_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<()> {
+    let _ = sqlx::query!(
+        r#"
+            DELETE FROM remote
+            WHERE app_id = ?;
+            "#,
+        app_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}

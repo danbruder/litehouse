@@ -38,7 +38,8 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/env", post(set_env))
         .route("/podman/version", get(get_podman_version))
-        .route("/apps/:name/remote", post(set_remote))
+        .route("/apps/:name/remote", post(add_remote))
+        .route("/apps/:name/remote", delete(remove_remote))
         .route("/apps/:name/build", post(build_app))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
         .with_state(state)
@@ -388,15 +389,26 @@ struct SetRemoteRequest {
     remote: String,
 }
 
-async fn set_remote(
+async fn add_remote(
     State(state): State<Arc<RwLock<ProxyState>>>,
     Path(name): Path<String>,
     Json(payload): Json<SetRemoteRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match remote::execute(&pool, &name, &payload.remote).await {
+    match remote::add::execute(&pool, &name, &payload.remote).await {
         Ok(_) => (StatusCode::OK, format!("Remote configured for app '{}'", name)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to configure remote: {}", e)).into_response(),
+    }
+}
+
+async fn remove_remote(
+    State(state): State<Arc<RwLock<ProxyState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    match remote::remove::execute(&pool, &name).await {
+        Ok(_) => (StatusCode::OK, format!("Remote removed for app '{}'", name)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to remove remote: {}", e)).into_response(),
     }
 }
 

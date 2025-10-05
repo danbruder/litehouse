@@ -115,8 +115,8 @@ enum Commands {
         /// Name of the app
         app_name: String,
 
-        /// Remote name
-        remote: String,
+        #[command(subcommand)]
+        command: RemoteCmd,
     },
 }
 
@@ -126,6 +126,18 @@ enum PodmanCmd {
     Version,
     /// Run a test container
     Run,
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Add a remote
+    Add {
+
+        /// Remote name
+        remote: String,
+    },
+    /// Remove a remote
+    Remove ,
 }
 
 #[tracing::instrument]
@@ -197,7 +209,10 @@ pub async fn run() -> Result<()> {
 
             Ok(())
         }
-        Commands::Remote { app_name, remote } => api_client.remote(&app_name, &remote).await,
+        Commands::Remote { app_name, command } => match command {
+            RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
+            RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
+        },
         Commands::Build { app_name } => api_client.build(&app_name).await,
     }
 }
