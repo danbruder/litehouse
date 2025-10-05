@@ -38,7 +38,5 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, remote: &str) -> Build
     let remote = Remote::new(&app.id, "github", remote, "main", ".");
     db::remote::save(pool, &remote).await?;
 
-
-
     Ok(())
 }

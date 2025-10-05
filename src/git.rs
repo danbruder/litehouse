@@ -15,11 +15,13 @@ pub enum GitError {
     GitPullError(String),
     #[error("Command error: {0}")]
     CommandError(#[from] std::io::Error),
+    #[error("Config error: {0}")]
+    ConfigError(#[from] crate::config::ConfigError),
 }
 
-type GitResult<T> = Result<T, GitError>;
+pub type GitResult<T> = Result<T, GitError>;
 
-struct GitPullResult {
+pub struct GitPullResult {
     pub commit: String,
 }
 
