@@ -37,3 +37,39 @@ I want to store the run state so that I can report on it in the UI. For checking
 Which things does podman own the data for? start, stop, restart. In effect, I'm asking another system to do something and it will tell me what it has done.
 
 Let's focus on item 3 - start stop restart
+
+# Notes
+
+## 10/5/2025
+
+I'm in the middle of the podman refactor - pulling out my home grown system and what not in order to remove the "static binary" use case as I bet it will not hit much adoption - in fact - I should go after self hosted Vercel / NextJS as a first target since that's what LLMs are shilling these days. 
+
+Let's make that use case REALLY good. So What? 
+
+Here are my use cases: 
+
+1. I should be able to add a new app
+2. I can go ahead and connect it to an existing repository in github 
+3. It will pull and build that repository
+4. I will get a URL subdomain that I can visit for that service 
+5. I can go on vacation and my service runs and is secure 
+6. I can scale / migrate without worry. Because of litestream.
+
+Where are we today? 
+
+- [X] Create an app
+- [ ] Connect to github
+- [ ] Manually set a remote
+- [X] Build app based on conifg
+- [X] Start app if it is built
+- [ ] See the app at a URL 
+- [X] Stop the app
+- [ ] Delete the app
+- [ ] Restart the app
+
+Developer happiness
+- [ ] How do I know what env I'm pointing to? Perhaps in the logs
+- [ ] Make the app auto understood based on location in the cli (context)
+- [ ] Put cursor IN the bindrop and give it access to the primitives. as an app woah. allow it to run with privalages. 
+
+

@@ -41,6 +41,12 @@ enum Commands {
         binary_path: String,
     },
 
+    /// Build an app
+    Build {
+        /// Name of the app
+        app_name: String,
+    },
+
     /// Deploy a binary to an app
     Env {
         /// Name of the app
@@ -103,6 +109,15 @@ enum Commands {
 
     /// Seed the database for testing
     Seed,
+
+    /// Configure a remote for an app
+    Remote {
+        /// Name of the app
+        app_name: String,
+
+        /// Remote name
+        remote: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -182,5 +197,7 @@ pub async fn run() -> Result<()> {
 
             Ok(())
         }
+        Commands::Remote { app_name, remote } => api_client.remote(&app_name, &remote).await,
+        Commands::Build { app_name } => api_client.build(&app_name).await,
     }
 }

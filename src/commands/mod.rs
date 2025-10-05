@@ -3,6 +3,7 @@ pub mod build;
 pub mod create;
 pub mod delete;
 pub mod logs;
+pub mod remote;
 pub mod server;
 pub mod start;
 pub mod status;

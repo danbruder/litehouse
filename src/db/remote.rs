@@ -26,3 +26,26 @@ pub async fn get_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Remote> {
         updated_at: record.updated_at.into(),
     })
 }
+
+/// Get an app by name
+#[instrument(skip(pool))]
+pub async fn save(pool: &Pool<Sqlite>, remote: &Remote) -> Result<()> {
+    let _ = sqlx::query!(
+        r#"
+            INSERT INTO remote (id, app_id, name, remote, branch, directory, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        remote.id,
+        remote.app_id,
+        remote.name,
+        remote.remote,
+        remote.branch,
+        remote.directory,
+        remote.created_at,
+        remote.updated_at,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
