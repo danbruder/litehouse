@@ -20,6 +20,12 @@ pub struct BuildInput {
     pub git_commit: String,
 }
 
+impl BuildInput {
+    pub fn new(app_id: String, image_id: String, image_tag: String, git_commit: String) -> BuildInput {
+        BuildInput { app_id, image_id, image_tag, git_commit }
+    }
+}
+
 impl Build {
     pub fn new(input: BuildInput) -> Build {
         let now = now();
