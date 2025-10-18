@@ -73,13 +73,13 @@ pub async fn seed() {
 
     let pool = init_pool().await.unwrap();
 
-    let app = App::new("example").unwrap();
+    let app = App::new("caddy").unwrap();
     crate::db::app::save(&pool, &app).await.unwrap();
 
     let input = BuildInput {
         app_id: app.id,
         image_id: "1234".to_string(),
-        image_tag: "redis:latest".to_string(),
+        image_tag: "caddy:latest".to_string(),
         git_commit: "hey".to_string(),
     };
 

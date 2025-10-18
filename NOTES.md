@@ -59,10 +59,12 @@ Where are we today?
 
 - [X] Create an app
 - [ ] Connect to github
-- [ ] Manually set a remote
+- [X] Manually set a remote
 - [X] Build app based on conifg
 - [X] Start app if it is built
 - [ ] See the app at a URL 
+    - [ ] Start system services (Caddy / Nginx) 
+    - [ ] Reload config when something changes 
 - [X] Stop the app
 - [ ] Delete the app
 - [ ] Restart the app
@@ -73,3 +75,6 @@ Developer happiness
 - [ ] Put cursor IN the bindrop and give it access to the primitives. as an app woah. allow it to run with privalages. 
 
 
+
+NEXT 
+- [ ] GET CADDY RUNNING

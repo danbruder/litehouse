@@ -1,8 +1,9 @@
 use crate::models::App;
 use anyhow::Result;
-use futures_util::TryStreamExt;
+use futures_util::{stream::unfold, StreamExt, TryStreamExt};
 use podman_api::Podman;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Command;
 use tracing::{info, instrument};
 
@@ -14,6 +15,8 @@ pub enum PodmanError {
     BuildError(String),
     #[error("Build stream error: {0}")]
     BuildStreamError(String),
+    #[error("Log error: {0}")]
+    LogError(String),
 }
 
 #[instrument]
@@ -160,6 +163,91 @@ pub async fn remove(tag: &str) -> Result<()> {
 }
 
 #[instrument]
+pub async fn logs(app_name: &str, lines: usize, follow: bool) -> Result<()> {
+    todo!("implement non-streaming logs");
+    Ok(())
+}
+
+#[instrument]
+pub async fn logs_stream(
+    app_name: &str,
+    lines: usize,
+    follow: bool,
+) -> Result<Pin<Box<dyn futures_util::Stream<Item = Result<String, anyhow::Error>> + Send>>> {
+    info!("Getting logs stream for app: {}", app_name);
+
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
+    let containers = podman.containers();
+    let container_name = format!("{}-container", app_name);
+
+    // Check if container exists
+    let list_opts = podman_api::opts::ContainerListOpts::builder()
+        .all(true)
+        .build();
+    let all_containers = containers.list(&list_opts).await?;
+
+    let mut container_found = false;
+    for container in all_containers {
+        if let Some(names) = &container.names {
+            if names.iter().any(|n| n == &container_name) {
+                container_found = true;
+                break;
+            }
+        }
+    }
+
+    if !container_found {
+        return Err(PodmanError::LogError(format!(
+            "Container '{}' not found for app '{}'",
+            container_name, app_name
+        ))
+        .into());
+    }
+
+    // Create a stream that owns all the necessary data
+    let stream = unfold(
+        (podman, container_name, follow),
+        |(podman, container_name, follow)| async move {
+            let containers = podman.containers();
+            let logs_opts = podman_api::opts::ContainerLogsOpts::builder()
+                .stdout(true)
+                .stderr(true)
+                .follow(follow)
+                .build();
+
+            let container_logs = containers.get(&container_name);
+            let mut log_stream = container_logs.logs(&logs_opts);
+
+            match log_stream.next().await {
+                Some(result) => {
+                    let log_string = match result {
+                        Ok(log_result) => match log_result {
+                            podman_api::conn::TtyChunk::StdOut(data) => {
+                                String::from_utf8_lossy(&data).to_string()
+                            }
+                            podman_api::conn::TtyChunk::StdErr(data) => {
+                                String::from_utf8_lossy(&data).to_string()
+                            }
+                            _ => String::new(),
+                        },
+                        Err(e) => {
+                            return Some((
+                                Err(anyhow::anyhow!(e)),
+                                (podman, container_name, follow),
+                            ))
+                        }
+                    };
+                    Some((Ok(log_string), (podman, container_name, follow)))
+                }
+                None => None,
+            }
+        },
+    );
+
+    Ok(Box::pin(stream))
+}
+
+#[instrument]
 pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
@@ -281,6 +369,112 @@ fn resolve_podman_socket_path() -> Result<String> {
 
     // Fallback to well-known default
     Ok("/run/podman/podman.sock".to_string())
+}
+
+#[instrument]
+pub async fn run_reverse_proxy() -> Result<()> {
+    info!("Running reverse proxy");
+
+    let podman = Podman::unix(&resolve_podman_socket_path()?);
+    let containers = podman.containers();
+    let volumes = podman.volumes();
+
+    let container_name = "caddy-container";
+
+    // Create volumes if they don't exist
+    let caddy_data_volume = "caddy_data";
+    let caddy_config_volume = "caddy_config";
+
+    // Check if volumes exist, create if they don't
+    let volume_list_opts = podman_api::opts::VolumeListOpts::builder().build();
+    let volume_list = volumes.list(&volume_list_opts).await?;
+    let mut caddy_data_exists = false;
+    let mut caddy_config_exists = false;
+
+    for volume in volume_list {
+        if volume.name == caddy_data_volume {
+            caddy_data_exists = true;
+        } else if volume.name == caddy_config_volume {
+            caddy_config_exists = true;
+        }
+    }
+
+    if !caddy_data_exists {
+        info!("Creating volume: {}", caddy_data_volume);
+        let volume_opts = podman_api::opts::VolumeCreateOpts::builder()
+            .name(caddy_data_volume)
+            .build();
+        volumes.create(&volume_opts).await?;
+    }
+
+    if !caddy_config_exists {
+        info!("Creating volume: {}", caddy_config_volume);
+        let volume_opts = podman_api::opts::VolumeCreateOpts::builder()
+            .name(caddy_config_volume)
+            .build();
+        volumes.create(&volume_opts).await?;
+    }
+
+    // Check if container already exists and is running
+    let list_opts = podman_api::opts::ContainerListOpts::builder()
+        .all(true)
+        .build();
+    let all_containers = containers.list(&list_opts).await?;
+
+    for container in all_containers {
+        if let Some(names) = &container.names {
+            if names.iter().any(|n| n == container_name) {
+                if let Some(state) = &container.state {
+                    if state == "running" {
+                        info!("Caddy container is already running");
+                        return Ok(());
+                    }
+                }
+
+                // Remove existing container if it's not running
+                if let Some(id) = &container.id {
+                    info!("Removing existing caddy container: {}", id);
+                    containers.get(id).remove().await?;
+                }
+                break;
+            }
+        }
+    }
+
+    // Create container with proper configuration
+    let create_opts = podman_api::opts::ContainerCreateOpts::builder()
+        .image("caddy:latest")
+        .name(container_name)
+        .restart_policy(podman_api::opts::ContainerRestartPolicy::UnlessStopped)
+        .mounts(vec![
+            podman_api::models::ContainerMount {
+                destination: Some("/data".to_string()),
+                source: Some(caddy_data_volume.to_string()),
+                _type: Some("volume".to_string()),
+                options: None,
+                uid_mappings: None,
+                gid_mappings: None,
+            },
+            podman_api::models::ContainerMount {
+                destination: Some("/config".to_string()),
+                source: Some(caddy_config_volume.to_string()),
+                _type: Some("volume".to_string()),
+                options: None,
+                uid_mappings: None,
+                gid_mappings: None,
+            },
+        ])
+        .publish_image_ports(true)
+        .build();
+
+    info!("Creating caddy container: {}", container_name);
+    let container_info = containers.create(&create_opts).await?;
+
+    info!("Starting caddy container: {}", container_info.id);
+    containers.get(&container_info.id).start(None).await?;
+
+    info!("Caddy reverse proxy started successfully");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -889,6 +1083,26 @@ RUN echo "Test image for removal"
         if let Err(e) = remove_result {
             println!("Remove function with empty tag result: {:?}", e);
             // Expected to fail due to empty tag, but function should complete
+        }
+
+        Ok(())
+    }
+
+    // Test the run_reverse_proxy function
+    #[tokio::test]
+    async fn test_run_reverse_proxy_function() -> Result<()> {
+        // Test the run_reverse_proxy function
+        let result = run_reverse_proxy().await;
+
+        // The function might fail due to no podman daemon, but we're testing the function structure
+        match result {
+            Ok(_) => {
+                println!("Run reverse proxy function test succeeded");
+            }
+            Err(e) => {
+                println!("Run reverse proxy function test result: {:?}", e);
+                // Expected to fail due to no podman, but function should complete
+            }
         }
 
         Ok(())

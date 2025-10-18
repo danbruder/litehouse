@@ -1,8 +1,9 @@
 use crate::commands::app_env;
+use crate::commands::build;
 use crate::commands::create;
 use crate::commands::delete;
-use crate::commands::build;
 use crate::commands::remote;
+use crate::commands::logs;
 use crate::commands::server::ProxyState;
 use crate::commands::{start, stop};
 use crate::db;
@@ -16,13 +17,10 @@ use axum::{
     Json, Router,
 };
 use bytes::Bytes;
-use futures_util::stream::unfold;
+use futures_util::StreamExt;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
 use tokio::sync::RwLock;
 use tracing::instrument;
 
@@ -163,77 +161,39 @@ async fn get_logs(
         .and_then(|f| f.parse::<bool>().ok())
         .unwrap_or(false);
 
-    let log_path = match crate::config::get_app_log_path(&name) {
-        Ok(path) => path,
-        Err(e) => {
-            return (StatusCode::NOT_FOUND, format!("Log file not found: {}", e)).into_response();
-        }
-    };
-
-    if !log_path.exists() {
-        return (
-            StatusCode::NOT_FOUND,
-            format!("Log file not found for app '{}'", name),
-        )
-            .into_response();
-    }
-
     if follow {
-        // Open the file and seek to the end
-        let file = match File::open(&log_path).await {
-            Ok(f) => f,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to open log file: {}", e),
-                )
-                    .into_response();
+        // Stream logs using podman-api
+        match logs::execute(&name, lines, true).await {
+            Ok(stream) => {
+                let sse_stream = stream.map(|result| match result {
+                    Ok(data) => Ok(Event::default().data(data)),
+                    Err(e) => Err(e),
+                });
+                Sse::new(sse_stream).into_response()
             }
-        };
-        let mut reader = BufReader::new(file);
-        let _ = reader.seek(SeekFrom::End(0)).await;
-
-        // Stream new lines as they are appended
-        let stream = unfold(reader, |mut reader| async {
-            let mut line = String::new();
-            loop {
-                match reader.read_line(&mut line).await {
-                    Ok(0) => {
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                        continue;
-                    }
-                    Ok(_) => {
-                        let out = line.clone();
-                        line.clear();
-                        return Some((
-                            Ok::<_, std::convert::Infallible>(Event::default().data(out)),
-                            reader,
-                        ));
-                    }
-                    Err(_) => return None,
-                }
-            }
-        });
-        Sse::new(stream).into_response()
+            Err(e) => (StatusCode::NOT_FOUND, format!("Failed to get logs: {}", e)).into_response(),
+        }
     } else {
-        // Read last N lines from the log file
-        match tokio::fs::read(&log_path).await {
-            Ok(data) => {
-                let content = String::from_utf8_lossy(&data);
-                let lines_vec: Vec<&str> = content.lines().collect();
-                let start = if lines_vec.len() > lines {
-                    lines_vec.len() - lines
-                } else {
-                    0
-                };
-                let last_lines = lines_vec[start..].join("\n");
-                (StatusCode::OK, last_lines).into_response()
+        // Get logs as a single response using podman-api
+        match logs::execute(&name, lines, false).await {
+            Ok(stream) => {
+                let mut logs = String::new();
+                let mut stream = stream;
+                while let Some(result) = stream.next().await {
+                    match result {
+                        Ok(data) => logs.push_str(&data),
+                        Err(e) => {
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Error reading logs: {}", e),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
+                (StatusCode::OK, logs).into_response()
             }
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read log file: {}", e),
-            )
-                .into_response(),
+            Err(e) => (StatusCode::NOT_FOUND, format!("Failed to get logs: {}", e)).into_response(),
         }
     }
 }
@@ -396,8 +356,16 @@ async fn add_remote(
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
     match remote::add::execute(&pool, &name, &payload.remote).await {
-        Ok(_) => (StatusCode::OK, format!("Remote configured for app '{}'", name)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to configure remote: {}", e)).into_response(),
+        Ok(_) => (
+            StatusCode::OK,
+            format!("Remote configured for app '{}'", name),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to configure remote: {}", e),
+        )
+            .into_response(),
     }
 }
 
@@ -408,7 +376,11 @@ async fn remove_remote(
     let pool = state.read().await.db_pool.clone();
     match remote::remove::execute(&pool, &name).await {
         Ok(_) => (StatusCode::OK, format!("Remote removed for app '{}'", name)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to remove remote: {}", e)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to remove remote: {}", e),
+        )
+            .into_response(),
     }
 }
 
@@ -419,6 +391,10 @@ async fn build_app(
     let pool = state.read().await.db_pool.clone();
     match build::execute(&pool, &name).await {
         Ok(_) => (StatusCode::OK, format!("App '{}' built", name)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to build app: {}", e)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to build app: {}", e),
+        )
+            .into_response(),
     }
 }
