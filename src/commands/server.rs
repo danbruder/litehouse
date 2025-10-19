@@ -1,3 +1,5 @@
+use crate::caddy;
+use crate::podman;
 use anyhow::{Context, Result};
 use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
@@ -7,8 +9,6 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::podman;
-use crate::caddy;
 use tower::util::ServiceExt;
 use tracing::{error, info, instrument};
 
@@ -94,8 +94,6 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         config.host, config.proxy_port
     );
     println!("Press Ctrl+C to stop");
-
-
 
     // Run proxy server
     tokio::select! {
