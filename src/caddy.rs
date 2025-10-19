@@ -206,7 +206,10 @@ async fn get_container_state(docker: &Docker, container_name: &str) -> Result<Co
 
     for container in all_containers {
         if let Some(names) = &container.names {
-            if names.iter().any(|n| n == container_name) {
+            if names
+                .iter()
+                .any(|n| n == container_name || n == &format!("/{}", container_name))
+            {
                 if let Some(id) = &container.id {
                     let state = container.state.as_deref().unwrap_or("unknown");
                     info!("Found container {} in state: {}", id, state);
