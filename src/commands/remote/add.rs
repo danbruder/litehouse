@@ -1,9 +1,9 @@
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
-use tracing::{info, instrument};
+use tracing::instrument;
 
-use crate::db;
 use crate::config;
+use crate::db;
 use crate::git;
 use crate::models::Remote;
 
@@ -31,7 +31,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, remote: &str) -> Build
         .await?
         .ok_or_else(|| BuildError::AppNotFound(app_name.to_string()))?;
 
-    // Clone the remote 
+    // Clone the remote
     let build_dir = config::get_app_build_dir(&app.name)?;
     git::clone(remote, &build_dir).await?;
 

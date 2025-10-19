@@ -1,9 +1,8 @@
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::db;
-use crate::models::Remote;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
@@ -25,7 +24,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
         .await?
         .ok_or_else(|| BuildError::AppNotFound(app_name.to_string()))?;
 
-    let remote = db::remote::get_by_app(pool, &app.id).await.map_err(|_| {
+    let _remote = db::remote::get_by_app(pool, &app.id).await.map_err(|_| {
         BuildError::AppNotConfigured(format!(
             "Remote configuration for app '{}' not found",
             app_name

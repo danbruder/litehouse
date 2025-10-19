@@ -4,7 +4,6 @@ use anyhow::{Context, Result};
 use hyper::body::to_bytes;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
-use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -16,32 +15,6 @@ use crate::api;
 use crate::config::ServerConfig;
 use crate::db;
 use crate::models::AppState;
-
-// Message types for communication between servers
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum ApiRequest {
-    ListApps,
-    GetApp { name: String },
-    CreateApp { name: String },
-    DeleteApp { id: String },
-    StartApp { id: String },
-    StopApp { id: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum ApiResponse {
-    Apps(Vec<AppInfo>),
-    App(Option<AppInfo>),
-    Success(String),
-    Error(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AppInfo {
-    id: String,
-    name: String,
-    state: String,
-}
 
 /// Shared state for the proxy server
 pub struct ProxyState {

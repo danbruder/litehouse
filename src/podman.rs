@@ -1,7 +1,7 @@
 use crate::models::App;
 use anyhow::Result;
 use bollard::Docker;
-use futures_util::{StreamExt, TryStreamExt, stream::unfold};
+use futures_util::{StreamExt, stream::unfold};
 use std::path::Path;
 use std::pin::Pin;
 use std::process::Command;
@@ -206,7 +206,6 @@ pub async fn remove(tag: &str) -> Result<()> {
 #[instrument]
 pub async fn logs(app_name: &str, lines: usize, follow: bool) -> Result<()> {
     todo!("implement non-streaming logs");
-    Ok(())
 }
 
 #[instrument]
@@ -513,29 +512,6 @@ mod test_helpers {
         Ok(stdout.trim().to_string())
     }
 
-    /// Get container info using podman ps with custom format
-    pub fn get_container_info(container_name: &str, format: &str) -> Result<String> {
-        let output = Command::new("podman")
-            .args([
-                "ps",
-                "-a",
-                "--filter",
-                &format!("name={}", container_name),
-                "--format",
-                format,
-            ])
-            .output()?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "Failed to get container info for: {}",
-                container_name
-            ));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout.trim().to_string())
-    }
 }
 
 #[cfg(test)]
@@ -1017,23 +993,4 @@ RUN echo "Test image for removal"
         Ok(())
     }
 
-    // Test the run_reverse_proxy function
-    #[tokio::test]
-    async fn test_run_reverse_proxy_function() -> Result<()> {
-        // Test the run_reverse_proxy function
-        let result = run_reverse_proxy().await;
-
-        // The function might fail due to no podman daemon, but we're testing the function structure
-        match result {
-            Ok(_) => {
-                println!("Run reverse proxy function test succeeded");
-            }
-            Err(e) => {
-                println!("Run reverse proxy function test result: {:?}", e);
-                // Expected to fail due to no podman, but function should complete
-            }
-        }
-
-        Ok(())
-    }
 }

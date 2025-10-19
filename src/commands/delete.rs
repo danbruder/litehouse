@@ -3,7 +3,6 @@ use sqlx::{Pool, Sqlite};
 use tracing::instrument;
 
 use crate::db;
-use crate::podman;
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteError {
     #[error("App not found: {0}")]
