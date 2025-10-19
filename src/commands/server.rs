@@ -7,6 +7,8 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use crate::podman;
+use crate::caddy;
 use tower::util::ServiceExt;
 use tracing::{error, info, instrument};
 
@@ -51,6 +53,8 @@ pub struct ProxyState {
 pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
+    let podman = podman::connect().await?;
+    caddy::start(&podman).await?;
     // TODO: Initialize supervisor when available
     info!("Starting server without supervisor (not yet implemented)");
 
