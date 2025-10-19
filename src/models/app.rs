@@ -43,6 +43,7 @@ impl App {
     }
 
     pub fn is_running(&self) -> bool {
+        dbg!(&self.state);
         matches!(self.state, AppState::Running | AppState::Starting)
     }
 

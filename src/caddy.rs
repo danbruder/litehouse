@@ -2,9 +2,9 @@ use crate::config::ServerConfig;
 use crate::db::app as db_app;
 use crate::models::App;
 use anyhow::Result;
-use bollard::Docker;
 use bollard::container::Config;
 use bollard::models::{HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum};
+use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::Pool;
@@ -581,12 +581,19 @@ async fn wait_for_container_stable(docker: &Docker, container_id: &str) -> Resul
 // Caddy Configuration Management Functions
 
 /// Build Caddy JSON configuration from apps
-fn build_caddy_config(apps: Vec<App>) -> CaddyConfig {
+fn build_caddy_config(apps: Vec<App>, local_dev: bool) -> CaddyConfig {
     let mut routes = Vec::new();
 
     for app in apps {
         if let Some(port) = app.port {
-            let host = format!("{}.s.danbruder.com", app.name);
+            let host = if local_dev {
+                // For local development, use .localhost domains
+                format!("{}.localhost", app.name)
+            } else {
+                // For production, use the domain pattern
+                format!("{}.s.danbruder.com", app.name)
+            };
+
             let upstream = format!("0.0.0.0:{}", port);
 
             let route = Route {
@@ -602,10 +609,18 @@ fn build_caddy_config(apps: Vec<App>) -> CaddyConfig {
     }
 
     let mut servers = HashMap::new();
+    let listen_ports = if local_dev {
+        // For local development, use different ports to avoid conflicts
+        vec![":9090".to_string(), ":9443".to_string()]
+    } else {
+        // For production, use standard HTTP/HTTPS ports
+        vec![":80".to_string(), ":443".to_string()]
+    };
+
     servers.insert(
         "app_proxy".to_string(),
         Server {
-            listen: vec![":80".to_string(), ":443".to_string()],
+            listen: listen_ports,
             routes,
         },
     );
@@ -671,11 +686,16 @@ async fn update_caddy_config(docker: &Docker, config: CaddyConfig) -> Result<()>
 pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Result<()> {
     info!("Synchronizing Caddy configuration with database apps");
 
+    // Detect if we're running in local development mode
+    let local_dev = std::env::var("BINDROP_LOCAL_DEV").is_ok()
+        || std::env::var("RUST_LOG").is_ok()
+        || cfg!(debug_assertions);
+
     match db_app::get_all_with_ports(db_pool).await {
         Ok(apps) => {
             info!("Found {} apps with ports", apps.len());
 
-            let config = build_caddy_config(apps);
+            let config = build_caddy_config(apps, local_dev);
             update_caddy_config(docker, config).await?;
 
             info!("Caddy configuration synchronized successfully");

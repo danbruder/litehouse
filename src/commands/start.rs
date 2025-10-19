@@ -4,6 +4,7 @@ use tracing::{info, instrument};
 
 use crate::caddy;
 use crate::db;
+use crate::models::AppState;
 use crate::podman;
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -40,22 +41,35 @@ impl From<crate::db::DatabaseError> for StartError {
 #[instrument(skip(pool, docker))]
 pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Result<()> {
     // VALIDATION
-    tracing::debug!("Geting app {app_name}");
+    tracing::info!("Geting app {app_name}");
     let app = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
 
+    // If started
+    if app.is_running() {
+        tracing::info!("App {} is already running", app_name);
+        return Ok(());
+    }
+
     // Get latest build
-    tracing::debug!("Geting build for app id {}", app.id);
+    tracing::info!("Geting build for app id {}", app.id);
     let build = db::build::get_latest_by_app(pool, &app.id)
         .await?
         .ok_or_else(|| StartError::AppBuildMissing(app_name.to_string()))?;
 
     // Start the app with podman
-    tracing::debug!("Running {} for {}", &app.name, &build.image_tag);
+    tracing::info!("Running {} for {}", &app.name, &build.image_tag);
     podman::run(&app.name, &build.image_tag)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
+
+    // Update app state to Running
+    let mut updated_app = app.clone();
+    updated_app.state = AppState::Running;
+    db::app::save(pool, &updated_app).await?;
+
+    dbg!(&updated_app);
 
     info!("Started app '{}'", app.name);
 

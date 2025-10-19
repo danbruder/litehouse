@@ -5,6 +5,7 @@ use futures_util::{StreamExt, stream::unfold};
 use std::path::Path;
 use std::pin::Pin;
 use std::process::Command;
+use tokio::process::Command as AsyncCommand;
 use tracing::{info, instrument};
 
 #[derive(Debug, thiserror::Error)]
@@ -32,53 +33,65 @@ pub async fn connect() -> Result<Docker> {
 pub async fn build(directory: &str, tag: &str) -> Result<String> {
     info!("Building app in: {}", directory);
 
-    let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
-        120,
-        bollard::API_DEFAULT_VERSION,
-    )?;
-
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    info!("Starting container image build...");
-    let build_stream = docker.build_image(
-        bollard::image::BuildImageOptions::<String> {
-            dockerfile: "Dockerfile".to_string(),
-            t: tag.to_string(),
-            ..Default::default()
-        },
-        None,
-        None,
-    );
+    info!("Starting container image build with Podman CLI...");
 
-    let mut stream = build_stream;
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(report) => {
-                if let Some(stream) = report.stream {
-                    info!("Build: {}", stream.trim());
-                }
-                if let Some(id) = report.id {
-                    info!("Build ID: {}", id);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Error building image: {}", e);
-                return Err(e.into());
-            }
-        }
+    // Use Podman CLI directly instead of Bollard build stream
+    let output = AsyncCommand::new("podman")
+        .args(["build", "-t", tag, "."])
+        .current_dir(directory)
+        .output()
+        .await
+        .map_err(|e| PodmanError::BuildError(format!("Failed to execute podman build: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        tracing::error!("Podman build failed:");
+        tracing::error!("STDOUT: {}", stdout);
+        tracing::error!("STDERR: {}", stderr);
+
+        return Err(PodmanError::BuildError(format!(
+            "Podman build failed: {}\nSTDOUT: {}\nSTDERR: {}",
+            output.status, stdout, stderr
+        ))
+        .into());
     }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    info!("Podman build output: {}", stdout);
 
     info!("Container image build completed successfully");
 
     // Get the image ID by inspecting the built image
-    let image_info = docker.inspect_image(tag).await?;
-    let image_id = image_info.id.ok_or_else(|| {
-        PodmanError::BuildError("Failed to get image ID from build result".to_string())
-    })?;
+    let inspect_output = AsyncCommand::new("podman")
+        .args(["inspect", tag, "--format", "{{.Id}}"])
+        .output()
+        .await
+        .map_err(|e| PodmanError::BuildError(format!("Failed to inspect image: {}", e)))?;
+
+    if !inspect_output.status.success() {
+        let stderr = String::from_utf8_lossy(&inspect_output.stderr);
+        return Err(
+            PodmanError::BuildError(format!("Failed to inspect built image: {}", stderr)).into(),
+        );
+    }
+
+    let image_id = String::from_utf8_lossy(&inspect_output.stdout)
+        .trim()
+        .to_string();
+
+    if image_id.is_empty() {
+        return Err(PodmanError::BuildError(
+            "Failed to get image ID from build result".to_string(),
+        )
+        .into());
+    }
 
     info!("Built image ID: {}", image_id);
     Ok(image_id)
@@ -99,10 +112,14 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         bollard::API_DEFAULT_VERSION,
     )?;
 
-    let container_name = format!("{}-container", name);
+    let container_name = format!("/{}-container", name);
 
     // Check if the container already exists and is running
-    let all_containers = docker.list_containers::<String>(None).await?;
+    let options = Some(bollard::container::ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    });
+    let all_containers = docker.list_containers::<String>(options).await?;
     info!(
         "Found {} containers, looking for container name: {}",
         all_containers.len(),
@@ -170,7 +187,6 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         )
         .await?;
 
-    dbg!(&container_info);
     info!("Starting container: {}", container_info.id);
     docker
         .start_container::<String>(&container_info.id, None)
@@ -297,7 +313,11 @@ pub async fn stop(app: &App) -> Result<()> {
     )?;
     let container_name = format!("{}-container", app.name);
 
-    let all_containers = docker.list_containers::<String>(None).await?;
+    let options = Some(bollard::container::ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    });
+    let all_containers = docker.list_containers::<String>(options).await?;
 
     for container in all_containers {
         if let Some(names) = &container.names {
@@ -511,7 +531,6 @@ mod test_helpers {
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout.trim().to_string())
     }
-
 }
 
 #[cfg(test)]
@@ -710,7 +729,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Create an App instance for testing
-        let app = App::new(app_name)?;
+        let app = App::new(app_name, 8000)?;
 
         // Stop the container
         let stop_result = stop(&app).await;
@@ -738,7 +757,7 @@ mod tests {
         let app_name = "nonexistent-stop-test";
 
         // Create an App instance for testing
-        let app = App::new(app_name)?;
+        let app = App::new(app_name, 8000)?;
 
         // Stop should succeed even if no container exists
         let stop_result = stop(&app).await;
@@ -767,7 +786,7 @@ mod tests {
         assert!(is_container_started(&format!("{}-2-container", app_name))?);
 
         // Create an App instance for testing
-        let app = App::new(app_name)?;
+        let app = App::new(app_name, 8000)?;
 
         // Stop should only stop containers matching the exact app name
         let stop_result = stop(&app).await;
@@ -811,7 +830,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Create an App instance for testing
-        let app = App::new(app_name)?;
+        let app = App::new(app_name, 8000)?;
 
         // Stop the container and measure time
         let start_time = std::time::Instant::now();
@@ -992,5 +1011,4 @@ RUN echo "Test image for removal"
 
         Ok(())
     }
-
 }
