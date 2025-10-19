@@ -53,8 +53,8 @@ pub struct ProxyState {
 pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
-    let podman = podman::connect().await?;
-    caddy::start(&podman, &config).await?;
+    let docker = podman::connect().await?;
+    caddy::start(&docker, &config).await?;
 
     // Create shared state
     let proxy_state = Arc::new(RwLock::new(ProxyState {

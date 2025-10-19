@@ -1,7 +1,7 @@
 use crate::models::App;
 use anyhow::Result;
-use futures_util::{stream::unfold, StreamExt, TryStreamExt};
-use podman_api::Podman;
+use bollard::Docker;
+use futures_util::{StreamExt, TryStreamExt, stream::unfold};
 use std::path::Path;
 use std::pin::Pin;
 use std::process::Command;
@@ -19,40 +19,63 @@ pub enum PodmanError {
     LogError(String),
 }
 
-pub async fn connect() -> Result<Podman> {
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
-    Ok(podman)
+pub async fn connect() -> Result<Docker> {
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
+    Ok(docker)
 }
 
 #[instrument]
 pub async fn build(directory: &str, tag: &str) -> Result<String> {
     info!("Building app in: {}", directory);
 
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    let build_opts = podman_api::opts::ImageBuildOpts::builder(directory)
-        .dockerfile("Dockerfile")
-        .tag(tag)
-        .build();
-
     info!("Starting container image build...");
-    let images = podman.images();
-    let build_stream = images.build(&build_opts)?;
+    let build_stream = docker.build_image(
+        bollard::image::BuildImageOptions::<String> {
+            dockerfile: "Dockerfile".to_string(),
+            t: tag.to_string(),
+            ..Default::default()
+        },
+        None,
+        None,
+    );
 
     let mut stream = build_stream;
-    while let Some(result) = stream.try_next().await? {
-        info!("Build: {}", result.stream.trim());
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(report) => {
+                if let Some(stream) = report.stream {
+                    info!("Build: {}", stream.trim());
+                }
+                if let Some(id) = report.id {
+                    info!("Build ID: {}", id);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Error building image: {}", e);
+                return Err(e.into());
+            }
+        }
     }
 
     info!("Container image build completed successfully");
 
     // Get the image ID by inspecting the built image
-    let image_info = images.get(tag).inspect().await?;
+    let image_info = docker.inspect_image(tag).await?;
     let image_id = image_info.id.ok_or_else(|| {
         PodmanError::BuildError("Failed to get image ID from build result".to_string())
     })?;
@@ -70,16 +93,16 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
 
     info!("Running app: {}", name);
 
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
-    let containers = podman.containers();
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
 
     let container_name = format!("{}-container", name);
 
     // Check if the container already exists and is running
-    let list_opts = podman_api::opts::ContainerListOpts::builder()
-        .all(true) // Include stopped containers
-        .build();
-    let all_containers = containers.list(&list_opts).await?;
+    let all_containers = docker.list_containers::<String>(None).await?;
     info!(
         "Found {} containers, looking for container name: {}",
         all_containers.len(),
@@ -112,7 +135,7 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
                 );
                 if let Some(id) = &container.id {
                     info!("Attempting to remove container with ID: {}", id);
-                    let remove_result = containers.get(id).remove().await;
+                    let remove_result = docker.remove_container(id, None).await;
                     match remove_result {
                         Ok(_) => {
                             info!("Successfully removed existing container with ID: {}", id);
@@ -131,17 +154,27 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         }
     }
 
-    let create_opts = podman_api::opts::ContainerCreateOpts::builder()
-        .image(image_tag)
-        .name(&container_name)
-        .build();
+    let container_config = bollard::container::Config {
+        image: Some(image_tag.to_string()),
+        ..Default::default()
+    };
 
     info!("Creating container: {}", container_name);
-    let container_info = containers.create(&create_opts).await?;
+    let container_info = docker
+        .create_container::<String, String>(
+            Some(bollard::container::CreateContainerOptions {
+                name: container_name.clone(),
+                ..Default::default()
+            }),
+            container_config,
+        )
+        .await?;
 
     dbg!(&container_info);
     info!("Starting container: {}", container_info.id);
-    containers.get(&container_info.id).start(None).await?;
+    docker
+        .start_container::<String>(&container_info.id, None)
+        .await?;
 
     info!("Container {} started successfully", container_name);
 
@@ -152,10 +185,13 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
 pub async fn remove(tag: &str) -> Result<()> {
     info!("Removing container image with tag: {}", tag);
 
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
-    let images = podman.images();
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
 
-    match images.get(tag).remove().await {
+    match docker.remove_image(tag, None, None).await {
         Ok(_) => {
             info!("Successfully removed image: {}", tag);
             Ok(())
@@ -181,15 +217,15 @@ pub async fn logs_stream(
 ) -> Result<Pin<Box<dyn futures_util::Stream<Item = Result<String, anyhow::Error>> + Send>>> {
     info!("Getting logs stream for app: {}", app_name);
 
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
-    let containers = podman.containers();
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
     let container_name = format!("{}-container", app_name);
 
     // Check if container exists
-    let list_opts = podman_api::opts::ContainerListOpts::builder()
-        .all(true)
-        .build();
-    let all_containers = containers.list(&list_opts).await?;
+    let all_containers = docker.list_containers::<String>(None).await?;
 
     let mut container_found = false;
     for container in all_containers {
@@ -211,38 +247,37 @@ pub async fn logs_stream(
 
     // Create a stream that owns all the necessary data
     let stream = unfold(
-        (podman, container_name, follow),
-        |(podman, container_name, follow)| async move {
-            let containers = podman.containers();
-            let logs_opts = podman_api::opts::ContainerLogsOpts::builder()
-                .stdout(true)
-                .stderr(true)
-                .follow(follow)
-                .build();
+        (docker, container_name, follow),
+        |(docker, container_name, follow)| async move {
+            let logs_opts = bollard::container::LogsOptions::<String> {
+                stdout: true,
+                stderr: true,
+                follow: follow,
+                ..Default::default()
+            };
 
-            let container_logs = containers.get(&container_name);
-            let mut log_stream = container_logs.logs(&logs_opts);
+            let mut logs_stream = docker.logs::<String>(&container_name, Some(logs_opts));
 
-            match log_stream.next().await {
+            match logs_stream.next().await {
                 Some(result) => {
                     let log_string = match result {
                         Ok(log_result) => match log_result {
-                            podman_api::conn::TtyChunk::StdOut(data) => {
-                                String::from_utf8_lossy(&data).to_string()
+                            bollard::container::LogOutput::StdOut { message } => {
+                                String::from_utf8_lossy(&message).to_string()
                             }
-                            podman_api::conn::TtyChunk::StdErr(data) => {
-                                String::from_utf8_lossy(&data).to_string()
+                            bollard::container::LogOutput::StdErr { message } => {
+                                String::from_utf8_lossy(&message).to_string()
                             }
                             _ => String::new(),
                         },
                         Err(e) => {
                             return Some((
                                 Err(anyhow::anyhow!(e)),
-                                (podman, container_name, follow),
-                            ))
+                                (docker, container_name, follow),
+                            ));
                         }
                     };
-                    Some((Ok(log_string), (podman, container_name, follow)))
+                    Some((Ok(log_string), (docker, container_name, follow)))
                 }
                 None => None,
             }
@@ -256,17 +291,16 @@ pub async fn logs_stream(
 pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
-    let podman = Podman::unix(&resolve_podman_socket_path()?);
-    let containers = podman.containers();
+    let docker = Docker::connect_with_unix(
+        &resolve_podman_socket_path()?,
+        120,
+        bollard::API_DEFAULT_VERSION,
+    )?;
     let container_name = format!("{}-container", app.name);
 
-    let list_opts = podman_api::opts::ContainerListOpts::builder()
-        .all(true)
-        .build();
+    let all_containers = docker.list_containers::<String>(None).await?;
 
-    let container_list = containers.list(&list_opts).await?;
-
-    for container in container_list {
+    for container in all_containers {
         if let Some(names) = &container.names {
             if names.iter().any(|name| name.contains(&container_name)) {
                 info!(
@@ -286,11 +320,7 @@ pub async fn stop(app: &App) -> Result<()> {
                         }
                     }
 
-                    let stop_opts = podman_api::opts::ContainerStopOpts::builder()
-                        .timeout(10)
-                        .build();
-
-                    match containers.get(id).stop(&stop_opts).await {
+                    match docker.stop_container(id, None).await {
                         Ok(_) => {
                             info!("Successfully stopped container: {}", id);
                         }
