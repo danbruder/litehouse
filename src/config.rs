@@ -95,7 +95,7 @@ pub fn get_data_dir() -> Result<PathBuf, ConfigError> {
 #[instrument]
 pub async fn get_next_available_port(
     db_pool: &sqlx::Pool<sqlx::Sqlite>,
-) -> Result<u16, ConfigError> {
+) -> Result<i64, ConfigError> {
     let start_port = 8000;
 
     // Get all currently used ports
@@ -116,7 +116,7 @@ pub async fn get_next_available_port(
         port += 1;
     }
 
-    Ok(port)
+    Ok(port as i64)
 }
 
 /// Get the app directory

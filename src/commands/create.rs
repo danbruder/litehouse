@@ -1,6 +1,7 @@
 use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
+use crate::config;
 use crate::db;
 use crate::models::App;
 
@@ -12,6 +13,8 @@ pub enum AppCreateError {
     AppError(#[from] crate::models::AppError),
     #[error("Failed to create app: {0}")]
     DatabaseError(#[from] crate::db::DatabaseError),
+    #[error("Config error: {0}")]
+    ConfigError(#[from] crate::config::ConfigError),
 }
 
 pub type Result<T> = std::result::Result<T, AppCreateError>;
@@ -24,7 +27,8 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     }
 
     // Create app
-    let app = App::new(app_name)?;
+    let port = config::get_next_available_port(pool).await?;
+    let app = App::new(app_name, port)?;
     db::app::save(pool, &app).await?;
 
     info!("Created app '{}'", app.name);

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS app (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT UNIQUE NOT NULL,
     state TEXT NOT NULL DEFAULT 'created',
+    port INTEGER NULL,
 
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL

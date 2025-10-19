@@ -2,13 +2,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::models::{now, UtcDateTime};
 use crate::models::{AppState, StateChange};
+use crate::models::{UtcDateTime, now};
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct App {
     pub id: String,
     pub name: String,
+    pub port: Option<i64>,
     pub created_at: UtcDateTime,
     pub updated_at: UtcDateTime,
 
@@ -17,12 +18,14 @@ pub struct App {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("Invalid app name: {0}. App names must be lowercase alphanumeric with optional hyphens or underscores.")]
+    #[error(
+        "Invalid app name: {0}. App names must be lowercase alphanumeric with optional hyphens or underscores."
+    )]
     InvalidName(String),
 }
 
 impl App {
-    pub fn new(name: &str) -> Result<Self, AppError> {
+    pub fn new(name: &str, port: i64) -> Result<Self, AppError> {
         let now = now();
 
         if !is_valid_app_name(name) {
@@ -32,6 +35,7 @@ impl App {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             name: name.to_string(),
+            port: Some(port),
             created_at: now.clone(),
             updated_at: now,
             state: AppState::Stopped,

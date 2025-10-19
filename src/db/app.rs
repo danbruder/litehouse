@@ -7,15 +7,17 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
     let result = sqlx::query!(
         r#"
             INSERT INTO app (
-                id, name, created_at, updated_at, state
-            ) VALUES (?, ?, ?, ?, ?)
+                id, name, port, created_at, updated_at, state
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
+                port = excluded.port,
                 updated_at = excluded.updated_at,
                 state = excluded.state
             "#,
         app.id,
         app.name,
+        app.port,
         app.created_at,
         app.updated_at,
         //state
