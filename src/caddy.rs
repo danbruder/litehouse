@@ -1,4 +1,6 @@
 use anyhow::Result;
+use futures_util::StreamExt;
+use podman_api::opts::PullOpts;
 use podman_api::Podman;
 use tracing::{info, instrument};
 
@@ -20,8 +22,10 @@ pub async fn start(podman: &Podman) -> Result<()> {
 
     let containers = podman.containers();
     let volumes = podman.volumes();
+    let images = podman.images();
 
     let container_name = "caddy-container";
+    let image_name = "caddy";
 
     // Create volumes if they don't exist
     let caddy_data_volume = "caddy_data";
@@ -57,6 +61,46 @@ pub async fn start(podman: &Podman) -> Result<()> {
         volumes.create(&volume_opts).await?;
     }
 
+    // Check if Caddy image exists, pull if it doesn't
+    info!("Checking if Caddy image exists");
+    let image_list_opts = podman_api::opts::ImageListOpts::builder().build();
+    let image_list = images.list(&image_list_opts).await?;
+    let mut caddy_image_exists = false;
+
+    for image in image_list {
+        if let Some(repo_tags) = &image.repo_tags {
+            if repo_tags.iter().any(|tag| tag.starts_with(image_name)) {
+                caddy_image_exists = true;
+                break;
+            }
+        }
+    }
+
+    if !caddy_image_exists {
+        info!("Pulling Caddy image");
+        let pull_opts = PullOpts::builder().reference(image_name).build();
+        let mut pull_stream = images.pull(&pull_opts);
+        while let Some(result) = pull_stream.next().await {
+            match result {
+                Ok(report) => {
+                    if let Some(stream) = report.stream {
+                        info!("Pull stream: {}", stream);
+                    }
+                    if let Some(id) = report.id {
+                        info!("Pull ID: {}", id);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Error pulling image: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+        info!("Caddy image pulled successfully");
+    } else {
+        info!("Caddy image already exists");
+    }
+
     // Check if container already exists and is running
     let list_opts = podman_api::opts::ContainerListOpts::builder()
         .all(true)
@@ -85,25 +129,21 @@ pub async fn start(podman: &Podman) -> Result<()> {
 
     // Create container with proper configuration
     let create_opts = podman_api::opts::ContainerCreateOpts::builder()
-        .image("caddy:latest")
+        .image(image_name)
         .name(container_name)
         .restart_policy(podman_api::opts::ContainerRestartPolicy::UnlessStopped)
-        .mounts(vec![
-            podman_api::models::ContainerMount {
-                destination: Some("/data".to_string()),
-                source: Some(caddy_data_volume.to_string()),
-                _type: Some("volume".to_string()),
+        .volumes(vec![
+            podman_api::models::NamedVolume {
+                name: Some(caddy_data_volume.to_string()),
+                dest: Some("/data".to_string()),
                 options: None,
-                uid_mappings: None,
-                gid_mappings: None,
+                is_anonymous: Some(false),
             },
-            podman_api::models::ContainerMount {
-                destination: Some("/config".to_string()),
-                source: Some(caddy_config_volume.to_string()),
-                _type: Some("volume".to_string()),
+            podman_api::models::NamedVolume {
+                name: Some(caddy_config_volume.to_string()),
+                dest: Some("/config".to_string()),
                 options: None,
-                uid_mappings: None,
-                gid_mappings: None,
+                is_anonymous: Some(false),
             },
         ])
         .publish_image_ports(true)
