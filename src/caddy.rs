@@ -51,12 +51,24 @@ pub async fn start(docker: &Docker, config: &ServerConfig) -> Result<()> {
             .await?;
         }
         ContainerState::Running { id } => {
-            info!("Container is already running, verifying health");
+            info!("Container is already running, verifying health and port configuration");
             if !verify_container_health(docker, &id).await? {
                 info!("Container is unhealthy, restarting");
                 restart_container(docker, &id).await?;
+            } else if !verify_container_ports(docker, &id, config).await? {
+                info!("Container is running but on wrong ports, removing and recreating");
+                remove_container(docker, &id).await?;
+                create_and_start_container(
+                    docker,
+                    container_name,
+                    image_name,
+                    caddy_data_volume,
+                    caddy_config_volume,
+                    config,
+                )
+                .await?;
             } else {
-                info!("Container is healthy and running");
+                info!("Container is healthy and running on correct ports");
             }
         }
         ContainerState::Stopped { id } => {
@@ -254,6 +266,78 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
     }
 }
 
+async fn verify_container_ports(
+    docker: &Docker,
+    container_id: &str,
+    config: &ServerConfig,
+) -> Result<bool> {
+    let expected_http_port = config.caddy_http_port.unwrap_or(80);
+    let expected_https_port = config.caddy_https_port.unwrap_or(443);
+
+    info!(
+        "Verifying container ports - expected HTTP: {}, HTTPS: {}",
+        expected_http_port, expected_https_port
+    );
+
+    match docker.inspect_container(container_id, None).await {
+        Ok(inspect) => {
+            if let Some(network_settings) = inspect.network_settings {
+                if let Some(ports) = network_settings.ports {
+                    let mut http_port_correct = false;
+                    let mut https_port_correct = false;
+
+                    for (container_port, host_bindings) in ports {
+                        if let Some(bindings) = host_bindings {
+                            for binding in bindings {
+                                if let Some(host_port_str) = &binding.host_port {
+                                    if let Ok(host_port) = host_port_str.parse::<u16>() {
+                                        if container_port == "80/tcp"
+                                            && host_port == expected_http_port
+                                        {
+                                            http_port_correct = true;
+                                            info!(
+                                                "HTTP port binding correct: {} -> {}",
+                                                container_port, host_port
+                                            );
+                                        } else if container_port == "443/tcp"
+                                            && host_port == expected_https_port
+                                        {
+                                            https_port_correct = true;
+                                            info!(
+                                                "HTTPS port binding correct: {} -> {}",
+                                                container_port, host_port
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let ports_correct = http_port_correct && https_port_correct;
+                    if !ports_correct {
+                        info!(
+                            "Port validation failed - HTTP correct: {}, HTTPS correct: {}",
+                            http_port_correct, https_port_correct
+                        );
+                    }
+                    Ok(ports_correct)
+                } else {
+                    info!("No port bindings found in container inspection");
+                    Ok(false)
+                }
+            } else {
+                info!("No network settings found in container inspection");
+                Ok(false)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to inspect container ports: {}", e);
+            Ok(false)
+        }
+    }
+}
+
 async fn create_and_start_container(
     docker: &Docker,
     container_name: &str,
@@ -391,7 +475,29 @@ async fn unpause_and_start_container(
 
 async fn remove_container(docker: &Docker, container_id: &str) -> Result<()> {
     info!("Removing container: {}", container_id);
+
+    // First try to stop the container if it's running
+    match docker.stop_container(container_id, None).await {
+        Ok(_) => {
+            info!("Successfully stopped container: {}", container_id);
+        }
+        Err(e) => {
+            // If the container is already stopped, that's fine
+            if e.to_string().contains("304") {
+                info!("Container {} was already stopped", container_id);
+            } else {
+                info!("Failed to stop container {}: {}", container_id, e);
+                // Continue with removal anyway, it might still work
+            }
+        }
+    }
+
+    // Wait a moment for the stop to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    // Now remove the container
     docker.remove_container(container_id, None).await?;
+    info!("Successfully removed container: {}", container_id);
     Ok(())
 }
 
