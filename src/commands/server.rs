@@ -54,7 +54,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
     let podman = podman::connect().await?;
-    caddy::start(&podman).await?;
+    caddy::start(&podman, &config).await?;
     // TODO: Initialize supervisor when available
     info!("Starting server without supervisor (not yet implemented)");
 

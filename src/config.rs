@@ -24,6 +24,8 @@ pub struct ServerConfig {
     pub host: String,
     pub proxy_host: String,
     pub proxy_port: u16,
+    pub caddy_http_port: Option<u16>,
+    pub caddy_https_port: Option<u16>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,6 +39,8 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             proxy_host: "0.0.0.0".to_string(),
             proxy_port: 80,
+            caddy_http_port: None,  // Use default 80 in production
+            caddy_https_port: None, // Use default 443 in production
         }
     }
 }
@@ -138,8 +142,9 @@ pub fn get_app_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
 pub fn get_app_build_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
     let build_dir = get_app_dir(app_name)?.join("build");
     if !build_dir.exists() {
-        fs::create_dir_all(&build_dir)
-            .map_err(|_| ConfigError::IoError("Failed to create app build directory".to_string()))?;
+        fs::create_dir_all(&build_dir).map_err(|_| {
+            ConfigError::IoError("Failed to create app build directory".to_string())
+        })?;
     }
     Ok(build_dir)
 }
@@ -204,6 +209,41 @@ impl ClientConfig {
 
     pub fn get_config_path() -> Result<PathBuf, ConfigError> {
         Ok(get_config_dir()?.join("client-config.toml"))
+    }
+}
+
+impl ServerConfig {
+    #[tracing::instrument]
+    pub fn load() -> Result<Self, ConfigError> {
+        let config_path = Self::get_config_path()?;
+        tracing::info!("Loading server config from {}", config_path.display());
+
+        if !config_path.exists() {
+            let config = Self::default();
+            config.save()?;
+            return Ok(config);
+        }
+
+        let contents = fs::read_to_string(config_path)
+            .map_err(|_| ConfigError::IoError("Failed to read config file".to_string()))?;
+        let config: Self =
+            toml::from_str(&contents).map_err(|e| ConfigError::TomlError(e.to_string()))?;
+        Ok(config)
+    }
+
+    #[tracing::instrument]
+    pub fn save(&self) -> Result<(), ConfigError> {
+        let config_path = Self::get_config_path()?;
+        let contents =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::TomlError(e.to_string()))?;
+        tracing::info!("Saving server config to {}", config_path.display());
+        fs::write(config_path, contents)
+            .map_err(|_| ConfigError::IoError("Failed to write config file".to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_config_path() -> Result<PathBuf, ConfigError> {
+        Ok(get_config_dir()?.join("server-config.toml"))
     }
 }
 

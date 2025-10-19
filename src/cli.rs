@@ -186,7 +186,7 @@ pub async fn run() -> Result<()> {
             Ok(())
         }
         Commands::Serve => {
-            let config = ServerConfig::default();
+            let config = ServerConfig::load()?;
             server::execute(config).await
         }
         Commands::Config => {
