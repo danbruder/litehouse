@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::util::ServiceExt;
 use tracing::{error, info, instrument};
+use bollard::Docker;
 
 use crate::api;
 use crate::config::ServerConfig;
@@ -19,6 +20,7 @@ use crate::models::AppState;
 /// Shared state for the proxy server
 pub struct ProxyState {
     pub db_pool: sqlx::Pool<sqlx::Sqlite>,
+    pub docker: Docker,
 }
 
 /// Start the BinaryDrop server
@@ -29,9 +31,16 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let docker = podman::connect().await?;
     caddy::start(&docker, &config).await?;
 
+    // Sync Caddy configuration with existing apps
+    if let Err(e) = caddy::sync_configuration(&docker, &pool).await {
+        tracing::warn!("Failed to sync Caddy configuration on startup: {}", e);
+        // Don't fail startup if Caddy sync fails
+    }
+
     // Create shared state
     let proxy_state = Arc::new(RwLock::new(ProxyState {
         db_pool: pool.clone(),
+        docker: docker.clone(),
     }));
 
     // Parse host and port for proxy server

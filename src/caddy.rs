@@ -1,11 +1,16 @@
 use crate::config::ServerConfig;
+use crate::db::app as db_app;
+use crate::models::App;
 use anyhow::Result;
 use bollard::Docker;
 use bollard::container::Config;
 use bollard::models::{HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum};
 use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use sqlx::Pool;
+use sqlx::Sqlite;
 use std::collections::HashMap;
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PodmanError {
@@ -17,6 +22,51 @@ pub enum PodmanError {
     BuildStreamError(String),
     #[error("Log error: {0}")]
     LogError(String),
+}
+
+// Caddy JSON Configuration Structures
+#[derive(Serialize, Deserialize)]
+struct CaddyConfig {
+    apps: CaddyApps,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CaddyApps {
+    http: HttpApp,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HttpApp {
+    servers: HashMap<String, Server>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Server {
+    listen: Vec<String>,
+    routes: Vec<Route>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Route {
+    #[serde(rename = "match")]
+    match_rules: Vec<HostMatcher>,
+    handle: Vec<Handler>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HostMatcher {
+    host: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Handler {
+    handler: String,
+    upstreams: Vec<Upstream>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Upstream {
+    dial: String,
 }
 
 #[instrument]
@@ -378,6 +428,15 @@ async fn create_and_start_container(
         }]),
     );
 
+    // Bind Caddy admin API port (container port 2019 -> host port 2019)
+    port_bindings.insert(
+        "2019/tcp".to_string(),
+        Some(vec![PortBinding {
+            host_ip: Some("0.0.0.0".to_string()),
+            host_port: Some("2019".to_string()),
+        }]),
+    );
+
     // Create container config with proper port bindings
     let container_config = Config {
         image: Some(image_name.to_string()),
@@ -517,4 +576,115 @@ async fn wait_for_container_stable(docker: &Docker, container_id: &str) -> Resul
     Err(anyhow::anyhow!(
         "Container failed to stabilize within 30 seconds"
     ))
+}
+
+// Caddy Configuration Management Functions
+
+/// Build Caddy JSON configuration from apps
+fn build_caddy_config(apps: Vec<App>) -> CaddyConfig {
+    let mut routes = Vec::new();
+
+    for app in apps {
+        if let Some(port) = app.port {
+            let host = format!("{}.s.danbruder.com", app.name);
+            let upstream = format!("0.0.0.0:{}", port);
+
+            let route = Route {
+                match_rules: vec![HostMatcher { host: vec![host] }],
+                handle: vec![Handler {
+                    handler: "reverse_proxy".to_string(),
+                    upstreams: vec![Upstream { dial: upstream }],
+                }],
+            };
+
+            routes.push(route);
+        }
+    }
+
+    let mut servers = HashMap::new();
+    servers.insert(
+        "app_proxy".to_string(),
+        Server {
+            listen: vec![":80".to_string(), ":443".to_string()],
+            routes,
+        },
+    );
+
+    CaddyConfig {
+        apps: CaddyApps {
+            http: HttpApp { servers },
+        },
+    }
+}
+
+/// Update Caddy configuration via API
+async fn update_caddy_config(docker: &Docker, config: CaddyConfig) -> Result<()> {
+    let json_config = serde_json::to_string(&config)?;
+
+    // Use docker exec to send configuration to Caddy API
+    let exec_config = bollard::exec::CreateExecOptions {
+        cmd: Some(vec![
+            "curl".to_string(),
+            "-X".to_string(),
+            "POST".to_string(),
+            "-H".to_string(),
+            "Content-Type: application/json".to_string(),
+            "-d".to_string(),
+            json_config,
+            "http://localhost:2019/load".to_string(),
+        ]),
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        ..Default::default()
+    };
+
+    let exec_result = docker.create_exec("caddy-container", exec_config).await?;
+    let stream = docker.start_exec(&exec_result.id, None).await?;
+
+    // Process the exec output
+    match stream {
+        bollard::exec::StartExecResults::Attached { mut output, .. } => {
+            while let Some(result) = output.next().await {
+                match result {
+                    Ok(_chunk) => {
+                        // Log output received but don't try to parse it
+                        // since LogOutput is private
+                    }
+                    Err(e) => {
+                        error!("Error executing curl command: {}", e);
+                        return Err(e.into());
+                    }
+                }
+            }
+            info!("Caddy configuration update command completed");
+        }
+        bollard::exec::StartExecResults::Detached => {
+            info!("Caddy configuration update command executed (detached)");
+        }
+    }
+
+    Ok(())
+}
+
+/// Synchronize Caddy configuration with database apps
+#[instrument(skip(docker, db_pool))]
+pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Result<()> {
+    info!("Synchronizing Caddy configuration with database apps");
+
+    match db_app::get_all_with_ports(db_pool).await {
+        Ok(apps) => {
+            info!("Found {} apps with ports", apps.len());
+
+            let config = build_caddy_config(apps);
+            update_caddy_config(docker, config).await?;
+
+            info!("Caddy configuration synchronized successfully");
+        }
+        Err(e) => {
+            error!("Failed to get apps from database: {}", e);
+            return Err(e.into());
+        }
+    }
+
+    Ok(())
 }

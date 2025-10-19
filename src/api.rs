@@ -2,8 +2,8 @@ use crate::commands::app_env;
 use crate::commands::build;
 use crate::commands::create;
 use crate::commands::delete;
-use crate::commands::remote;
 use crate::commands::logs;
+use crate::commands::remote;
 use crate::commands::server::ProxyState;
 use crate::commands::{start, stop};
 use crate::db;
@@ -11,10 +11,10 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
 use axum::{
+    Json, Router,
     extract::{Multipart, Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post},
-    Json, Router,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -112,8 +112,9 @@ async fn start_app(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
 
-    match start::execute(&pool, &name).await {
+    match start::execute(&pool, &docker, &name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
             format!("App '{}' started", name),

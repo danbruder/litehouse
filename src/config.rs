@@ -99,7 +99,7 @@ pub async fn get_next_available_port(
     let start_port = 8000;
 
     // Get all currently used ports
-    let rows = sqlx::query("SELECT port FROM apps")
+    let rows = sqlx::query("SELECT port FROM app WHERE port IS NOT NULL")
         .fetch_all(db_pool)
         .await
         .context("Failed to query app ports from database")
@@ -107,16 +107,16 @@ pub async fn get_next_available_port(
 
     let mut used_ports = Vec::with_capacity(rows.len());
     for row in &rows {
-        used_ports.push(row.get::<u16, _>("port"));
+        used_ports.push(row.get::<i64, _>("port"));
     }
 
     // Find first available port
-    let mut port = start_port;
+    let mut port = start_port as i64;
     while used_ports.contains(&port) {
         port += 1;
     }
 
-    Ok(port as i64)
+    Ok(port)
 }
 
 /// Get the app directory

@@ -46,7 +46,8 @@ mod test {
     async fn test_create_app_already_exists() {
         let pool = get_test_pool().await;
         let app_name = "test_app";
-        let app = App::new(app_name).unwrap();
+        let port = config::get_next_available_port(&pool).await.unwrap();
+        let app = App::new(app_name, port).unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
         let got = execute(&pool, app_name).await.unwrap_err();

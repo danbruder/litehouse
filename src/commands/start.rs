@@ -1,6 +1,8 @@
+use bollard::Docker;
 use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
+use crate::caddy;
 use crate::db;
 use crate::podman;
 
@@ -35,8 +37,8 @@ impl From<crate::db::DatabaseError> for StartError {
 }
 
 /// Start an app using the supervisor
-#[instrument(skip(pool))]
-pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
+#[instrument(skip(pool, docker))]
+pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Result<()> {
     // VALIDATION
     tracing::debug!("Geting app {app_name}");
     let app = db::app::get_by_name(pool, app_name)
@@ -56,6 +58,16 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 
     info!("Started app '{}'", app.name);
+
+    // Sync Caddy configuration
+    if let Err(e) = caddy::sync_configuration(docker, pool).await {
+        tracing::warn!(
+            "Failed to sync Caddy configuration after starting app '{}': {}",
+            app_name,
+            e
+        );
+        // Don't fail the start operation if Caddy sync fails
+    }
 
     Ok(())
 }

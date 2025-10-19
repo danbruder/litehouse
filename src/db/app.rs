@@ -102,3 +102,21 @@ pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
 
     Ok(apps)
 }
+
+/// Get all apps with assigned ports
+#[instrument(skip(pool))]
+pub async fn get_all_with_ports(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
+    let apps = sqlx::query_as!(
+        App,
+        r#"
+            SELECT *
+            FROM app 
+            WHERE port IS NOT NULL
+            ORDER BY name
+            "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(apps)
+}
