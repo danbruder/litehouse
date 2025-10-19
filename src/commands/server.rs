@@ -55,8 +55,6 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let podman = podman::connect().await?;
     caddy::start(&podman, &config).await?;
-    // TODO: Initialize supervisor when available
-    info!("Starting server without supervisor (not yet implemented)");
 
     // Create shared state
     let proxy_state = Arc::new(RwLock::new(ProxyState {

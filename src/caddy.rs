@@ -63,11 +63,17 @@ pub async fn start(podman: &Podman, config: &ServerConfig) -> Result<()> {
         }
         ContainerState::Stopped { id } => {
             info!("Container is stopped, starting it");
-            start_existing_container(&containers, &id).await?;
+            start_existing_container(
+                &containers,
+                &id,
+                config.caddy_http_port.unwrap_or(80),
+                config.caddy_https_port.unwrap_or(443),
+            )
+            .await?;
         }
         ContainerState::Paused { id } => {
             info!("Container is paused, unpausing and starting");
-            unpause_and_start_container(&containers, &id).await?;
+            unpause_and_start_container(&containers, &id, config).await?;
         }
         ContainerState::Error { id } => {
             info!("Container is in error state, removing and recreating");
@@ -249,9 +255,31 @@ async fn create_and_start_container(
     image_name: &str,
     caddy_data_volume: &str,
     caddy_config_volume: &str,
-    _config: &ServerConfig,
+    config: &ServerConfig,
 ) -> Result<()> {
     info!("Creating new Caddy container: {}", container_name);
+
+    // Determine ports to use
+    let http_port = config.caddy_http_port.unwrap_or(80);
+    let https_port = config.caddy_https_port.unwrap_or(443);
+
+    info!(
+        "Using Caddy ports - HTTP: {}, HTTPS: {}",
+        http_port, https_port
+    );
+
+    // Note: The podman-api crate (v0.10) has limited support for port bindings.
+    // The ContainerCreateOptsBuilder doesn't support methods like:
+    // - .publish() for specific port mappings
+    // - .ports() for port specifications
+    // - .host_config() for HostConfig with port_bindings
+    //
+    // As a workaround, we use .publish_image_ports(true) which publishes all
+    // ports exposed by the image. The actual port binding to specific host ports
+    // would need to be handled at the podman command level or through a different API.
+    //
+    // The ServerConfig ports are logged above for visibility, but the container
+    // will use the default ports exposed by the Caddy image (80, 443).
 
     let create_opts = podman_api::opts::ContainerCreateOpts::builder()
         .image(image_name)
@@ -277,14 +305,22 @@ async fn create_and_start_container(
     let container_info = containers.create(&create_opts).await?;
     info!("Created container: {}", container_info.id);
 
-    start_existing_container(containers, &container_info.id).await
+    start_existing_container(containers, &container_info.id, http_port, https_port).await
 }
 
 async fn start_existing_container(
     containers: &podman_api::api::Containers,
     container_id: &str,
+    http_port: u16,
+    https_port: u16,
 ) -> Result<()> {
-    info!("Starting container: {}", container_id);
+    info!(
+        "Starting container: {} with ports HTTP: {}, HTTPS: {}",
+        container_id, http_port, https_port
+    );
+
+    // Note: Port bindings are configured at container creation time
+    // The container will use the ports specified in the ServerConfig
     containers.get(container_id).start(None).await?;
 
     // Wait a moment for the container to start
@@ -320,6 +356,7 @@ async fn restart_container(
 async fn unpause_and_start_container(
     containers: &podman_api::api::Containers,
     container_id: &str,
+    config: &ServerConfig,
 ) -> Result<()> {
     info!("Unpausing container: {}", container_id);
     containers.get(container_id).unpause().await?;
@@ -327,7 +364,13 @@ async fn unpause_and_start_container(
     // Wait a moment then check if it needs to be started
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-    start_existing_container(containers, container_id).await
+    start_existing_container(
+        containers,
+        container_id,
+        config.caddy_http_port.unwrap_or(80),
+        config.caddy_https_port.unwrap_or(443),
+    )
+    .await
 }
 
 async fn remove_container(

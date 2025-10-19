@@ -39,8 +39,8 @@ impl Default for ServerConfig {
             host: "0.0.0.0".to_string(),
             proxy_host: "0.0.0.0".to_string(),
             proxy_port: 80,
-            caddy_http_port: None,  // Use default 80 in production
-            caddy_https_port: None, // Use default 443 in production
+            caddy_http_port: Some(9090),
+            caddy_https_port: Some(9091), // Use default 443 in production
         }
     }
 }
