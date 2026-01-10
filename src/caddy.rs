@@ -632,6 +632,10 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool) -> CaddyConfig {
     }
 }
 
+async fn get_caddy_config(docker: &Docker) -> Result<CaddyConfig> {
+
+}
+
 /// Update Caddy configuration via API
 async fn update_caddy_config(docker: &Docker, config: CaddyConfig) -> Result<()> {
     let json_config = serde_json::to_string(&config)?;
