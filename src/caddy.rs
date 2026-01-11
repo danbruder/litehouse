@@ -441,6 +441,14 @@ async fn create_and_start_container(
     let container_config = Config {
         image: Some(image_name.to_string()),
         hostname: Some(container_name.to_string()),
+        // Start Caddy in API-only mode for dynamic configuration
+        cmd: Some(vec![
+            "caddy".to_string(),
+            "run".to_string(),
+            "--resume".to_string(),
+        ]),
+        // Configure Caddy admin API to listen on 0.0.0.0 instead of localhost
+        env: Some(vec!["CADDY_ADMIN=0.0.0.0:2019".to_string()]),
         host_config: Some(HostConfig {
             port_bindings: Some(port_bindings),
             restart_policy: Some(RestartPolicy {
@@ -681,52 +689,30 @@ async fn get_caddy_config(docker: &Docker) -> Result<CaddyConfig> {
 }
 
 /// Update Caddy configuration via API
-async fn update_caddy_config(docker: &Docker, config: CaddyConfig) -> Result<()> {
-    let json_config = serde_json::to_string(&config)?;
+async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()> {
+    // Use native HTTP client instead of docker exec to avoid dependency on curl in container
+    let client = reqwest::Client::new();
+    let caddy_api_url = "http://localhost:2019/load";
 
-    // Use docker exec to send configuration to Caddy API
-    let exec_config = bollard::exec::CreateExecOptions {
-        cmd: Some(vec![
-            "curl".to_string(),
-            "-X".to_string(),
-            "POST".to_string(),
-            "-H".to_string(),
-            "Content-Type: application/json".to_string(),
-            "-d".to_string(),
-            json_config,
-            "http://localhost:2019/load".to_string(),
-        ]),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        ..Default::default()
-    };
+    info!("Sending configuration to Caddy API at {}", caddy_api_url);
 
-    let exec_result = docker.create_exec("caddy-container", exec_config).await?;
-    let stream = docker.start_exec(&exec_result.id, None).await?;
+    let response = client
+        .post(caddy_api_url)
+        .header("Content-Type", "application/json")
+        .json(&config)
+        .send()
+        .await?;
 
-    // Process the exec output
-    match stream {
-        bollard::exec::StartExecResults::Attached { mut output, .. } => {
-            while let Some(result) = output.next().await {
-                match result {
-                    Ok(_chunk) => {
-                        // Log output received but don't try to parse it
-                        // since LogOutput is private
-                    }
-                    Err(e) => {
-                        error!("Error executing curl command: {}", e);
-                        return Err(e.into());
-                    }
-                }
-            }
-            info!("Caddy configuration update command completed");
-        }
-        bollard::exec::StartExecResults::Detached => {
-            info!("Caddy configuration update command executed (detached)");
-        }
+    let status = response.status();
+
+    if status.is_success() {
+        info!("Caddy configuration updated successfully (status: {})", status);
+        Ok(())
+    } else {
+        let error_body = response.text().await.unwrap_or_else(|_| "Unable to read response body".to_string());
+        error!("Caddy API returned error status {}: {}", status, error_body);
+        Err(anyhow::anyhow!("Caddy configuration update failed with status {}: {}", status, error_body))
     }
-
-    Ok(())
 }
 
 /// Synchronize Caddy configuration with database apps
