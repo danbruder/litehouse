@@ -264,7 +264,12 @@ async fn ensure_image_exists(docker: &Docker, image_name: &str) -> Result<()> {
 }
 
 async fn get_container_state(docker: &Docker, container_name: &str) -> Result<ContainerState> {
-    let all_containers = docker.list_containers::<String>(None).await?;
+    // List ALL containers (including stopped/exited ones)
+    let list_options = bollard::container::ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    };
+    let all_containers = docker.list_containers(Some(list_options)).await?;
 
     for container in all_containers {
         if let Some(names) = &container.names {
