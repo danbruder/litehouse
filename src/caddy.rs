@@ -301,7 +301,11 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
                     if let Some(status) = health.status {
                         info!("Container health status: {:?}", status);
                         // EMPTY means no healthcheck configured, treat as healthy if running
-                        if matches!(status, bollard::models::HealthStatusEnum::HEALTHY | bollard::models::HealthStatusEnum::EMPTY) {
+                        if matches!(
+                            status,
+                            bollard::models::HealthStatusEnum::HEALTHY
+                                | bollard::models::HealthStatusEnum::EMPTY
+                        ) {
                             return Ok(state.running.unwrap_or(false));
                         }
                         return Ok(false);
@@ -745,12 +749,22 @@ async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()
     let status = response.status();
 
     if status.is_success() {
-        info!("Caddy configuration updated successfully (status: {})", status);
+        info!(
+            "Caddy configuration updated successfully (status: {})",
+            status
+        );
         Ok(())
     } else {
-        let error_body = response.text().await.unwrap_or_else(|_| "Unable to read response body".to_string());
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to read response body".to_string());
         error!("Caddy API returned error status {}: {}", status, error_body);
-        Err(anyhow::anyhow!("Caddy configuration update failed with status {}: {}", status, error_body))
+        Err(anyhow::anyhow!(
+            "Caddy configuration update failed with status {}: {}",
+            status,
+            error_body
+        ))
     }
 }
 
@@ -760,9 +774,7 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     info!("Synchronizing Caddy configuration with database apps");
 
     // Detect if we're running in local development mode
-    let local_dev = std::env::var("BINDROP_LOCAL_DEV").is_ok()
-        || std::env::var("RUST_LOG").is_ok()
-        || cfg!(debug_assertions);
+    let local_dev = std::env::var("BINDROP_LOCAL_DEV").is_ok() || cfg!(debug_assertions);
 
     // Load server config to get domain
     let server_config = ServerConfig::load().unwrap_or_default();

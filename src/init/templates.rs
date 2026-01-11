@@ -20,6 +20,7 @@ Environment="DATABASE_URL=/opt/litehouse/config/litehouse.db"
 Environment="LITEHOUSE_DIR=/opt/litehouse"
 Environment="PODMAN_SOCK=/run/user/{}/podman/podman.sock"
 Environment="XDG_RUNTIME_DIR=/run/user/{}"
+Environment="RUST_LOG=info"
 
 # Security
 NoNewPrivileges=true
