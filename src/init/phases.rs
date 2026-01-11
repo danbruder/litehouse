@@ -173,6 +173,7 @@ pub fn phase7_binary_deployment(ssh_target: &str) -> Result<()> {
     let output = std::process::Command::new("cargo")
         .args(["build", "--release", "--target", "x86_64-unknown-linux-musl"])
         .env("TARGET_CC", "x86_64-linux-musl-gcc")
+        .env("SQLX_OFFLINE", "true")
         .output()
         .context("Failed to execute cargo build")?;
 

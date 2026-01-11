@@ -19,24 +19,24 @@ RestartSec=10
 Environment="DATABASE_URL=/opt/litehouse/config/litehouse.db"
 Environment="LITEHOUSE_DIR=/opt/litehouse"
 Environment="PODMAN_SOCK=/run/user/{}/podman/podman.sock"
-Environment="RUST_LOG=info"
+Environment="XDG_RUNTIME_DIR=/run/user/{}"
 
 # Security
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/litehouse
-ReadWritePaths=/run/user/{}/podman
 
 # Allow binding to ports 80 and 443
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
+# Allow access to runtime directory and litehouse data
+ReadWritePaths=/opt/litehouse
+ReadWritePaths=/run/user/{}
+
 [Install]
 WantedBy=multi-user.target
 "#,
-        litehouse_uid, litehouse_uid
+        litehouse_uid, litehouse_uid, litehouse_uid
     )
 }
 
@@ -45,7 +45,7 @@ pub fn server_config_template(domain: &str) -> String {
     format!(
         r#"host = "0.0.0.0"
 proxy_host = "0.0.0.0"
-proxy_port = 80
+proxy_port = 3030
 domain = "{}"
 "#,
         domain
@@ -146,6 +146,18 @@ echo "Setting ownership and permissions..."
 chown -R litehouse:litehouse /opt/litehouse
 chmod 755 /opt/litehouse
 
+echo "Configuring subuid/subgid for rootless Podman..."
+# Check if litehouse already has subuid/subgid mappings
+if ! grep -q "^litehouse:" /etc/subuid; then
+    echo "litehouse:100000:65536" >> /etc/subuid
+    echo "Added subuid mapping for litehouse"
+fi
+
+if ! grep -q "^litehouse:" /etc/subgid; then
+    echo "litehouse:100000:65536" >> /etc/subgid
+    echo "Added subgid mapping for litehouse"
+fi
+
 echo "User and directory setup completed successfully"
 "#
 }
@@ -157,31 +169,60 @@ set -e
 
 echo "Configuring Podman for litehouse user..."
 
-# Enable user lingering (allows user services to run without login)
-loginctl enable-linger litehouse
-
-# Enable and start Podman socket as litehouse user
-sudo -u litehouse bash -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user enable podman.socket'
-sudo -u litehouse bash -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user start podman.socket'
-
 # Get litehouse user UID
 LITEHOUSE_UID=$(id -u litehouse)
 
+# Enable user lingering (allows user services to run without login)
+loginctl enable-linger litehouse
+
+# Wait a moment for the runtime directory to be created
+sleep 2
+
+# Verify runtime directory exists
+RUNTIME_DIR="/run/user/${LITEHOUSE_UID}"
+if [ ! -d "$RUNTIME_DIR" ]; then
+    echo "Creating runtime directory: $RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR"
+    chown litehouse:litehouse "$RUNTIME_DIR"
+    chmod 700 "$RUNTIME_DIR"
+fi
+
+# Set proper environment and enable Podman socket as litehouse user
+sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID}
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${LITEHOUSE_UID}/bus
+
+# Try to start systemd user session if not running
+systemctl --user status > /dev/null 2>&1 || {
+    echo 'Starting systemd user session...'
+}
+
+# Enable and start podman socket
+systemctl --user enable podman.socket
+systemctl --user start podman.socket
+"
+
 # Verify socket exists
 SOCKET_PATH="/run/user/${LITEHOUSE_UID}/podman/podman.sock"
-if [ -S "$SOCKET_PATH" ]; then
-    echo "Podman socket verified at $SOCKET_PATH"
-else
-    echo "Warning: Podman socket not found at expected path: $SOCKET_PATH"
-    echo "Attempting to restart podman socket..."
-    sudo -u litehouse bash -c "XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID} systemctl --user restart podman.socket"
-    sleep 2
+MAX_WAIT=10
+WAITED=0
+
+while [ $WAITED -lt $MAX_WAIT ]; do
     if [ -S "$SOCKET_PATH" ]; then
-        echo "Podman socket created successfully"
-    else
-        echo "Error: Failed to create Podman socket"
-        exit 1
+        echo "Podman socket verified at $SOCKET_PATH"
+        break
     fi
+    echo "Waiting for Podman socket... ($WAITED/$MAX_WAIT)"
+    sleep 1
+    WAITED=$((WAITED + 1))
+done
+
+if [ ! -S "$SOCKET_PATH" ]; then
+    echo "Error: Failed to create Podman socket after ${MAX_WAIT} seconds"
+    echo "Attempting to debug..."
+    ls -la "$RUNTIME_DIR" || echo "Runtime dir doesn't exist"
+    sudo -u litehouse bash -c "XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID} systemctl --user status podman.socket" || echo "Failed to get status"
+    exit 1
 fi
 
 echo "Podman configuration completed successfully"

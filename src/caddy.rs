@@ -300,7 +300,11 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
                 if let Some(health) = state.health {
                     if let Some(status) = health.status {
                         info!("Container health status: {:?}", status);
-                        return Ok(matches!(status, bollard::models::HealthStatusEnum::HEALTHY));
+                        // EMPTY means no healthcheck configured, treat as healthy if running
+                        if matches!(status, bollard::models::HealthStatusEnum::HEALTHY | bollard::models::HealthStatusEnum::EMPTY) {
+                            return Ok(state.running.unwrap_or(false));
+                        }
+                        return Ok(false);
                     }
                 }
                 // If no health check is configured, assume healthy if running
@@ -607,7 +611,7 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream {
-                    dial: "localhost:80".to_string(),
+                    dial: "host.containers.internal:3030".to_string(),
                 }],
             }],
         };
