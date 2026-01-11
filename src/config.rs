@@ -39,7 +39,7 @@ impl Default for ServerConfig {
         Self {
             host: "0.0.0.0".to_string(),
             proxy_host: "0.0.0.0".to_string(),
-            proxy_port: 80,
+            proxy_port: 3030,
             caddy_http_port: Some(9090),
             caddy_https_port: Some(9091), // Use default 443 in production
             domain: None,

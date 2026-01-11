@@ -1,38 +1,35 @@
-/// Template for the systemd service file
+/// Template for the systemd service file (container-based)
+/// Note: Litehouse API only uses port 3030. Caddy handles 80/443.
 pub fn systemd_service_template(litehouse_uid: &str) -> String {
     format!(
         r#"[Unit]
-Description=Litehouse Application Platform
+Description=Litehouse Application Platform (Container)
 After=network.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=forking
 User=litehouse
 Group=litehouse
-WorkingDirectory=/opt/litehouse
-ExecStart=/opt/litehouse/lh serve
+Environment="XDG_RUNTIME_DIR=/run/user/{}"
+Environment="PODMAN_SOCK=/run/user/{}/podman/podman.sock"
+ExecStartPre=/usr/bin/podman stop -i litehouse-server
+ExecStartPre=/usr/bin/podman rm -i litehouse-server
+ExecStart=/usr/bin/podman run -d \
+  --name litehouse-server \
+  -p 3030:3030 \
+  -v /opt/litehouse/config:/opt/litehouse/config:Z \
+  -v /opt/litehouse/data:/opt/litehouse/data:Z \
+  -v /run/user/{}/podman/podman.sock:/run/podman/podman.sock:Z \
+  -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
+  -e LITEHOUSE_DIR=/opt/litehouse \
+  -e PODMAN_SOCK=/run/podman/podman.sock \
+  -e RUST_LOG=info \
+  ghcr.io/danbruder/litehouse:latest
+ExecStop=/usr/bin/podman stop litehouse-server
+ExecStopPost=/usr/bin/podman rm -f litehouse-server
 Restart=always
 RestartSec=10
-
-# Environment
-Environment="DATABASE_URL=/opt/litehouse/config/litehouse.db"
-Environment="LITEHOUSE_DIR=/opt/litehouse"
-Environment="PODMAN_SOCK=/run/user/{}/podman/podman.sock"
-Environment="XDG_RUNTIME_DIR=/run/user/{}"
-Environment="RUST_LOG=info"
-
-# Security
-NoNewPrivileges=true
-PrivateTmp=true
-
-# Allow binding to ports 80 and 443
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-
-# Allow access to runtime directory and litehouse data
-ReadWritePaths=/opt/litehouse
-ReadWritePaths=/run/user/{}
 
 [Install]
 WantedBy=multi-user.target
@@ -173,6 +170,16 @@ echo "Configuring Podman for litehouse user..."
 # Get litehouse user UID
 LITEHOUSE_UID=$(id -u litehouse)
 
+# Configure system to allow binding to privileged ports (< 1024) for rootless containers
+echo "Configuring unprivileged port access for rootless containers..."
+if ! grep -q "net.ipv4.ip_unprivileged_port_start" /etc/sysctl.conf; then
+    echo "net.ipv4.ip_unprivileged_port_start=80" >> /etc/sysctl.conf
+    sysctl -p /etc/sysctl.conf
+    echo "Configured unprivileged port start to 80"
+else
+    echo "Unprivileged port configuration already exists"
+fi
+
 # Enable user lingering (allows user services to run without login)
 loginctl enable-linger litehouse
 
@@ -254,4 +261,29 @@ echo "Timeout waiting for $SERVICE_NAME to become active"
 systemctl status $SERVICE_NAME || true
 exit 1
 "#
+}
+
+/// Script to pull the litehouse server container image
+pub fn pull_container_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Pulling litehouse-server container image..."
+
+# Run as litehouse user with proper environment
+sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{}
+export PODMAN_SOCK=/run/user/{}/podman/podman.sock
+
+# Pull the latest image
+podman pull ghcr.io/danbruder/litehouse:latest
+
+echo 'Image pulled successfully'
+"
+
+echo "Container image pull completed"
+"#,
+        litehouse_uid, litehouse_uid
+    )
 }

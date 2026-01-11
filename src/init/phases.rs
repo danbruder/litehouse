@@ -163,98 +163,22 @@ pub fn phase6_systemd_service(ssh_target: &str, litehouse_uid: &str) -> Result<(
     Ok(())
 }
 
-/// Phase 7: Binary Build & Deployment
+/// Phase 7: Container Image Pull
 #[instrument(skip(log_window))]
 pub fn phase7_binary_deployment(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
-    use std::io::{BufRead, BufReader};
-    use std::process::Stdio;
-    use std::collections::VecDeque;
+    info!("Phase 7: Container Image Pull");
 
-    info!("Phase 7: Binary Build & Deployment");
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
 
-    info!("Building Linux musl binary...");
+    let script = templates::pull_container_script(litehouse_uid);
 
-    // Build the binary with streaming output
-    let mut child = std::process::Command::new("cargo")
-        .args(["build", "--release", "--target", "x86_64-unknown-linux-musl"])
-        .env("TARGET_CC", "x86_64-linux-musl-gcc")
-        .env("SQLX_OFFLINE", "true")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to execute cargo build")?;
-
-    let stdout = child.stdout.take().context("Failed to capture stdout")?;
-    let stderr = child.stderr.take().context("Failed to capture stderr")?;
-
-    // Read stdout
-    let stdout_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut lines = Vec::new();
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                lines.push(line);
-            }
-        }
-        lines
-    });
-
-    // Read stderr with log window updates
-    let stderr_handle = std::thread::spawn({
-        let log_window = log_window.map(|pb| pb.clone());
-        move || {
-            let reader = BufReader::new(stderr);
-            let mut lines = Vec::new();
-            let mut log_buffer: VecDeque<String> = VecDeque::with_capacity(20);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    lines.push(line.clone());
-
-                    // Update log buffer
-                    if log_buffer.len() >= 20 {
-                        log_buffer.pop_front();
-                    }
-                    log_buffer.push_back(line);
-
-                    // Update log window if provided
-                    if let Some(ref pb) = log_window {
-                        let log_display: Vec<String> = log_buffer.iter().cloned().collect();
-                        pb.set_message(log_display.join("\n"));
-                    }
-                }
-            }
-            lines
-        }
-    });
-
-    let stdout_lines = stdout_handle.join().unwrap();
-    let stderr_lines = stderr_handle.join().unwrap();
-
-    let status = child.wait().context("Failed to wait for cargo build")?;
-
-    if !status.success() {
-        anyhow::bail!(
-            "Failed to build binary:\nSTDOUT: {}\nSTDERR: {}",
-            stdout_lines.join("\n"),
-            stderr_lines.join("\n")
-        );
-    }
-
-    info!("Binary built successfully");
-
-    // Upload binary
-    let binary_path = "target/x86_64-unknown-linux-musl/release/lh";
-    if !std::path::Path::new(binary_path).exists() {
-        anyhow::bail!("Binary not found at {}", binary_path);
-    }
-
-    info!("Uploading binary to server...");
-    super::ssh::upload_file(ssh_target, binary_path, "/tmp/lh")?;
-
-    // Move binary to final location
-    execute_remote(ssh_target, "sudo mv /tmp/lh /opt/litehouse/lh")?;
-    execute_remote(ssh_target, "sudo chmod +x /opt/litehouse/lh")?;
-    execute_remote(ssh_target, "sudo chown litehouse:litehouse /opt/litehouse/lh")?;
+    // Upload and execute the script
+    upload_content(ssh_target, &script, "/tmp/pull_container.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/pull_container.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/pull_container.sh", log_window)?;
+    execute_remote(ssh_target, "rm /tmp/pull_container.sh")?;
 
     info!("Phase 7 completed successfully");
     Ok(())

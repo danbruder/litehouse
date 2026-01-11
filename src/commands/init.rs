@@ -96,11 +96,11 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 7: Binary Deployment
-    pb.set_message("Building and deploying server binary (this may take a few minutes)...");
-    log_window.set_message("Starting binary build...");
+    // Phase 7: Container Image Pull
+    pb.set_message("Pulling litehouse server container image...");
+    log_window.set_message("Starting container image pull...");
     if let Err(e) = phase7_binary_deployment(ssh_target, Some(&log_window)) {
-        pb.finish_with_message("❌ Binary deployment failed");
+        pb.finish_with_message("❌ Container image pull failed");
         error!("Phase 7 failed: {}", e);
         return Err(e);
     }
@@ -172,8 +172,10 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     println!("\nTroubleshooting:");
     println!("  - Check service status:");
     println!("    ssh litehouse@{} 'systemctl status litehouse'", host);
-    println!("  - View logs:");
-    println!("    ssh litehouse@{} 'journalctl -u litehouse -f'", host);
+    println!("  - View container logs:");
+    println!("    ssh litehouse@{} 'podman logs -f litehouse-server'", host);
+    println!("  - Check container status:");
+    println!("    ssh litehouse@{} 'podman ps -a | grep litehouse-server'", host);
     println!("{}", "=".repeat(60));
 
     Ok(())
