@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use tracing::{info, instrument};
+use indicatif::ProgressBar;
 
 use super::ssh::{
-    execute_remote, has_sudo_access, test_ssh_connection, upload_content,
+    execute_remote, execute_remote_with_log, has_sudo_access, test_ssh_connection, upload_content,
 };
 use super::templates;
 
@@ -62,8 +63,8 @@ pub fn phase1_validation(ssh_target: &str, domain: &str) -> Result<()> {
 }
 
 /// Phase 2: System Preparation
-#[instrument]
-pub fn phase2_system_preparation(ssh_target: &str) -> Result<()> {
+#[instrument(skip(log_window))]
+pub fn phase2_system_preparation(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
     info!("Phase 2: System Preparation");
 
     let script = templates::system_preparation_script();
@@ -71,7 +72,7 @@ pub fn phase2_system_preparation(ssh_target: &str) -> Result<()> {
     // Upload and execute the script
     upload_content(ssh_target, script, "/tmp/system_prep.sh")?;
     execute_remote(ssh_target, "chmod +x /tmp/system_prep.sh")?;
-    execute_remote(ssh_target, "sudo /tmp/system_prep.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/system_prep.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/system_prep.sh")?;
 
     info!("Phase 2 completed successfully");
@@ -79,8 +80,8 @@ pub fn phase2_system_preparation(ssh_target: &str) -> Result<()> {
 }
 
 /// Phase 3: Security Hardening
-#[instrument]
-pub fn phase3_security_hardening(ssh_target: &str) -> Result<()> {
+#[instrument(skip(log_window))]
+pub fn phase3_security_hardening(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
     info!("Phase 3: Security Hardening");
 
     let script = templates::security_hardening_script();
@@ -88,7 +89,7 @@ pub fn phase3_security_hardening(ssh_target: &str) -> Result<()> {
     // Upload and execute the script
     upload_content(ssh_target, script, "/tmp/security_setup.sh")?;
     execute_remote(ssh_target, "chmod +x /tmp/security_setup.sh")?;
-    execute_remote(ssh_target, "sudo /tmp/security_setup.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/security_setup.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/security_setup.sh")?;
 
     info!("Phase 3 completed successfully");
@@ -96,8 +97,8 @@ pub fn phase3_security_hardening(ssh_target: &str) -> Result<()> {
 }
 
 /// Phase 4: User & Directory Setup
-#[instrument]
-pub fn phase4_user_setup(ssh_target: &str) -> Result<()> {
+#[instrument(skip(log_window))]
+pub fn phase4_user_setup(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
     info!("Phase 4: User & Directory Setup");
 
     let script = templates::user_setup_script();
@@ -105,7 +106,7 @@ pub fn phase4_user_setup(ssh_target: &str) -> Result<()> {
     // Upload and execute the script
     upload_content(ssh_target, script, "/tmp/user_setup.sh")?;
     execute_remote(ssh_target, "chmod +x /tmp/user_setup.sh")?;
-    execute_remote(ssh_target, "sudo /tmp/user_setup.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/user_setup.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/user_setup.sh")?;
 
     info!("Phase 4 completed successfully");
@@ -113,8 +114,8 @@ pub fn phase4_user_setup(ssh_target: &str) -> Result<()> {
 }
 
 /// Phase 5: Podman Configuration
-#[instrument]
-pub fn phase5_podman_configuration(ssh_target: &str) -> Result<String> {
+#[instrument(skip(log_window))]
+pub fn phase5_podman_configuration(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<String> {
     info!("Phase 5: Podman Configuration");
 
     let script = templates::podman_setup_script();
@@ -122,7 +123,7 @@ pub fn phase5_podman_configuration(ssh_target: &str) -> Result<String> {
     // Upload and execute the script
     upload_content(ssh_target, script, "/tmp/podman_setup.sh")?;
     execute_remote(ssh_target, "chmod +x /tmp/podman_setup.sh")?;
-    let output = execute_remote(ssh_target, "sudo /tmp/podman_setup.sh")?;
+    let output = execute_remote_with_log(ssh_target, "sudo /tmp/podman_setup.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/podman_setup.sh")?;
 
     // Extract UID from output
@@ -163,27 +164,79 @@ pub fn phase6_systemd_service(ssh_target: &str, litehouse_uid: &str) -> Result<(
 }
 
 /// Phase 7: Binary Build & Deployment
-#[instrument]
-pub fn phase7_binary_deployment(ssh_target: &str) -> Result<()> {
+#[instrument(skip(log_window))]
+pub fn phase7_binary_deployment(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::collections::VecDeque;
+
     info!("Phase 7: Binary Build & Deployment");
 
     info!("Building Linux musl binary...");
 
-    // Build the binary
-    let output = std::process::Command::new("cargo")
+    // Build the binary with streaming output
+    let mut child = std::process::Command::new("cargo")
         .args(["build", "--release", "--target", "x86_64-unknown-linux-musl"])
         .env("TARGET_CC", "x86_64-linux-musl-gcc")
         .env("SQLX_OFFLINE", "true")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("Failed to execute cargo build")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = child.stdout.take().context("Failed to capture stdout")?;
+    let stderr = child.stderr.take().context("Failed to capture stderr")?;
+
+    // Read stdout
+    let stdout_handle = std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        let mut lines = Vec::new();
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                lines.push(line);
+            }
+        }
+        lines
+    });
+
+    // Read stderr with log window updates
+    let stderr_handle = std::thread::spawn({
+        let log_window = log_window.map(|pb| pb.clone());
+        move || {
+            let reader = BufReader::new(stderr);
+            let mut lines = Vec::new();
+            let mut log_buffer: VecDeque<String> = VecDeque::with_capacity(20);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    lines.push(line.clone());
+
+                    // Update log buffer
+                    if log_buffer.len() >= 20 {
+                        log_buffer.pop_front();
+                    }
+                    log_buffer.push_back(line);
+
+                    // Update log window if provided
+                    if let Some(ref pb) = log_window {
+                        let log_display: Vec<String> = log_buffer.iter().cloned().collect();
+                        pb.set_message(log_display.join("\n"));
+                    }
+                }
+            }
+            lines
+        }
+    });
+
+    let stdout_lines = stdout_handle.join().unwrap();
+    let stderr_lines = stderr_handle.join().unwrap();
+
+    let status = child.wait().context("Failed to wait for cargo build")?;
+
+    if !status.success() {
         anyhow::bail!(
             "Failed to build binary:\nSTDOUT: {}\nSTDERR: {}",
-            stdout,
-            stderr
+            stdout_lines.join("\n"),
+            stderr_lines.join("\n")
         );
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use tracing::{error, info, instrument};
 
 use crate::init::{phases::*, ssh::parse_ssh_target};
@@ -14,14 +14,26 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     let (user, host) = parse_ssh_target(ssh_target)?;
     info!("Connecting as user '{}' to host '{}'", user, host);
 
-    // Create progress bar
-    let pb = ProgressBar::new(11);
+    // Create multi-progress container
+    let multi = MultiProgress::new();
+
+    // Create progress bar for phases (pinned at top)
+    let pb = multi.add(ProgressBar::new(11));
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}: {msg}")
             .unwrap()
             .progress_chars("=>-"),
     );
+
+    // Create log window (scrolling output below progress bar)
+    let log_window = multi.add(ProgressBar::new_spinner());
+    log_window.set_style(
+        ProgressStyle::default_spinner()
+            .template("{msg}")
+            .unwrap(),
+    );
+    log_window.set_message("Waiting for output...");
 
     // Phase 1: Validation
     pb.set_message("Validating prerequisites and connectivity...");
@@ -34,7 +46,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 2: System Preparation
     pb.set_message("Preparing system (updating packages, installing dependencies)...");
-    if let Err(e) = phase2_system_preparation(ssh_target) {
+    log_window.set_message("Starting system preparation...");
+    if let Err(e) = phase2_system_preparation(ssh_target, Some(&log_window)) {
         pb.finish_with_message("❌ System preparation failed");
         error!("Phase 2 failed: {}", e);
         return Err(e);
@@ -43,7 +56,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 3: Security Hardening
     pb.set_message("Configuring security (firewall, fail2ban)...");
-    if let Err(e) = phase3_security_hardening(ssh_target) {
+    log_window.set_message("Starting security hardening...");
+    if let Err(e) = phase3_security_hardening(ssh_target, Some(&log_window)) {
         pb.finish_with_message("❌ Security hardening failed");
         error!("Phase 3 failed: {}", e);
         return Err(e);
@@ -52,7 +66,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 4: User Setup
     pb.set_message("Creating litehouse user and directories...");
-    if let Err(e) = phase4_user_setup(ssh_target) {
+    log_window.set_message("Starting user setup...");
+    if let Err(e) = phase4_user_setup(ssh_target, Some(&log_window)) {
         pb.finish_with_message("❌ User setup failed");
         error!("Phase 4 failed: {}", e);
         return Err(e);
@@ -61,7 +76,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 5: Podman Configuration
     pb.set_message("Configuring Podman (rootless mode, socket)...");
-    let litehouse_uid = match phase5_podman_configuration(ssh_target) {
+    log_window.set_message("Starting Podman configuration...");
+    let litehouse_uid = match phase5_podman_configuration(ssh_target, Some(&log_window)) {
         Ok(uid) => uid,
         Err(e) => {
             pb.finish_with_message("❌ Podman configuration failed");
@@ -82,7 +98,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 7: Binary Deployment
     pb.set_message("Building and deploying server binary (this may take a few minutes)...");
-    if let Err(e) = phase7_binary_deployment(ssh_target) {
+    log_window.set_message("Starting binary build...");
+    if let Err(e) = phase7_binary_deployment(ssh_target, Some(&log_window)) {
         pb.finish_with_message("❌ Binary deployment failed");
         error!("Phase 7 failed: {}", e);
         return Err(e);
@@ -135,6 +152,7 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     pb.inc(1);
 
     pb.finish_with_message("✅ Initialization completed successfully!");
+    log_window.finish_and_clear();
 
     // Print success message with next steps
     println!("\n{}", "=".repeat(60));
