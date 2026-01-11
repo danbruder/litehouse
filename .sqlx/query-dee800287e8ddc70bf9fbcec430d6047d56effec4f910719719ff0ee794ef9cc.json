@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            WHERE name = ?\n            ",
+  "query": "\n            SELECT *\n            FROM app \n            WHERE port IS NOT NULL\n            ORDER BY name\n            ",
   "describe": {
     "columns": [
       {
@@ -35,7 +35,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       false,
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "e31232081672dec02f8ea45437e936e3dcfe73a130aec83c72bc10938da83cf1"
+  "hash": "dee800287e8ddc70bf9fbcec430d6047d56effec4f910719719ff0ee794ef9cc"
 }

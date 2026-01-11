@@ -26,6 +26,7 @@ pub struct ServerConfig {
     pub proxy_port: u16,
     pub caddy_http_port: Option<u16>,
     pub caddy_https_port: Option<u16>,
+    pub domain: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,6 +42,7 @@ impl Default for ServerConfig {
             proxy_port: 80,
             caddy_http_port: Some(9090),
             caddy_https_port: Some(9091), // Use default 443 in production
+            domain: None,
         }
     }
 }

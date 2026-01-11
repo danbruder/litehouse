@@ -19,13 +19,18 @@
         "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "port",
         "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 4,
         "type_info": "Datetime"
       },
       {
         "name": "updated_at",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Datetime"
       }
     ],
@@ -36,6 +41,7 @@
       false,
       false,
       false,
+      true,
       false,
       false
     ]

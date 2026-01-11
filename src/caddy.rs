@@ -589,9 +589,33 @@ async fn wait_for_container_stable(docker: &Docker, container_id: &str) -> Resul
 // Caddy Configuration Management Functions
 
 /// Build Caddy JSON configuration from apps
-fn build_caddy_config(apps: Vec<App>, local_dev: bool) -> CaddyConfig {
+fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> CaddyConfig {
     let mut routes = Vec::new();
 
+    // Add admin API route
+    if let Some(domain_str) = domain {
+        let admin_host = if local_dev {
+            "admin-api.localhost".to_string()
+        } else {
+            format!("admin-api.{}", domain_str)
+        };
+
+        let admin_route = Route {
+            match_rules: vec![HostMatcher {
+                host: vec![admin_host],
+            }],
+            handle: vec![Handler {
+                handler: "reverse_proxy".to_string(),
+                upstreams: vec![Upstream {
+                    dial: "localhost:80".to_string(),
+                }],
+            }],
+        };
+
+        routes.push(admin_route);
+    }
+
+    // Add app routes
     for app in apps {
         if let Some(port) = app.port {
             let host = if local_dev {
@@ -599,7 +623,12 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool) -> CaddyConfig {
                 format!("{}.localhost", app.name)
             } else {
                 // For production, use the domain pattern
-                format!("{}.s.danbruder.com", app.name)
+                if let Some(domain_str) = domain {
+                    format!("{}.{}", app.name, domain_str)
+                } else {
+                    // Fallback to old hardcoded domain for backwards compatibility
+                    format!("{}.s.danbruder.com", app.name)
+                }
             };
 
             let upstream = format!("0.0.0.0:{}", port);
@@ -725,11 +754,15 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
         || std::env::var("RUST_LOG").is_ok()
         || cfg!(debug_assertions);
 
+    // Load server config to get domain
+    let server_config = ServerConfig::load().unwrap_or_default();
+    let domain = server_config.domain.as_deref();
+
     match db_app::get_all_with_ports(db_pool).await {
         Ok(apps) => {
             info!("Found {} apps with ports", apps.len());
 
-            let config = build_caddy_config(apps, local_dev);
+            let config = build_caddy_config(apps, local_dev, domain);
             update_caddy_config(docker, config).await?;
 
             info!("Caddy configuration synchronized successfully");

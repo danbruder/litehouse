@@ -20,6 +20,16 @@ struct PodmanArgs {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Initialize a fresh server for litehouse deployment
+    Init {
+        /// SSH target (e.g., root@192.168.1.1)
+        ssh_target: String,
+
+        /// Base domain for wildcard routing (e.g., lh.danbruder.com)
+        #[arg(long)]
+        domain: String,
+    },
+
     /// Create a new app
     Create {
         /// Name of the app
@@ -147,6 +157,9 @@ pub async fn run() -> Result<()> {
     let api_client = ApiClient::new(config);
 
     match cli.command {
+        Commands::Init { ssh_target, domain } => {
+            crate::commands::init::execute(&ssh_target, &domain).await
+        }
         Commands::Create { app_name } => api_client.create_app(&app_name).await,
         Commands::Start { app_name } => api_client.start_app(&app_name).await,
         Commands::Stop { app_name } => api_client.stop_app(&app_name).await,

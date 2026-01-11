@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            WHERE name = ?\n            ",
+  "query": "\n        SELECT id, app_id, key, value, created_at as \"created_at: _\", updated_at as \"updated_at: _\"\n        FROM env_var\n        WHERE app_id = ?\n        ",
   "describe": {
     "columns": [
       {
@@ -9,27 +9,27 @@
         "type_info": "Text"
       },
       {
-        "name": "name",
+        "name": "app_id",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "state",
+        "name": "key",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "port",
+        "name": "value",
         "ordinal": 3,
-        "type_info": "Int64"
+        "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "created_at: _",
         "ordinal": 4,
         "type_info": "Datetime"
       },
       {
-        "name": "updated_at",
+        "name": "updated_at: _",
         "ordinal": 5,
         "type_info": "Datetime"
       }
@@ -41,10 +41,10 @@
       false,
       false,
       false,
-      true,
+      false,
       false,
       false
     ]
   },
-  "hash": "e31232081672dec02f8ea45437e936e3dcfe73a130aec83c72bc10938da83cf1"
+  "hash": "460aabd87382ca9e8d387fce86425a2f44b0b36cb01d5aa72ffc0f83e6fdf04f"
 }

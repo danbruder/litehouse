@@ -2,6 +2,7 @@ pub mod app_env;
 pub mod build;
 pub mod create;
 pub mod delete;
+pub mod init;
 pub mod logs;
 pub mod remote;
 pub mod server;
