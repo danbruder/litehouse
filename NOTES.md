@@ -72,7 +72,7 @@ Where are we today?
 Developer happiness
 - [ ] How do I know what env I'm pointing to? Perhaps in the logs
 - [ ] Make the app auto understood based on location in the cli (context)
-- [ ] Put cursor IN the bindrop and give it access to the primitives. as an app woah. allow it to run with privalages.
+- [ ] Put cursor IN the litehouse and give it access to the primitives. as an app woah. allow it to run with privalages.
 
 ## Phase 1 Status: COMPLETE ✓
 

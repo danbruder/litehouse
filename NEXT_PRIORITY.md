@@ -112,7 +112,7 @@ User Request: http://myapp.localhost:9090
 ### Environment Detection
 
 **Local Development Mode:**
-- Triggered by: `BINDROP_LOCAL_DEV=1` or `RUST_LOG=debug`
+- Triggered by: `LITEHOUSE_LOCAL_DEV=1` or `RUST_LOG=debug`
 - Ports: 9090 (HTTP), 9091 (HTTPS)
 - Domains: `*.localhost`
 
@@ -164,9 +164,9 @@ Error: Docker responded with status code 500: Forbidden
    cargo build --release
 
    # Start server
-   export DATABASE_URL=sqlite://config/binarydrop.db
-   export BINDROP_LOCAL_DEV=1
-   ./target/release/bindrop serve
+   export DATABASE_URL=sqlite://config/litehouse.db
+   export LITEHOUSE_LOCAL_DEV=1
+   ./target/release/lh serve
    ```
 
 2. **Run Test Suite** (from ROUTING_STATUS.md)
@@ -198,7 +198,7 @@ Once Phase 1 testing is complete, begin Phase 2:
    - Webhook setup instructions in UI
 
 3. **Server Init Command**
-   - `bindrop server init` wizard
+   - `lh server init` wizard
    - Configure S3 credentials
    - Configure Cloudflare API
    - Store encrypted in database
@@ -296,13 +296,13 @@ Once testing confirms everything works:
 - All files from podman branch merge
 
 ### Configuration Files
-- `config/binarydrop.db` - SQLite database (auto-created)
+- `config/litehouse.db` - SQLite database (auto-created)
 - `config/client-config.toml` - Client settings
 - `config/server-config.toml` - Server settings (auto-created)
 
 ## Conclusion
 
-**Phase 1 is functionally complete.** The bindrop platform now has:
+**Phase 1 is functionally complete.** The litehouse platform now has:
 - A solid container orchestration foundation (Podman)
 - Dynamic reverse proxy with subdomain routing (Caddy)
 - Complete app lifecycle management
@@ -324,4 +324,4 @@ Once testing confirms everything works:
 - Phase 3: ~2-3 weeks (SQLite + Litestream)
 - Total: ~4-6 weeks to fully functional platform
 
-**This positions bindrop to be the "Vercel for self-hosted SQLite apps"** - the original vision is now achievable.
+**This positions litehouse to be the "Vercel for self-hosted SQLite apps"** - the original vision is now achievable.

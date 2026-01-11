@@ -1,4 +1,4 @@
-# Bindrop Deployment Guide
+# Litehouse Deployment Guide
 
 ## Prerequisites
 
@@ -31,19 +31,19 @@ source $HOME/.cargo/env
 cargo install sqlx-cli --no-default-features --features sqlite
 ```
 
-### 3. Clone and Build Bindrop
+### 3. Clone and Build Litehouse
 
 ```bash
-git clone <your-repo-url> bindrop
-cd bindrop
+git clone <your-repo-url> litehouse
+cd litehouse
 git checkout claude/plan-next-priority-ZI5lR
 
 # Set up database
-export DATABASE_URL=sqlite://config/binarydrop.db
+export DATABASE_URL=sqlite://config/litehouse.db
 sqlx database create
 sqlx migrate run
 
-# Build bindrop
+# Build litehouse
 cargo build --release
 ```
 
@@ -60,15 +60,15 @@ sudo systemctl enable --now podman.socket
 sudo podman system service --time=0 unix:///run/podman/podman.sock &
 ```
 
-### 5. Start Bindrop Server
+### 5. Start Litehouse Server
 
 ```bash
 # For production (will use ports 80/443)
-sudo -E ./target/release/bindrop serve
+sudo -E ./target/release/lh serve
 
 # For local development (will use ports 9090/9091)
-export BINDROP_LOCAL_DEV=1
-./target/release/bindrop serve
+export LITEHOUSE_LOCAL_DEV=1
+./target/release/lh serve
 ```
 
 The server will:
@@ -84,19 +84,19 @@ The server will:
 
 ```bash
 # 1. Create the app
-./target/release/bindrop create myapp
+./target/release/lh create myapp
 
 # 2. Add Git remote
-./target/release/bindrop remote myapp add https://github.com/youruser/your-nodejs-app
+./target/release/lh remote myapp add https://github.com/youruser/your-nodejs-app
 
 # 3. Build the app (requires Dockerfile in repo)
-./target/release/bindrop build myapp
+./target/release/lh build myapp
 
 # 4. Start the app
-./target/release/bindrop start myapp
+./target/release/lh start myapp
 
 # 5. Check status
-./target/release/bindrop status
+./target/release/lh status
 
 # Your app is now accessible at:
 # Local dev: http://myapp.localhost:9090
@@ -107,14 +107,14 @@ The server will:
 
 ```bash
 # Create app
-./target/release/bindrop create nginx-test
+./target/release/lh create nginx-test
 
 # Add remote to a repo with nginx Dockerfile
-./target/release/bindrop remote nginx-test add https://github.com/nginxinc/docker-nginx
+./target/release/lh remote nginx-test add https://github.com/nginxinc/docker-nginx
 
 # Build and start
-./target/release/bindrop build nginx-test
-./target/release/bindrop start nginx-test
+./target/release/lh build nginx-test
+./target/release/lh start nginx-test
 
 # Test
 curl http://nginx-test.localhost:9090
@@ -140,7 +140,7 @@ RUN npm ci --only=production
 # Copy app code
 COPY . .
 
-# Expose port (bindrop will map this dynamically)
+# Expose port (litehouse will map this dynamically)
 EXPOSE 3000
 
 # Start app
@@ -197,12 +197,12 @@ CMD ["npm", "start"]
 Set environment variables for your apps:
 
 ```bash
-./target/release/bindrop env myapp DATABASE_URL "sqlite:///data/app.db"
-./target/release/bindrop env myapp API_KEY "your-secret-key"
-./target/release/bindrop env myapp NODE_ENV "production"
+./target/release/lh env myapp DATABASE_URL "sqlite:///data/app.db"
+./target/release/lh env myapp API_KEY "your-secret-key"
+./target/release/lh env myapp NODE_ENV "production"
 
 # Delete an env var
-./target/release/bindrop env myapp OLD_VAR "" --delete
+./target/release/lh env myapp OLD_VAR "" --delete
 ```
 
 ## Managing Apps
@@ -210,7 +210,7 @@ Set environment variables for your apps:
 ### View All Apps
 
 ```bash
-./target/release/bindrop status
+./target/release/lh status
 ```
 
 Output:
@@ -225,32 +225,32 @@ ID  Name       State     Port
 
 ```bash
 # Last 50 lines
-./target/release/bindrop logs myapp
+./target/release/lh logs myapp
 
 # Last 100 lines
-./target/release/bindrop logs myapp --lines 100
+./target/release/lh logs myapp --lines 100
 
 # Follow logs (real-time)
-./target/release/bindrop logs myapp --follow
+./target/release/lh logs myapp --follow
 ```
 
 ### Stop an App
 
 ```bash
-./target/release/bindrop stop myapp
+./target/release/lh stop myapp
 ```
 
 ### Restart an App
 
 ```bash
-./target/release/bindrop stop myapp
-./target/release/bindrop start myapp
+./target/release/lh stop myapp
+./target/release/lh start myapp
 ```
 
 ### Delete an App
 
 ```bash
-./target/release/bindrop delete myapp
+./target/release/lh delete myapp
 # This stops the container and removes it from the database
 ```
 
@@ -281,21 +281,21 @@ podman pull caddy:latest
 
 # Remove and recreate Caddy
 podman rm -f caddy-container
-./target/release/bindrop serve
+./target/release/lh serve
 ```
 
 ### App Won't Build
 
 ```bash
 # Check build logs in app directory
-ls /opt/bindrop/data/apps/{app-name}/build
+ls /opt/litehouse/data/apps/{app-name}/build
 
 # Verify Dockerfile exists in repo
-cd /opt/bindrop/data/apps/{app-name}/build
+cd /opt/litehouse/data/apps/{app-name}/build
 ls -la
 
 # Try building manually
-cd /opt/bindrop/data/apps/{app-name}/build
+cd /opt/litehouse/data/apps/{app-name}/build
 podman build -t {app-name}:latest .
 ```
 
@@ -309,7 +309,7 @@ podman ps
 podman ps | grep caddy
 
 # Check Caddy configuration
-curl http://localhost:2019/config/apps/http/servers/bindrop/routes | jq
+curl http://localhost:2019/config/apps/http/servers/litehouse/routes | jq
 
 # Test direct container access
 curl http://localhost:{app-port}
@@ -321,33 +321,33 @@ curl -H "Host: {app-name}.localhost" http://localhost:9090
 ### Database Locked Error
 
 ```bash
-# Stop bindrop server
-pkill bindrop
+# Stop litehouse server
+pkill lh
 
 # Check for stale connections
-lsof /opt/bindrop/config/binarydrop.db
+lsof /opt/litehouse/config/litehouse.db
 
 # Restart server
-./target/release/bindrop serve
+./target/release/lh serve
 ```
 
 ## Production Considerations
 
 ### 1. Run as Systemd Service
 
-Create `/etc/systemd/system/bindrop.service`:
+Create `/etc/systemd/system/litehouse.service`:
 
 ```ini
 [Unit]
-Description=Bindrop Application Platform
+Description=Litehouse Application Platform
 After=network.target podman.socket
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/bindrop
-Environment="DATABASE_URL=sqlite:///opt/bindrop/config/binarydrop.db"
-ExecStart=/opt/bindrop/target/release/bindrop serve
+WorkingDirectory=/opt/litehouse
+Environment="DATABASE_URL=sqlite:///opt/litehouse/config/litehouse.db"
+ExecStart=/opt/litehous./target/release/lh serve
 Restart=always
 RestartSec=10
 
@@ -359,9 +359,9 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable bindrop
-sudo systemctl start bindrop
-sudo systemctl status bindrop
+sudo systemctl enable litehouse
+sudo systemctl start litehouse
+sudo systemctl status litehouse
 ```
 
 ### 2. Set Up Firewall
@@ -394,26 +394,26 @@ Caddy automatically provisions Let's Encrypt certificates for HTTPS. No configur
 # Backup script
 #!/bin/bash
 DATE=$(date +%Y%m%d_%H%M%S)
-tar -czf /backups/bindrop-$DATE.tar.gz \
-  /opt/bindrop/config/binarydrop.db \
-  /opt/bindrop/data/
+tar -czf /backups/litehouse-$DATE.tar.gz \
+  /opt/litehouse/config/litehouse.db \
+  /opt/litehouse/data/
 
 # Keep last 7 days
-find /backups -name "bindrop-*.tar.gz" -mtime +7 -delete
+find /backups -name "litehouse-*.tar.gz" -mtime +7 -delete
 ```
 
 Add to cron:
 
 ```bash
 # Run daily at 2 AM
-0 2 * * * /opt/bindrop/backup.sh
+0 2 * * * /opt/litehouse/backup.sh
 ```
 
 ## Configuration Files
 
 ### Server Config
 
-Location: `/opt/bindrop/config/server-config.toml`
+Location: `/opt/litehouse/config/server-config.toml`
 
 ```toml
 host = "0.0.0.0"
@@ -425,7 +425,7 @@ caddy_https_port = 9091 # Use 443 in production
 
 ### Client Config
 
-Location: `/opt/bindrop/config/client-config.toml`
+Location: `/opt/litehouse/config/client-config.toml`
 
 ```toml
 base_url = "http://admin-api.localhost"  # Update for production
@@ -450,10 +450,10 @@ podman ps
 
 ```bash
 # If running as systemd service
-sudo journalctl -u bindrop -f
+sudo journalctl -u litehouse -f
 
 # If running manually
-tail -f /tmp/bindrop-server.log
+tail -f /tmp/litehouse-server.log
 ```
 
 ## Limits and Scaling
@@ -474,7 +474,7 @@ Future scaling options:
 - [ ] SSH key authentication enabled (password auth disabled)
 - [ ] Regular system updates enabled
 - [ ] Backups configured and tested
-- [ ] Non-root user for bindrop (recommended)
+- [ ] Non-root user for litehouse (recommended)
 - [ ] Secrets stored as env vars (not in code)
 - [ ] HTTPS enabled via Caddy
 - [ ] Rate limiting configured (future)
@@ -485,7 +485,7 @@ For issues or questions:
 - Check `ROUTING_STATUS.md` for implementation details
 - Review `VISION.md` for product roadmap
 - Check GitHub issues
-- Review logs: `journalctl -u bindrop -f`
+- Review logs: `journalctl -u litehouse -f`
 
 ## Next Steps
 

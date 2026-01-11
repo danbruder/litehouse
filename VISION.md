@@ -2,7 +2,7 @@
 
 ## Core Vision
 
-**Bindrop is a managed application runtime for self-hosted SQLite apps.**
+**Litehouse is a managed application runtime for self-hosted SQLite apps.**
 
 The goal is to provide a Vercel/Netlify-like user experience for deploying SQLite-backed applications on your own infrastructure, with zero operational overhead after initial setup.
 
@@ -30,7 +30,7 @@ The goal is to provide a Vercel/Netlify-like user experience for deploying SQLit
 6. **Simpler than containers** - Buildpack-style auto-detection
 7. **Cheaper than PaaS** - Your own VPS, your own costs
 
-## What Bindrop Is NOT
+## What Litehouse Is NOT
 
 - Not a multi-machine orchestrator (use Kubernetes/Uncloud for that)
 - Not a generic container platform (use Coolify/Dokploy for that)
@@ -43,8 +43,8 @@ The goal is to provide a Vercel/Netlify-like user experience for deploying SQLit
 
 ```bash
 # On your VPS
-curl -fsS https://get.bindrop.dev/install.sh | sh
-bindrop server init \
+curl -fsS https://get.litehouse.dev/install.sh | sh
+lh server init \
   --s3-access-key=... \
   --s3-secret-key=... \
   --s3-bucket=my-backups \
@@ -52,19 +52,19 @@ bindrop server init \
 ```
 
 This command automatically:
-- Sets up bindrop's own SQLite database with Litestream
+- Sets up litehouse's own SQLite database with Litestream
 - Installs and configures Caddy for reverse proxy
 - Configures firewall (ports 22, 80, 443 only)
 - Enables automatic security updates
 - Stores S3/Cloudflare credentials securely
-- Starts the web UI at `https://bindrop.yourdomain.com`
+- Starts the web UI at `https://litehouse.yourdomain.com`
 
 ### Deploy an App (Every Time)
 
 **Via Web UI:**
 1. Click "New App"
 2. Enter GitHub repo URL and app name
-3. Bindrop automatically:
+3. Litehouse automatically:
    - Detects framework (Next.js, Rails, Django, etc.)
    - Clones and builds the app
    - Provisions SQLite database at `/data/app.db`
@@ -92,15 +92,15 @@ This command automatically:
 
 ### 1. Web UI as Primary Interface
 
-- Admin web UI is the canonical way to interact with bindrop
+- Admin web UI is the canonical way to interact with litehouse
 - CLI becomes a thin wrapper around the API (for power users)
-- UI accessible at `https://bindrop.yourdomain.com/admin`
+- UI accessible at `https://litehouse.yourdomain.com/admin`
 
 ### 2. First-Class SQLite + Litestream Integration
 
 **Per-app directory structure:**
 ```
-~/.local/share/bindrop/apps/{app_id}/
+~/.local/share/litehouse/apps/{app_id}/
   ├── data/
   │   └── app.db           # App's SQLite database
   ├── litestream/
@@ -112,7 +112,7 @@ This command automatically:
 **Automatic Litestream features:**
 - Auto-generated config per app
 - Sidecar container or in-container installation
-- Backup path: `s3://bucket/bindrop/{app_name}/db/`
+- Backup path: `s3://bucket/litehouse/{app_name}/db/`
 - Health monitoring and alerts
 - Point-in-time restore via UI
 
@@ -124,11 +124,11 @@ This command automatically:
 - Enable Cloudflare proxy (DDoS protection)
 - Configure SSL/TLS to "Full (strict)"
 - Delete DNS records on app deletion
-- Support custom domains (user adds CNAME, bindrop verifies)
+- Support custom domains (user adds CNAME, litehouse verifies)
 
 ### 4. Security Automation
 
-**Configured once during `bindrop server init`:**
+**Configured once during `lh server init`:**
 - Firewall: Allow 22 (SSH), 80 (HTTP), 443 (HTTPS) only
 - Automatic security updates (security repo only)
 - Optional: fail2ban for SSH protection
@@ -197,7 +197,7 @@ This command automatically:
 ### Phase 2: Web UI & Core UX (Next Priority)
 
 **Goals:**
-- Make bindrop usable without CLI
+- Make litehouse usable without CLI
 - GitHub webhook integration
 - One-time server setup automation
 
@@ -215,7 +215,7 @@ This command automatically:
    - Trigger builds on push to main/specified branch
    - Show webhook setup instructions in UI
 3. Server initialization command
-   - `bindrop server init` wizard
+   - `lh server init` wizard
    - Collect S3 credentials
    - Collect Cloudflare token
    - Detect server public IP
@@ -245,7 +245,7 @@ This command automatically:
    - Generate Litestream config per app
    - Run as sidecar container or in-container process
    - Use global S3 credentials from server config
-   - Backup path convention: `s3://{bucket}/bindrop/{app_name}/db/`
+   - Backup path convention: `s3://{bucket}/litehouse/{app_name}/db/`
 3. Backup/restore UI
    - Show backup history (timestamp, size, generation)
    - Point-in-time restore (calendar picker)
@@ -484,13 +484,13 @@ CREATE TABLE webhooks (
 
 ## Naming Considerations (Future)
 
-Current name "bindrop" doesn't clearly convey the SQLite focus. Consider:
+Current name "litehouse" doesn't clearly convey the SQLite focus. Consider:
 
 **Potential directions:**
 - Emphasize SQLite: "LiteHost", "SQLiteShip", "LiteOps"
 - Emphasize simplicity: "SimpleHost", "ZeroOps", "TinyCloud"
 - Emphasize self-hosting: "SelfKit", "OwnHost", "HomeBase"
-- Keep bindrop and position with tagline
+- Keep litehouse and position with tagline
 
 **Decision: Revisit after Phase 2-3 when product has proven SQLite PMF**
 
@@ -517,14 +517,14 @@ Current name "bindrop" doesn't clearly convey the SQLite focus. Consider:
 - One-click rollback works reliably
 
 **Overall Product Success:**
-- User sets up bindrop in <30 minutes
+- User sets up litehouse in <30 minutes
 - Deploys first app in <5 minutes
 - Never SSHs into server again
 - Runs in production for months with zero intervention
 
 ## Competitive Positioning
 
-| Platform | Focus | Pros | Cons | Bindrop Advantage |
+| Platform | Focus | Pros | Cons | Litehouse Advantage |
 |----------|-------|------|------|-------------------|
 | **Vercel** | Next.js, Edge | Best DX, fast | Expensive, vendor lock-in | Own your infra, 10x cheaper |
 | **Netlify** | Jamstack | Easy, generous free tier | Not for dynamic apps | SQLite = dynamic without DB costs |
@@ -534,11 +534,11 @@ Current name "bindrop" doesn't clearly convey the SQLite focus. Consider:
 | **Kamal** | Container deploy | Simple, proven | CLI-heavy, manual | Web UI, automatic backups |
 | **Fly.io** | Global edge | Great DX, LiteFS | Expensive at scale, complex | Single-machine simplicity |
 
-**Bindrop's unique position:** The only platform optimized for self-hosted SQLite apps with automatic backups, zero-config DNS, and a beautiful web UI.
+**Litehouse's unique position:** The only platform optimized for self-hosted SQLite apps with automatic backups, zero-config DNS, and a beautiful web UI.
 
 ## Open Questions (To Decide)
 
-1. **Multi-tenancy:** Should bindrop support multiple users/teams on one server?
+1. **Multi-tenancy:** Should litehouse support multiple users/teams on one server?
    - Decision: Not initially. Single admin user. Revisit in Phase 5+.
 
 2. **Container runtime:** Podman vs Docker?
@@ -570,7 +570,7 @@ Current name "bindrop" doesn't clearly convey the SQLite focus. Consider:
 A developer with a Next.js + Prisma + SQLite app can:
 
 1. Spin up a $5-10 VPS
-2. Run one command: `curl ... | sh && bindrop server init`
+2. Run one command: `curl ... | sh && lh server init`
 3. Open web UI, enter GitHub repo URL
 4. Get a live HTTPS app in <5 minutes
 5. Push to GitHub → auto-deploy

@@ -1,4 +1,4 @@
-# bindrop
+# litehouse
 
 the supervisor module is a nice hub of activity. Right now we're using sqlite as a "proxy" for interacting with the system, when I think it should actually all go through the supervisor. We're also using sqlite state and in process state for 'running' status of each app. 
 

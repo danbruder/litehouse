@@ -9,11 +9,11 @@ echo "Building the backend..."
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 
 echo "Pushing..."
-scp ./target/x86_64-unknown-linux-musl/release/bindrop bindrop@bindrop:/opt/bindrop/bindrop.new
+scp ./target/x86_64-unknown-linux-musl/release/lh litehouse@litehouse:/opt/litehouse/lh.new
 
 echo "Deploying..."
-ssh root@bindrop -t 'systemctl stop bindrop'
-ssh bindrop@bindrop -t 'mv /opt/bindrop/bindrop.new /opt/bindrop/bindrop'
-ssh root@bindrop -t 'systemctl restart bindrop'
+ssh root@litehouse -t 'systemctl stop litehouse'
+ssh litehouse@litehouse -t 'mv /opt/litehouse/lh.new /opt/litehouse/lh'
+ssh root@litehouse -t 'systemctl restart litehouse'
 
 echo "Done!"

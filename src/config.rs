@@ -250,13 +250,13 @@ impl ServerConfig {
 fn get_base_dir() -> PathBuf {
     // if on osx, use the home directory
     if cfg!(target_os = "macos") {
-        return "/Users/dan/Desktop/bindrop-data".into();
+        return "/Users/dan/Desktop/litehouse-data".into();
         //return std::env::current_dir().unwrap();
     }
 
-    if std::env::var("BINDROP_DIR").is_ok() {
-        PathBuf::from(std::env::var("BINDROP_DIR").unwrap())
+    if std::env::var("LITEHOUSE_DIR").is_ok() {
+        PathBuf::from(std::env::var("LITEHOUSE_DIR").unwrap())
     } else {
-        PathBuf::from("/opt/bindrop")
+        PathBuf::from("/opt/litehouse")
     }
 }

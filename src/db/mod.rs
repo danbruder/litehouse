@@ -32,7 +32,7 @@ type Result<T> = anyhow::Result<T, DatabaseError>;
 /// Get the database file path
 pub fn get_db_path() -> Result<PathBuf> {
     let config_dir = config::get_config_dir()?;
-    let db_path = config_dir.join("binarydrop.db");
+    let db_path = config_dir.join("litehouse.db");
     Ok(db_path)
 }
 

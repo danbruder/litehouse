@@ -32,7 +32,7 @@ The podman branch has been successfully merged and contains a complete implement
 **Local Development Mode:**
 - Apps accessible at: `{app-name}.localhost:9090`
 - HTTPS at: `{app-name}.localhost:9443`
-- Detection: `BINDROP_LOCAL_DEV` env var or `RUST_LOG` contains "debug"
+- Detection: `LITEHOUSE_LOCAL_DEV` env var or `RUST_LOG` contains "debug"
 
 **Production Mode:**
 - Apps accessible at: `{app-name}.s.danbruder.com`
@@ -50,7 +50,7 @@ The podman branch has been successfully merged and contains a complete implement
 
 ### 4. Server Startup (src/commands/server.rs)
 
-On `bindrop serve`:
+On `lh serve`:
 1. Connect to SQLite database
 2. Connect to Podman API (via `/run/podman/podman.sock`)
 3. Start/verify Caddy container
@@ -100,15 +100,15 @@ This prevents:
 mkdir -p /run/podman
 podman system service --time=0 unix:///run/podman/podman.sock &
 
-# Terminal 2: Start bindrop server
-export DATABASE_URL=sqlite://config/binarydrop.db
-export BINDROP_LOCAL_DEV=1
+# Terminal 2: Start lh server
+export DATABASE_URL=sqlite://config/litehouse.db
+export LITEHOUSE_LOCAL_DEV=1
 cargo run -- serve
 
 # Expected output:
 # - "Ensuring Caddy reverse proxy is running"
 # - "Container doesn't exist, creating new one" OR "Container is already running"
-# - "BinaryDrop proxy server running at http://0.0.0.0:80"
+# - "Litehouse proxy server running at http://0.0.0.0:80"
 
 # Terminal 3: Verify Caddy is running
 podman ps
@@ -141,7 +141,7 @@ podman ps
 # Should show: testapp-container running on port 800X
 
 # Check Caddy configuration
-curl http://localhost:2019/config/apps/http/servers/bindrop/routes | jq
+curl http://localhost:2019/config/apps/http/servers/litehouse/routes | jq
 # Should show route for testapp.localhost → 0.0.0.0:800X
 ```
 
@@ -174,11 +174,11 @@ cargo run -- status
 
 ```bash
 # Restart server (simulates crash/reboot)
-pkill bindrop
+pkill litehouse
 cargo run -- serve
 
 # Verify Caddy config was synced on startup
-curl http://localhost:2019/config/ | jq '.apps.http.servers.bindrop.routes'
+curl http://localhost:2019/config/ | jq '.apps.http.servers.litehouse.routes'
 
 # Should contain routes for ALL apps with ports in database
 ```
@@ -254,9 +254,9 @@ Once in an environment with internet access:
         │
         ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Bindrop Server (port 80)                                    │
+│  Litehouse Server (port 80)                                    │
 │  - Admin API endpoints                                       │
-│  - Database: /opt/bindrop/config/binarydrop.db               │
+│  - Database: /opt/litehouse/config/litehouse.db               │
 │  - Syncs Caddy config on app start/stop                      │
 └─────────────────────────────────────────────────────────────┘
 ```

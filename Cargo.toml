@@ -1,8 +1,8 @@
 [package]
-name = "bindrop"
+name = "litehouse"
 version = "0.1.0"
 edition = "2024"
-description = "A platform for deploying and running statically linked binaries"
+description = "A platform for deploying and running containerized applications"
 authors = ["Dan Bruder <danbruder@hey.com>"]
 
 [dependencies]
@@ -45,7 +45,7 @@ tokio-test = "0.4"
 tempfile = "3.9"
 
 [[bin]]
-name = "bindrop"
+name = "lh"
 path = "src/main.rs"
 
 [features]

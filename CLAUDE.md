@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**bindrop** is a platform for deploying and running containerized applications, transitioning from a static binary deployment system to a container-based platform using Podman and Caddy. The goal is to create a self-hosted platform similar to Vercel, with focus on Next.js applications.
+**litehouse** is a platform for deploying and running containerized applications, transitioning from a static binary deployment system to a container-based platform using Podman and Caddy. The goal is to create a self-hosted platform similar to Vercel, with focus on Next.js applications.
 
 The system consists of:
 - **CLI client** - Local tool for managing apps (create, start, stop, build, logs, etc.)
@@ -61,7 +61,7 @@ The project is **mid-refactor** from a static binary deployment model to a conta
 
 The CLI (`src/cli.rs`) sends HTTP requests to the server API (`src/api.rs`) via `ApiClient` (`src/api_client.rs`). The server runs on a configurable host/port (default: localhost:3030).
 
-**Client config:** `~/.config/bindrop/client-config.toml`
+**Client config:** `~/.config/litehouse/client-config.toml`
 ```toml
 base_url = "http://admin-api.localhost"
 ```
@@ -105,7 +105,7 @@ Manages a Caddy container for reverse proxying to app containers:
 - Production: Routes `{app-name}.s.danbruder.com` on ports 80/443
 - Updates sent to Caddy's admin API at `http://localhost:2019/load`
 
-**Environment detection:** Checks `BINDROP_LOCAL_DEV`, `RUST_LOG`, or `debug_assertions` to determine local vs production mode.
+**Environment detection:** Checks `LITEHOUSE_LOCAL_DEV`, `RUST_LOG`, or `debug_assertions` to determine local vs production mode.
 
 #### 5. Build Process
 
@@ -149,10 +149,10 @@ Each command module corresponds to a CLI subcommand:
 ### Data Flow Examples
 
 **Creating and deploying an app:**
-1. `bindrop create myapp` → Creates DB record
-2. `bindrop remote myapp add https://github.com/user/repo` → Stores Git remote
-3. `bindrop build myapp` → Clones repo, runs `podman build`, stores build record
-4. `bindrop start myapp` → Starts container from built image, syncs Caddy config
+1. `lh create myapp` → Creates DB record
+2. `lh remote myapp add https://github.com/user/repo` → Stores Git remote
+3. `lh build myapp` → Clones repo, runs `podman build`, stores build record
+4. `lh start myapp` → Starts container from built image, syncs Caddy config
 5. App accessible at `myapp.localhost:9090` (local) or `myapp.s.danbruder.com` (production)
 
 **Server startup:**
@@ -191,7 +191,7 @@ Each command module corresponds to a CLI subcommand:
 
 ## Configuration
 
-**Client config:** `~/.config/bindrop/client-config.toml`
+**Client config:** `~/.config/litehouse/client-config.toml`
 - `base_url` - Server API endpoint
 
 **Server config:** Loaded via `ServerConfig::load()` (see `src/config.rs`)
@@ -199,8 +199,8 @@ Each command module corresponds to a CLI subcommand:
 
 **Environment variables:**
 - `PODMAN_SSH_SOCK`, `PODMAN_SOCK`, `CONTAINER_HOST` - Override socket path
-- `BINDROP_LOCAL_DEV` or `RUST_LOG` - Enable local dev mode
-- `DATABASE_URL` - SQLite database path (default: `~/.local/share/bindrop/bindrop.db`)
+- `LITEHOUSE_LOCAL_DEV` or `RUST_LOG` - Enable local dev mode
+- `DATABASE_URL` - SQLite database path (default: `~/.local/share/litehouse/litehouse.db`)
 
 ## Known Issues & TODOs
 
