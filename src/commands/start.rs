@@ -59,8 +59,8 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .ok_or_else(|| StartError::AppBuildMissing(app_name.to_string()))?;
 
     // Start the app with podman
-    tracing::info!("Running {} for {}", &app.name, &build.image_tag);
-    podman::run(&app.name, &build.image_tag)
+    tracing::info!("Running {} for {} on port {:?}", &app.name, &build.image_tag, app.port);
+    podman::run_with_port(&app.name, &build.image_tag, app.port)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 

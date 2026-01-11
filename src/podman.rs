@@ -99,12 +99,17 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
 
 #[instrument]
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
+    run_with_port(name, image_tag, None).await
+}
+
+#[instrument]
+pub async fn run_with_port(name: &str, image_tag: &str, host_port: Option<i64>) -> Result<()> {
     // Validate input parameters
     if name.trim().is_empty() {
         return Err(PodmanError::BuildError("App name cannot be empty".to_string()).into());
     }
 
-    info!("Running app: {}", name);
+    info!("Running app: {} (host_port: {:?})", name, host_port);
 
     let docker = Docker::connect_with_unix(
         &resolve_podman_socket_path()?,
@@ -171,8 +176,34 @@ pub async fn run(name: &str, image_tag: &str) -> Result<()> {
         }
     }
 
+    // Configure port bindings if host_port is provided
+    // Convention: apps expose port 3000 internally, mapped to host_port
+    let host_config = if let Some(port) = host_port {
+        use bollard::models::{HostConfig, PortBinding};
+        use std::collections::HashMap;
+
+        let mut port_bindings = HashMap::new();
+        port_bindings.insert(
+            "3000/tcp".to_string(),
+            Some(vec![PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some(port.to_string()),
+            }]),
+        );
+
+        info!("Binding container port 3000 to host port {}", port);
+
+        Some(HostConfig {
+            port_bindings: Some(port_bindings),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     let container_config = bollard::container::Config {
         image: Some(image_tag.to_string()),
+        host_config,
         ..Default::default()
     };
 
