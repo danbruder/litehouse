@@ -181,22 +181,37 @@ pub async fn run_with_port(
         }
     }
 
+    // Inspect the image to get exposed ports
+    let image_inspect = docker.inspect_image(image_tag).await?;
+    let exposed_ports = image_inspect
+        .config
+        .and_then(|c| c.exposed_ports)
+        .unwrap_or_default();
+
+    // Get the first exposed port, or default to 3000
+    let container_port = if let Some(port_key) = exposed_ports.keys().next() {
+        port_key.clone()
+    } else {
+        "3000/tcp".to_string()
+    };
+
+    info!("Container exposes port: {}", container_port);
+
     // Configure port bindings if host_port is provided
-    // Convention: apps expose port 3000 internally, mapped to host_port
     let host_config = if let Some(port) = host_port {
         use bollard::models::{HostConfig, PortBinding};
         use std::collections::HashMap;
 
         let mut port_bindings = HashMap::new();
         port_bindings.insert(
-            "3000/tcp".to_string(),
+            container_port.clone(),
             Some(vec![PortBinding {
                 host_ip: Some("0.0.0.0".to_string()),
                 host_port: Some(port.to_string()),
             }]),
         );
 
-        info!("Binding container port 3000 to host port {}", port);
+        info!("Binding container port {} to host port {}", container_port, port);
 
         Some(HostConfig {
             port_bindings: Some(port_bindings),

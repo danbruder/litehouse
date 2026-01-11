@@ -635,7 +635,13 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
                 }
             };
 
-            let upstream = format!("0.0.0.0:{}", port);
+            let upstream = if local_dev {
+                // In local dev, containers can reach host via 0.0.0.0
+                format!("0.0.0.0:{}", port)
+            } else {
+                // In production with containerized Caddy, use host.containers.internal
+                format!("host.containers.internal:{}", port)
+            };
 
             let route = Route {
                 match_rules: vec![HostMatcher { host: vec![host] }],
