@@ -1,4 +1,4 @@
-use crate::models::App;
+use crate::models::{App, EnvVar};
 use anyhow::Result;
 use bollard::Docker;
 use futures_util::{StreamExt, stream::unfold};
@@ -99,11 +99,16 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
 
 #[instrument]
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
-    run_with_port(name, image_tag, None).await
+    run_with_port(name, image_tag, None, vec![]).await
 }
 
 #[instrument]
-pub async fn run_with_port(name: &str, image_tag: &str, host_port: Option<i64>) -> Result<()> {
+pub async fn run_with_port(
+    name: &str,
+    image_tag: &str,
+    host_port: Option<i64>,
+    env_vars: Vec<EnvVar>,
+) -> Result<()> {
     // Validate input parameters
     if name.trim().is_empty() {
         return Err(PodmanError::BuildError("App name cannot be empty".to_string()).into());
@@ -201,9 +206,24 @@ pub async fn run_with_port(name: &str, image_tag: &str, host_port: Option<i64>) 
         None
     };
 
+    // Format environment variables for container
+    let env: Option<Vec<String>> = if env_vars.is_empty() {
+        None
+    } else {
+        Some(
+            env_vars
+                .iter()
+                .map(|ev| format!("{}={}", ev.key, ev.value))
+                .collect()
+        )
+    };
+
+    info!("Container environment: {} variables", env.as_ref().map(|e| e.len()).unwrap_or(0));
+
     let container_config = bollard::container::Config {
         image: Some(image_tag.to_string()),
         host_config,
+        env,
         ..Default::default()
     };
 

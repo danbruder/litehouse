@@ -309,11 +309,14 @@ struct SetEnvRequest {
 }
 
 async fn set_env(
-    State(_state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<ProxyState>>>,
     Path(name): Path<String>,
     Json(payload): Json<SetEnvRequest>,
 ) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
     match app_env::set_env(
+        &pool,
         &name,
         &payload.key,
         &payload.value,

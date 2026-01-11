@@ -32,5 +32,9 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         return Err(DeleteError::AppRunning(app_name.to_string()));
     }
 
+    // Delete environment variables
+    tracing::info!("Deleting environment variables for app {}", app.id);
+    db::env_var::delete_by_app(pool, &app.id).await?;
+
     todo!("Teardown");
 }

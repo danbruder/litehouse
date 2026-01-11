@@ -58,9 +58,17 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .await?
         .ok_or_else(|| StartError::AppBuildMissing(app_name.to_string()))?;
 
+    // Load environment variables
+    tracing::info!("Loading environment variables for app {}", app.id);
+    let env_vars = db::env_var::get_by_app(pool, &app.id)
+        .await
+        .map_err(|e| StartError::DatabaseError(e.to_string()))?;
+
+    tracing::info!("Found {} environment variables", env_vars.len());
+
     // Start the app with podman
     tracing::info!("Running {} for {} on port {:?}", &app.name, &build.image_tag, app.port);
-    podman::run_with_port(&app.name, &build.image_tag, app.port)
+    podman::run_with_port(&app.name, &build.image_tag, app.port, env_vars)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 

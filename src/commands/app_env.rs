@@ -1,34 +1,43 @@
-use anyhow::Result;
-use tracing::instrument;
+use anyhow::Result as AnyhowResult;
+use sqlx::{Pool, Sqlite};
+use tracing::{info, instrument};
 
-#[instrument]
-pub async fn set_env(app_name: &str, key: &str, val: &str, delete: bool) -> Result<()> {
-    /*
-    // Connect to database
-    let pool = db::init_pool().await?;
+use crate::db;
+use crate::models::EnvVar;
 
+#[derive(Debug, thiserror::Error)]
+pub enum AppEnvError {
+    #[error("App not found: {0}")]
+    AppNotFound(String),
+    #[error("Database error: {0}")]
+    DatabaseError(#[from] crate::db::DatabaseError),
+}
+
+type Result<T> = AnyhowResult<T, AppEnvError>;
+
+#[instrument(skip(pool))]
+pub async fn set_env(
+    pool: &Pool<Sqlite>,
+    app_name: &str,
+    key: &str,
+    val: &str,
+    delete: bool,
+) -> Result<()> {
     // Get app
-    let mut app = db::apps::get_by_name(&pool, app_name)
+    let app = db::app::get_by_name(pool, app_name)
         .await?
-        .ok_or_else(|| anyhow!("App '{}' not found", app_name))?;
+        .ok_or_else(|| AppEnvError::AppNotFound(app_name.to_string()))?;
 
     if delete {
-        // Delete the environment variable
-        app.environment.remove(key);
-        info!("Deleted ENV var {} for app '{}'", key, app_name);
+        // Delete environment variable
+        db::env_var::delete_by_key(pool, &app.id, key).await?;
+        info!("Deleted ENV var '{}' for app '{}'", key, app_name);
     } else {
-        // Set the environment variable
-        app.environment.insert(key.to_string(), val.to_string());
-        info!("Set ENV var {} for app '{}'", key, app_name);
+        // Create and save environment variable
+        let env_var = EnvVar::new(&app.id, key, val);
+        db::env_var::save(pool, &env_var).await?;
+        info!("Set ENV var '{}' for app '{}'", key, app_name);
     }
-    app.updated_at = Utc::now();
-
-    // Save app to database
-    db::apps::save(&pool, &app).await?;
-
-    println!("Restart app '{}' to apply changes", app_name);
 
     Ok(())
-    */
-    panic!("todo");
 }

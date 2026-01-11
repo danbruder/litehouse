@@ -4,6 +4,7 @@ use tracing::{debug, info, instrument};
 
 pub mod app;
 pub mod build;
+pub mod env_var;
 pub mod remote;
 pub mod state_change;
 
