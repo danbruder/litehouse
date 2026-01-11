@@ -472,6 +472,8 @@ async fn create_and_start_container(
                 format!("{}:/data", caddy_data_volume),
                 format!("{}:/config", caddy_config_volume),
             ]),
+            // Enable access to host network for proxying to apps and litehouse API
+            extra_hosts: Some(vec!["host.containers.internal:host-gateway".to_string()]),
             ..Default::default()
         }),
         ..Default::default()
