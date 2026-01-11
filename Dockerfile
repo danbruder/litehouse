@@ -46,7 +46,7 @@ WORKDIR /opt/litehouse
 # Run as litehouse user
 USER litehouse
 
-# Expose API port
+# Expose API port (3030 only - Caddy handles 80/443)
 EXPOSE 3030
 
 # Default command
