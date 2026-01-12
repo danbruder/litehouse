@@ -7,6 +7,9 @@ use crate::commands::remote;
 use crate::commands::server::ProxyState;
 use crate::commands::{start, stop};
 use crate::db;
+use crate::db::system_config as db_system_config;
+use crate::litestream;
+use crate::models::{S3Config, S3ConfigRedacted, SystemConfig};
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
@@ -39,6 +42,9 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
         .route("/apps/:name/remote", post(add_remote))
         .route("/apps/:name/remote", delete(remove_remote))
         .route("/apps/:name/build", post(build_app))
+        .route("/config/s3", post(set_s3_config))
+        .route("/config/s3", get(get_s3_config))
+        .route("/config/s3", delete(delete_s3_config))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
         .with_state(state)
 }
@@ -398,6 +404,109 @@ async fn build_app(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to build app: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SetS3ConfigRequest {
+    access_key_id: String,
+    secret_access_key: String,
+    bucket: String,
+    region: String,
+    endpoint: Option<String>,
+    path_prefix: Option<String>,
+}
+
+#[instrument(skip(state))]
+async fn set_s3_config(
+    State(state): State<Arc<RwLock<ProxyState>>>,
+    Json(payload): Json<SetS3ConfigRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    // Create S3 config
+    let s3_config = S3Config {
+        access_key_id: payload.access_key_id,
+        secret_access_key: payload.secret_access_key,
+        bucket: payload.bucket,
+        region: payload.region,
+        endpoint: payload.endpoint,
+        path_prefix: payload.path_prefix,
+    };
+
+    // Create system config
+    let system_config = SystemConfig::new_s3_config(&s3_config);
+
+    // Save to database
+    match db_system_config::save_s3_config(&pool, &system_config).await {
+        Ok(_) => {
+            // Sync Litestream configuration to apply new S3 settings
+            match litestream::sync_configuration(&docker, &pool).await {
+                Ok(_) => (
+                    StatusCode::OK,
+                    "S3 configuration saved and Litestream updated successfully",
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("S3 config saved but failed to update Litestream: {}", e),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save S3 config: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[instrument(skip(state))]
+async fn get_s3_config(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db_system_config::get_s3_config(&pool).await {
+        Ok(Some(config)) => {
+            let redacted = S3ConfigRedacted::from(&config);
+            Json(redacted).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "No S3 configuration found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to get S3 config: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[instrument(skip(state))]
+async fn delete_s3_config(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    match db_system_config::delete_s3_config(&pool).await {
+        Ok(_) => {
+            // Sync Litestream configuration to remove S3 settings
+            match litestream::sync_configuration(&docker, &pool).await {
+                Ok(_) => (
+                    StatusCode::OK,
+                    "S3 configuration deleted and Litestream updated successfully",
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("S3 config deleted but failed to update Litestream: {}", e),
+                )
+                    .into_response(),
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to delete S3 config: {}", e),
         )
             .into_response(),
     }
