@@ -247,10 +247,11 @@ podman run -d \
   --name litehouse-server \
   --restart=always \
   --replace \
+  --userns=keep-id \
   -p 3030:3030 \
-  -v /opt/litehouse/config:/opt/litehouse/config:Z \
-  -v /opt/litehouse/data:/opt/litehouse/data:Z \
-  -v /run/user/{}/podman/podman.sock:/run/podman/podman.sock:Z \
+  -v /opt/litehouse/config:/opt/litehouse/config \
+  -v /opt/litehouse/data:/opt/litehouse/data \
+  -v /run/user/{}/podman/podman.sock:/run/podman/podman.sock \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
   -e PODMAN_SOCK=/run/podman/podman.sock \
