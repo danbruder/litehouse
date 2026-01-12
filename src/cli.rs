@@ -113,7 +113,11 @@ enum Commands {
     /// Start the BinaryDrop server
     Serve,
 
-    Config,
+    /// Configuration management
+    Config {
+        #[command(subcommand)]
+        command: Option<ConfigCmd>,
+    },
 
     Podman(PodmanArgs),
 
@@ -148,6 +152,49 @@ enum RemoteCmd {
     },
     /// Remove a remote
     Remove ,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Configure S3 backup settings
+    S3 {
+        #[command(subcommand)]
+        command: S3Cmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum S3Cmd {
+    /// Set S3 backup configuration
+    Set {
+        /// S3 Access Key ID
+        #[arg(long)]
+        access_key_id: String,
+
+        /// S3 Secret Access Key
+        #[arg(long)]
+        secret_access_key: String,
+
+        /// S3 Bucket name
+        #[arg(long)]
+        bucket: String,
+
+        /// S3 Region (e.g., us-east-1)
+        #[arg(long)]
+        region: String,
+
+        /// S3 Endpoint URL (optional, for S3-compatible services)
+        #[arg(long)]
+        endpoint: Option<String>,
+
+        /// S3 Path prefix (optional, defaults to 'litehouse')
+        #[arg(long)]
+        path_prefix: Option<String>,
+    },
+    /// Get current S3 backup configuration
+    Get,
+    /// Delete S3 backup configuration
+    Delete,
 }
 
 #[tracing::instrument]
@@ -202,14 +249,42 @@ pub async fn run() -> Result<()> {
             let config = ServerConfig::load()?;
             server::execute(config).await
         }
-        Commands::Config => {
-            let client_config = ClientConfig::load()?;
-            let client_config_path = ClientConfig::get_config_path()?;
+        Commands::Config { command } => {
+            match command {
+                Some(ConfigCmd::S3 { command }) => match command {
+                    S3Cmd::Set {
+                        access_key_id,
+                        secret_access_key,
+                        bucket,
+                        region,
+                        endpoint,
+                        path_prefix,
+                    } => {
+                        api_client
+                            .set_s3_config(
+                                &access_key_id,
+                                &secret_access_key,
+                                &bucket,
+                                &region,
+                                endpoint.as_deref(),
+                                path_prefix.as_deref(),
+                            )
+                            .await
+                    }
+                    S3Cmd::Get => api_client.get_s3_config().await,
+                    S3Cmd::Delete => api_client.delete_s3_config().await,
+                },
+                None => {
+                    // Default behavior: show client config
+                    let client_config = ClientConfig::load()?;
+                    let client_config_path = ClientConfig::get_config_path()?;
 
-            println!("Client config: {}", client_config_path.display());
-            println!("{}", toml::to_string(&client_config)?);
+                    println!("Client config: {}", client_config_path.display());
+                    println!("{}", toml::to_string(&client_config)?);
 
-            Ok(())
+                    Ok(())
+                }
+            }
         }
         Commands::Podman(args) => match args.command {
             PodmanCmd::Version => api_client.get_podman_version().await,

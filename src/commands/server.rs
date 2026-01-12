@@ -40,13 +40,13 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         // Don't fail startup if Caddy sync fails
     }
 
-    // Start Litestream backup container
-    if let Err(e) = litestream::start(&docker).await {
+    // Start Litestream backup container with S3 config from database
+    if let Err(e) = litestream::start_with_pool(&docker, &pool).await {
         tracing::warn!("Failed to start Litestream backup container: {}", e);
         // Don't fail startup if Litestream fails
     }
 
-    // Sync Litestream configuration with existing apps
+    // Sync Litestream configuration with existing apps and S3 config
     if let Err(e) = litestream::sync_configuration(&docker, &pool).await {
         tracing::warn!("Failed to sync Litestream configuration on startup: {}", e);
         // Don't fail startup if Litestream sync fails

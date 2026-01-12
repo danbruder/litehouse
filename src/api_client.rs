@@ -270,4 +270,74 @@ impl ApiClient {
             Err(anyhow!("Failed to build app: {}", error))
         }
     }
+
+    pub async fn set_s3_config(
+        &self,
+        access_key_id: &str,
+        secret_access_key: &str,
+        bucket: &str,
+        region: &str,
+        endpoint: Option<&str>,
+        path_prefix: Option<&str>,
+    ) -> Result<()> {
+        let response = self
+            .client
+            .post(&format!("{}/config/s3", self.config.base_url))
+            .json(&serde_json::json!({
+                "access_key_id": access_key_id,
+                "secret_access_key": secret_access_key,
+                "bucket": bucket,
+                "region": region,
+                "endpoint": endpoint,
+                "path_prefix": path_prefix,
+            }))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            println!("S3 configuration saved successfully");
+            println!("Litestream will now back up all databases to S3 bucket: {}", bucket);
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to set S3 config: {}", error))
+        }
+    }
+
+    pub async fn get_s3_config(&self) -> Result<()> {
+        let response = self
+            .client
+            .get(&format!("{}/config/s3", self.config.base_url))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let config: serde_json::Value = response.json().await?;
+            println!("Current S3 Configuration:");
+            println!("{}", serde_json::to_string_pretty(&config)?);
+            Ok(())
+        } else if response.status().as_u16() == 404 {
+            println!("No S3 configuration found");
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to get S3 config: {}", error))
+        }
+    }
+
+    pub async fn delete_s3_config(&self) -> Result<()> {
+        let response = self
+            .client
+            .delete(&format!("{}/config/s3", self.config.base_url))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            println!("S3 configuration deleted successfully");
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to delete S3 config: {}", error))
+        }
+    }
 }

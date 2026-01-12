@@ -1,5 +1,7 @@
 use crate::config;
 use crate::db::app as db_app;
+use crate::db::system_config as db_system_config;
+use crate::models::S3Config;
 use anyhow::Result;
 use bollard::container::Config;
 use bollard::models::{HostConfig, RestartPolicy, RestartPolicyNameEnum};
@@ -40,12 +42,18 @@ struct ReplicaConfig {
 }
 
 /// Start the Litestream backup container
+/// This function should be called with a database pool to fetch S3 config
 #[instrument]
-pub async fn start(docker: &Docker) -> Result<()> {
+pub async fn start_with_pool(docker: &Docker, db_pool: &Pool<Sqlite>) -> Result<()> {
     info!("Ensuring Litestream backup container is running");
 
     let container_name = "litestream-container";
     let image_name = "litestream/litestream";
+
+    // Get S3 config from database
+    let s3_config = db_system_config::get_s3_config(db_pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch S3 config: {}", e))?;
 
     // Step 1: Ensure image exists
     ensure_image_exists(docker, image_name).await?;
@@ -56,7 +64,7 @@ pub async fn start(docker: &Docker) -> Result<()> {
     match container_state {
         ContainerState::NotExists => {
             info!("Container doesn't exist, creating new one");
-            create_and_start_container(docker, container_name, image_name).await?;
+            create_and_start_container(docker, container_name, image_name, s3_config.as_ref()).await?;
         }
         ContainerState::Running { id: _ } => {
             info!("Container is already running");
@@ -72,7 +80,53 @@ pub async fn start(docker: &Docker) -> Result<()> {
         ContainerState::Error { id } | ContainerState::Exited { id } => {
             info!("Container is in error/exited state, removing and recreating");
             remove_container(docker, &id).await?;
-            create_and_start_container(docker, container_name, image_name).await?;
+            create_and_start_container(docker, container_name, image_name, s3_config.as_ref()).await?;
+        }
+        ContainerState::Restarting { id } => {
+            info!("Container is restarting, waiting for it to stabilize");
+            wait_for_container_stable(docker, &id).await?;
+        }
+    }
+
+    info!("Litestream backup container is now running successfully");
+    Ok(())
+}
+
+/// Legacy start function without database pool (for backwards compatibility)
+/// This will start Litestream without S3 configuration
+#[instrument]
+pub async fn start(docker: &Docker) -> Result<()> {
+    info!("Starting Litestream backup container without S3 config");
+
+    let container_name = "litestream-container";
+    let image_name = "litestream/litestream";
+
+    // Step 1: Ensure image exists
+    ensure_image_exists(docker, image_name).await?;
+
+    // Step 2: Handle container state
+    let container_state = get_container_state(docker, container_name).await?;
+
+    match container_state {
+        ContainerState::NotExists => {
+            info!("Container doesn't exist, creating new one");
+            create_and_start_container(docker, container_name, image_name, None).await?;
+        }
+        ContainerState::Running { id: _ } => {
+            info!("Container is already running");
+        }
+        ContainerState::Stopped { id } => {
+            info!("Container is stopped, starting it");
+            start_existing_container(docker, &id).await?;
+        }
+        ContainerState::Paused { id } => {
+            info!("Container is paused, unpausing");
+            docker.unpause_container(&id).await?;
+        }
+        ContainerState::Error { id } | ContainerState::Exited { id } => {
+            info!("Container is in error/exited state, removing and recreating");
+            remove_container(docker, &id).await?;
+            create_and_start_container(docker, container_name, image_name, None).await?;
         }
         ContainerState::Restarting { id } => {
             info!("Container is restarting, waiting for it to stabilize");
@@ -94,25 +148,34 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
         .await
         .map_err(|e| anyhow::anyhow!("Failed to fetch apps: {}", e))?;
 
+    // Get S3 config from database
+    let s3_config = db_system_config::get_s3_config(db_pool)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch S3 config: {}", e))?;
+
     // Generate configuration
-    let config = generate_config(&apps)?;
+    let config = generate_config(&apps, s3_config.as_ref())?;
 
     // Write config to file
     write_config_file(&config)?;
 
     info!("Litestream configuration synced for {} app(s)", apps.len());
 
-    // Restart Litestream container to reload config
+    // Restart Litestream container to reload config with new S3 settings
     let container_name = "litestream-container";
     if let ContainerState::Running { id } = get_container_state(docker, container_name).await? {
         info!("Restarting Litestream container to reload configuration");
-        docker.restart_container(&id, None).await?;
+
+        // Remove the old container and recreate with updated environment variables
+        remove_container(docker, &id).await?;
+        let image_name = "litestream/litestream";
+        create_and_start_container(docker, container_name, image_name, s3_config.as_ref()).await?;
     }
 
     Ok(())
 }
 
-fn generate_config(apps: &[crate::models::App]) -> Result<LitestreamConfig> {
+fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) -> Result<LitestreamConfig> {
     let data_dir = config::get_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get data directory: {}", e))?;
 
@@ -124,21 +187,73 @@ fn generate_config(apps: &[crate::models::App]) -> Result<LitestreamConfig> {
 
     let mut dbs = Vec::new();
 
+    // Add main litehouse database (mounted from config directory)
+    let main_db_path = "/config/litehouse.db";
+    let main_replica_path = "/data/litestream-replicas/main";
+
+    let mut main_replicas = vec![ReplicaConfig {
+        path: Some(main_replica_path.to_string()),
+        url: None,
+    }];
+
+    // Add S3 replica for main database if configured
+    if let Some(s3) = s3_config {
+        let path_prefix = s3.path_prefix.as_deref().unwrap_or("litehouse");
+        let s3_url = build_s3_url(s3, &format!("{}/main/db", path_prefix));
+        main_replicas.push(ReplicaConfig {
+            path: None,
+            url: Some(s3_url),
+        });
+    }
+
+    dbs.push(DatabaseConfig {
+        path: main_db_path.to_string(),
+        replicas: main_replicas,
+    });
+
+    // Add app databases
     for app in apps {
         // Database path inside the container
         let db_path = format!("/data/apps/{}/data/app.db", app.name);
         let replica_path = format!("/data/litestream-replicas/{}", app.name);
 
+        let mut replicas = vec![ReplicaConfig {
+            path: Some(replica_path),
+            url: None,
+        }];
+
+        // Add S3 replica if configured
+        if let Some(s3) = s3_config {
+            let path_prefix = s3.path_prefix.as_deref().unwrap_or("litehouse");
+            let s3_url = build_s3_url(s3, &format!("{}/{}/db", path_prefix, app.name));
+            replicas.push(ReplicaConfig {
+                path: None,
+                url: Some(s3_url),
+            });
+        }
+
         dbs.push(DatabaseConfig {
             path: db_path,
-            replicas: vec![ReplicaConfig {
-                path: Some(replica_path),
-                url: None,
-            }],
+            replicas,
         });
     }
 
     Ok(LitestreamConfig { dbs })
+}
+
+/// Build S3 URL for Litestream replica
+fn build_s3_url(s3_config: &S3Config, path: &str) -> String {
+    if let Some(endpoint) = &s3_config.endpoint {
+        // S3-compatible service with custom endpoint
+        format!("s3://{}:{}@{}/{}",
+            s3_config.access_key_id,
+            s3_config.secret_access_key,
+            endpoint,
+            path)
+    } else {
+        // Standard AWS S3
+        format!("s3://{}/{}", s3_config.bucket, path)
+    }
 }
 
 fn write_config_file(config: &LitestreamConfig) -> Result<()> {
@@ -249,17 +364,39 @@ async fn create_and_start_container(
     docker: &Docker,
     container_name: &str,
     image_name: &str,
+    s3_config: Option<&S3Config>,
 ) -> Result<()> {
     info!("Creating new Litestream container: {}", container_name);
 
     let data_dir = config::get_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get data directory: {}", e))?;
 
+    let config_dir = config::get_config_dir()
+        .map_err(|e| anyhow::anyhow!("Failed to get config directory: {}", e))?;
+
     let config_file_path = data_dir.join("litestream.yml");
 
     // Create empty config if it doesn't exist
     if !config_file_path.exists() {
         write_config_file(&LitestreamConfig { dbs: vec![] })?;
+    }
+
+    // Prepare environment variables for S3 configuration
+    let mut env_vars = Vec::new();
+    if let Some(s3) = s3_config {
+        env_vars.push(format!("LITESTREAM_ACCESS_KEY_ID={}", s3.access_key_id));
+        env_vars.push(format!("LITESTREAM_SECRET_ACCESS_KEY={}", s3.secret_access_key));
+
+        // AWS credentials (some apps might check these)
+        env_vars.push(format!("AWS_ACCESS_KEY_ID={}", s3.access_key_id));
+        env_vars.push(format!("AWS_SECRET_ACCESS_KEY={}", s3.secret_access_key));
+        env_vars.push(format!("AWS_REGION={}", s3.region));
+
+        if let Some(endpoint) = &s3.endpoint {
+            env_vars.push(format!("AWS_ENDPOINT_URL={}", endpoint));
+        }
+
+        info!("Configuring Litestream with S3 backup to bucket: {}", s3.bucket);
     }
 
     let container_config = Config {
@@ -270,6 +407,7 @@ async fn create_and_start_container(
             "-config".to_string(),
             "/etc/litestream.yml".to_string(),
         ]),
+        env: if env_vars.is_empty() { None } else { Some(env_vars) },
         host_config: Some(HostConfig {
             restart_policy: Some(RestartPolicy {
                 name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
@@ -277,6 +415,7 @@ async fn create_and_start_container(
             }),
             binds: Some(vec![
                 format!("{}:/data", data_dir.display()),
+                format!("{}:/config", config_dir.display()),
                 format!("{}:/etc/litestream.yml", config_file_path.display()),
             ]),
             ..Default::default()

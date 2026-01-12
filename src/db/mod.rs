@@ -7,6 +7,7 @@ pub mod build;
 pub mod env_var;
 pub mod remote;
 pub mod state_change;
+pub mod system_config;
 
 use crate::config;
 use crate::models::{parse_app_state, App, AppState, StateChange};
