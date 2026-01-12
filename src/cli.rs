@@ -200,13 +200,21 @@ enum S3Cmd {
 #[tracing::instrument]
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
-    let config = ClientConfig::load()?;
-    let api_client = ApiClient::new(config);
 
     match cli.command {
         Commands::Init { ssh_target, domain } => {
             crate::commands::init::execute(&ssh_target, &domain).await
         }
+        Commands::Serve => {
+            let config = ServerConfig::load()?;
+            server::execute(config).await
+        }
+        _ => {
+            // For all other commands, load client config and use API client
+            let config = ClientConfig::load()?;
+            let api_client = ApiClient::new(config);
+
+            match cli.command {
         Commands::Create { app_name } => api_client.create_app(&app_name).await,
         Commands::Start { app_name } => api_client.start_app(&app_name).await,
         Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
@@ -244,10 +252,6 @@ pub async fn run() -> Result<()> {
                 }
             }
             Ok(())
-        }
-        Commands::Serve => {
-            let config = ServerConfig::load()?;
-            server::execute(config).await
         }
         Commands::Config { command } => {
             match command {
@@ -302,5 +306,8 @@ pub async fn run() -> Result<()> {
             RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
         },
         Commands::Build { app_name } => api_client.build(&app_name).await,
+        Commands::Init { .. } | Commands::Serve => unreachable!("Already handled above"),
+            }
+        }
     }
 }

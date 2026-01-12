@@ -243,9 +243,8 @@ impl ServerConfig {
         tracing::info!("Loading server config from {}", config_path.display());
 
         if !config_path.exists() {
-            let config = Self::default();
-            config.save()?;
-            return Ok(config);
+            tracing::info!("Server config file not found, using defaults");
+            return Ok(Self::default());
         }
 
         let contents = fs::read_to_string(config_path)

@@ -32,6 +32,13 @@ type Result<T> = anyhow::Result<T, DatabaseError>;
 
 /// Get the database file path
 pub fn get_db_path() -> Result<PathBuf> {
+    // First check if DATABASE_URL environment variable is set
+    if let Ok(db_url) = std::env::var("DATABASE_URL") {
+        info!("Using database path from DATABASE_URL: {}", db_url);
+        return Ok(PathBuf::from(db_url));
+    }
+
+    // Fall back to default config directory path
     let config_dir = config::get_config_dir()?;
     let db_path = config_dir.join("litehouse.db");
     Ok(db_path)

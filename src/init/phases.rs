@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use tracing::{info, instrument};
 use indicatif::ProgressBar;
+use tracing::{info, instrument};
 
 use super::ssh::{
     execute_remote, execute_remote_with_log, has_sudo_access, test_ssh_connection, upload_content,
@@ -22,20 +22,12 @@ pub fn phase1_validation(ssh_target: &str, domain: &str) -> Result<()> {
         .context("Failed to establish SSH connection. Please check your SSH keys and network.")?;
 
     // Check if SSH is available locally
-    if !std::process::Command::new("ssh")
-        .arg("-V")
-        .output()
-        .is_ok()
-    {
+    if !std::process::Command::new("ssh").arg("-V").output().is_ok() {
         anyhow::bail!("SSH command not found. Please install OpenSSH client.");
     }
 
     // Check if SCP is available locally
-    if !std::process::Command::new("scp")
-        .arg("-h")
-        .output()
-        .is_ok()
-    {
+    if !std::process::Command::new("scp").arg("-h").output().is_ok() {
         anyhow::bail!("SCP command not found. Please install OpenSSH client.");
     }
 
@@ -115,7 +107,10 @@ pub fn phase4_user_setup(ssh_target: &str, log_window: Option<&ProgressBar>) -> 
 
 /// Phase 5: Podman Configuration
 #[instrument(skip(log_window))]
-pub fn phase5_podman_configuration(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<String> {
+pub fn phase5_podman_configuration(
+    ssh_target: &str,
+    log_window: Option<&ProgressBar>,
+) -> Result<String> {
     info!("Phase 5: Podman Configuration");
 
     let script = templates::podman_setup_script();
@@ -146,7 +141,10 @@ pub fn phase5_podman_configuration(ssh_target: &str, log_window: Option<&Progres
 
 /// Phase 6: Container Image Pull
 #[instrument(skip(log_window))]
-pub fn phase6_container_image_pull(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
+pub fn phase6_container_image_pull(
+    ssh_target: &str,
+    log_window: Option<&ProgressBar>,
+) -> Result<()> {
     info!("Phase 6: Container Image Pull");
 
     // Get litehouse UID from remote system
@@ -174,8 +172,14 @@ pub fn phase7_server_configuration(ssh_target: &str, domain: &str) -> Result<()>
 
     // Upload server config
     upload_content(ssh_target, &config_content, "/tmp/server-config.toml")?;
-    execute_remote(ssh_target, "sudo mv /tmp/server-config.toml /opt/litehouse/config/server-config.toml")?;
-    execute_remote(ssh_target, "sudo chown litehouse:litehouse /opt/litehouse/config/server-config.toml")?;
+    execute_remote(
+        ssh_target,
+        "sudo mv /tmp/server-config.toml /opt/litehouse/config/server-config.toml",
+    )?;
+    execute_remote(
+        ssh_target,
+        "sudo chown litehouse:litehouse /opt/litehouse/config/server-config.toml",
+    )?;
 
     info!("Phase 7 completed successfully");
     Ok(())
@@ -190,11 +194,17 @@ pub fn phase8_log_rotation(ssh_target: &str) -> Result<()> {
 
     // Create log directory
     execute_remote(ssh_target, "sudo mkdir -p /var/log/litehouse")?;
-    execute_remote(ssh_target, "sudo chown litehouse:litehouse /var/log/litehouse")?;
+    execute_remote(
+        ssh_target,
+        "sudo chown litehouse:litehouse /var/log/litehouse",
+    )?;
 
     // Upload logrotate config
     upload_content(ssh_target, logrotate_content, "/tmp/litehouse")?;
-    execute_remote(ssh_target, "sudo mv /tmp/litehouse /etc/logrotate.d/litehouse")?;
+    execute_remote(
+        ssh_target,
+        "sudo mv /tmp/litehouse /etc/logrotate.d/litehouse",
+    )?;
     execute_remote(ssh_target, "sudo chmod 644 /etc/logrotate.d/litehouse")?;
 
     info!("Phase 8 completed successfully");
@@ -236,6 +246,7 @@ export PODMAN_SOCK=/run/user/{}/podman/podman.sock
 podman run -d \
   --name litehouse-server \
   --restart=always \
+  --replace \
   -p 3030:3030 \
   -v /opt/litehouse/config:/opt/litehouse/config:Z \
   -v /opt/litehouse/data:/opt/litehouse/data:Z \
@@ -249,7 +260,12 @@ podman run -d \
         litehouse_uid, litehouse_uid, litehouse_uid
     );
 
-    execute_remote(ssh_target, &start_command)?;
+    let run_result = execute_remote(ssh_target, &start_command);
+
+    // Check if the run command itself failed
+    if let Err(e) = run_result {
+        anyhow::bail!("Failed to start container: {}", e);
+    }
 
     // Wait a moment for container to start
     std::thread::sleep(std::time::Duration::from_secs(2));
@@ -264,7 +280,21 @@ podman run -d \
     )?;
 
     if !ps_output.contains("Up") {
-        anyhow::bail!("litehouse-server container is not running");
+        // Container is not running - get the logs to understand why
+        let logs_result = execute_remote(
+            ssh_target,
+            &format!(
+                "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman logs litehouse-server 2>&1 | tail -50'",
+                litehouse_uid
+            ),
+        );
+
+        let logs = logs_result.unwrap_or_else(|_| "Could not retrieve container logs".to_string());
+
+        anyhow::bail!(
+            "litehouse-server container is not running. Container logs:\n{}",
+            logs
+        );
     }
 
     info!("litehouse-server container started successfully");
@@ -332,7 +362,10 @@ pub fn phase12_verification(domain: &str) -> Result<()> {
 
         retries += 1;
         if retries < max_retries {
-            info!("API not ready yet, retrying... ({}/{})", retries, max_retries);
+            info!(
+                "API not ready yet, retrying... ({}/{})",
+                retries, max_retries
+            );
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     }
