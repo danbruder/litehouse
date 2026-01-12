@@ -82,16 +82,16 @@ echo "Creating litehouse group and user..."
 
 # Create group if it doesn't exist
 if ! getent group litehouse > /dev/null 2>&1; then
-    groupadd litehouse
-    echo "Created litehouse group"
+    groupadd -g 1000 litehouse
+    echo "Created litehouse group with GID 1000"
 else
     echo "Group litehouse already exists"
 fi
 
 # Create user if it doesn't exist
 if ! id -u litehouse > /dev/null 2>&1; then
-    useradd -r -m -d /opt/litehouse -s /bin/bash -g litehouse litehouse
-    echo "Created litehouse user"
+    useradd -r -m -d /opt/litehouse -s /bin/bash -g litehouse -u 1000 litehouse
+    echo "Created litehouse user with UID 1000"
 else
     echo "User litehouse already exists"
 fi
