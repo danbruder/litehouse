@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO system_config (\n            id, config_type, s3_access_key_id, s3_secret_access_key,\n            s3_bucket, s3_region, s3_endpoint, s3_path_prefix,\n            created_at, updated_at\n        )\n        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "9b3e6e9f290a20d72a3523607535e211a5d972e6bc09223a4e509bbce0b1e1b0"
+}

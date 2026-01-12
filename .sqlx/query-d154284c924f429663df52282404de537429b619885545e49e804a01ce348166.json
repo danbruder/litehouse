@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM system_config WHERE config_type = 's3_backup'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "d154284c924f429663df52282404de537429b619885545e49e804a01ce348166"
+}
