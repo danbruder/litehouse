@@ -18,7 +18,7 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     let multi = MultiProgress::new();
 
     // Create progress bar for phases (pinned at top)
-    let pb = multi.add(ProgressBar::new(11));
+    let pb = multi.add(ProgressBar::new(12));
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}: {msg}")
@@ -77,8 +77,8 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     // Phase 5: Podman Configuration
     pb.set_message("Configuring Podman (rootless mode, socket)...");
     log_window.set_message("Starting Podman configuration...");
-    let litehouse_uid = match phase5_podman_configuration(ssh_target, Some(&log_window)) {
-        Ok(uid) => uid,
+    match phase5_podman_configuration(ssh_target, Some(&log_window)) {
+        Ok(_uid) => {},
         Err(e) => {
             pb.finish_with_message("❌ Podman configuration failed");
             error!("Phase 5 failed: {}", e);
@@ -87,30 +87,21 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     };
     pb.inc(1);
 
-    // Phase 6: Systemd Service
-    pb.set_message("Setting up systemd service...");
-    if let Err(e) = phase6_systemd_service(ssh_target, &litehouse_uid) {
-        pb.finish_with_message("❌ Systemd service setup failed");
+    // Phase 6: Container Image Pull
+    pb.set_message("Pulling litehouse server container image...");
+    log_window.set_message("Starting container image pull...");
+    if let Err(e) = phase6_container_image_pull(ssh_target, Some(&log_window)) {
+        pb.finish_with_message("❌ Container image pull failed");
         error!("Phase 6 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 7: Container Image Pull
-    pb.set_message("Pulling litehouse server container image...");
-    log_window.set_message("Starting container image pull...");
-    if let Err(e) = phase7_binary_deployment(ssh_target, Some(&log_window)) {
-        pb.finish_with_message("❌ Container image pull failed");
-        error!("Phase 7 failed: {}", e);
-        return Err(e);
-    }
-    pb.inc(1);
-
-    // Phase 7.5: Server Configuration
+    // Phase 7: Server Configuration
     pb.set_message("Creating server configuration...");
-    if let Err(e) = phase7_5_server_configuration(ssh_target, domain) {
+    if let Err(e) = phase7_server_configuration(ssh_target, domain) {
         pb.finish_with_message("❌ Server configuration failed");
-        error!("Phase 7.5 failed: {}", e);
+        error!("Phase 7 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
@@ -124,29 +115,38 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 9: Service Start
-    pb.set_message("Starting litehouse service...");
-    if let Err(e) = phase9_service_start(ssh_target) {
-        pb.finish_with_message("❌ Service start failed");
+    // Phase 9: Start litehouse-server Container
+    pb.set_message("Starting litehouse-server container with restart policy...");
+    if let Err(e) = phase9_start_litehouse_container(ssh_target) {
+        pb.finish_with_message("❌ Container start failed");
         error!("Phase 9 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 10: Client Configuration
-    pb.set_message("Updating local client configuration...");
-    if let Err(e) = phase10_client_configuration(domain) {
-        pb.finish_with_message("❌ Client configuration failed");
+    // Phase 10: Enable podman-restart Service
+    pb.set_message("Enabling podman-restart.service for boot restoration...");
+    if let Err(e) = phase10_enable_podman_restart(ssh_target) {
+        pb.finish_with_message("❌ podman-restart.service setup failed");
         error!("Phase 10 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 11: Verification
-    pb.set_message("Verifying server is responding...");
-    if let Err(e) = phase11_verification(domain) {
-        pb.finish_with_message("❌ Verification failed");
+    // Phase 11: Client Configuration
+    pb.set_message("Updating local client configuration...");
+    if let Err(e) = phase11_client_configuration(domain) {
+        pb.finish_with_message("❌ Client configuration failed");
         error!("Phase 11 failed: {}", e);
+        return Err(e);
+    }
+    pb.inc(1);
+
+    // Phase 12: Verification
+    pb.set_message("Verifying server is responding...");
+    if let Err(e) = phase12_verification(domain) {
+        pb.finish_with_message("❌ Verification failed");
+        error!("Phase 12 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
@@ -170,12 +170,12 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     println!("\n  4. View your app at:");
     println!("     http://myapp.{}", domain);
     println!("\nTroubleshooting:");
-    println!("  - Check service status:");
-    println!("    ssh litehouse@{} 'systemctl status litehouse'", host);
     println!("  - View container logs:");
-    println!("    ssh litehouse@{} 'podman logs -f litehouse-server'", host);
+    println!("    ssh {}@{} 'podman logs -f litehouse-server'", user, host);
     println!("  - Check container status:");
-    println!("    ssh litehouse@{} 'podman ps -a | grep litehouse-server'", host);
+    println!("    ssh {}@{} 'podman ps -a'", user, host);
+    println!("  - Restart a container:");
+    println!("    ssh {}@{} 'podman restart litehouse-server'", user, host);
     println!("{}", "=".repeat(60));
 
     Ok(())

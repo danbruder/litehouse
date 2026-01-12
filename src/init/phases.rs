@@ -144,29 +144,10 @@ pub fn phase5_podman_configuration(ssh_target: &str, log_window: Option<&Progres
     Ok(uid)
 }
 
-/// Phase 6: Systemd Service Setup
-#[instrument]
-pub fn phase6_systemd_service(ssh_target: &str, litehouse_uid: &str) -> Result<()> {
-    info!("Phase 6: Systemd Service Setup");
-
-    let service_content = templates::systemd_service_template(litehouse_uid);
-
-    // Upload service file
-    upload_content(ssh_target, &service_content, "/tmp/litehouse.service")?;
-    execute_remote(ssh_target, "sudo mv /tmp/litehouse.service /etc/systemd/system/litehouse.service")?;
-    execute_remote(ssh_target, "sudo chmod 644 /etc/systemd/system/litehouse.service")?;
-
-    // Reload systemd
-    execute_remote(ssh_target, "sudo systemctl daemon-reload")?;
-
-    info!("Phase 6 completed successfully");
-    Ok(())
-}
-
-/// Phase 7: Container Image Pull
+/// Phase 6: Container Image Pull
 #[instrument(skip(log_window))]
-pub fn phase7_binary_deployment(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
-    info!("Phase 7: Container Image Pull");
+pub fn phase6_container_image_pull(ssh_target: &str, log_window: Option<&ProgressBar>) -> Result<()> {
+    info!("Phase 6: Container Image Pull");
 
     // Get litehouse UID from remote system
     let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
@@ -180,14 +161,14 @@ pub fn phase7_binary_deployment(ssh_target: &str, log_window: Option<&ProgressBa
     execute_remote_with_log(ssh_target, "sudo /tmp/pull_container.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/pull_container.sh")?;
 
-    info!("Phase 7 completed successfully");
+    info!("Phase 6 completed successfully");
     Ok(())
 }
 
-/// Phase 7.5: Server Configuration
+/// Phase 7: Server Configuration
 #[instrument]
-pub fn phase7_5_server_configuration(ssh_target: &str, domain: &str) -> Result<()> {
-    info!("Phase 7.5: Server Configuration");
+pub fn phase7_server_configuration(ssh_target: &str, domain: &str) -> Result<()> {
+    info!("Phase 7: Server Configuration");
 
     let config_content = templates::server_config_template(domain);
 
@@ -196,7 +177,7 @@ pub fn phase7_5_server_configuration(ssh_target: &str, domain: &str) -> Result<(
     execute_remote(ssh_target, "sudo mv /tmp/server-config.toml /opt/litehouse/config/server-config.toml")?;
     execute_remote(ssh_target, "sudo chown litehouse:litehouse /opt/litehouse/config/server-config.toml")?;
 
-    info!("Phase 7.5 completed successfully");
+    info!("Phase 7 completed successfully");
     Ok(())
 }
 
@@ -220,42 +201,94 @@ pub fn phase8_log_rotation(ssh_target: &str) -> Result<()> {
     Ok(())
 }
 
-/// Phase 9: Service Start
+/// Phase 9: Start litehouse-server Container
 #[instrument]
-pub fn phase9_service_start(ssh_target: &str) -> Result<()> {
-    info!("Phase 9: Service Start");
+pub fn phase9_start_litehouse_container(ssh_target: &str) -> Result<()> {
+    info!("Phase 9: Start litehouse-server Container");
 
-    // Enable service
-    execute_remote(ssh_target, "sudo systemctl enable litehouse")?;
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
 
-    // Start service
-    execute_remote(ssh_target, "sudo systemctl start litehouse")?;
+    // Stop and remove any existing litehouse-server container
+    let _ = execute_remote(
+        ssh_target,
+        &format!(
+            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman stop -i litehouse-server'",
+            litehouse_uid
+        ),
+    );
+    let _ = execute_remote(
+        ssh_target,
+        &format!(
+            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman rm -i litehouse-server'",
+            litehouse_uid
+        ),
+    );
 
-    // Wait for service to be active
-    let wait_script = templates::wait_for_service_script();
-    upload_content(ssh_target, wait_script, "/tmp/wait_for_service.sh")?;
-    execute_remote(ssh_target, "chmod +x /tmp/wait_for_service.sh")?;
-    execute_remote(ssh_target, "/tmp/wait_for_service.sh litehouse")?;
-    execute_remote(ssh_target, "rm /tmp/wait_for_service.sh")?;
+    // Start litehouse-server container with --restart=always
+    info!("Starting litehouse-server container with restart policy");
+    let start_command = format!(
+        r#"sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{}
+export PODMAN_SOCK=/run/user/{}/podman/podman.sock
 
-    // Check logs for any errors
-    let logs = execute_remote(ssh_target, "sudo journalctl -u litehouse -n 20 --no-pager")?;
-    info!("Recent service logs:\n{}", logs);
+podman run -d \
+  --name litehouse-server \
+  --restart=always \
+  -p 3030:3030 \
+  -v /opt/litehouse/config:/opt/litehouse/config:Z \
+  -v /opt/litehouse/data:/opt/litehouse/data:Z \
+  -v /run/user/{}/podman/podman.sock:/run/podman/podman.sock:Z \
+  -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
+  -e LITEHOUSE_DIR=/opt/litehouse \
+  -e PODMAN_SOCK=/run/podman/podman.sock \
+  -e RUST_LOG=info \
+  ghcr.io/danbruder/litehouse:latest
+'"#,
+        litehouse_uid, litehouse_uid, litehouse_uid
+    );
 
-    // Verify service is running
-    let status = execute_remote(ssh_target, "systemctl is-active litehouse")?;
-    if status.trim() != "active" {
-        anyhow::bail!("Service is not active. Status: {}", status.trim());
+    execute_remote(ssh_target, &start_command)?;
+
+    // Wait a moment for container to start
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify container is running
+    let ps_output = execute_remote(
+        ssh_target,
+        &format!(
+            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=litehouse-server --format {{{{.Status}}}}'",
+            litehouse_uid
+        ),
+    )?;
+
+    if !ps_output.contains("Up") {
+        anyhow::bail!("litehouse-server container is not running");
     }
 
+    info!("litehouse-server container started successfully");
     info!("Phase 9 completed successfully");
     Ok(())
 }
 
-/// Phase 10: Client Configuration
+/// Phase 10: Enable podman-restart Service
 #[instrument]
-pub fn phase10_client_configuration(domain: &str) -> Result<()> {
-    info!("Phase 10: Client Configuration");
+pub fn phase10_enable_podman_restart(ssh_target: &str) -> Result<()> {
+    info!("Phase 10: Enable podman-restart Service");
+
+    // Enable podman-restart.service to restore containers on boot
+    execute_remote(ssh_target, "sudo systemctl enable podman-restart.service")?;
+
+    info!("podman-restart.service enabled - containers will restart on boot");
+    info!("Phase 10 completed successfully");
+    Ok(())
+}
+
+/// Phase 11: Client Configuration
+#[instrument]
+pub fn phase11_client_configuration(domain: &str) -> Result<()> {
+    info!("Phase 11: Client Configuration");
 
     // Load or create client config
     let base_url = format!("http://admin-api.{}", domain);
@@ -264,14 +297,14 @@ pub fn phase10_client_configuration(domain: &str) -> Result<()> {
     client_config.save()?;
 
     info!("Client config updated to: {}", client_config.base_url);
-    info!("Phase 10 completed successfully");
+    info!("Phase 11 completed successfully");
     Ok(())
 }
 
-/// Phase 11: Verification
+/// Phase 12: Verification
 #[instrument]
-pub fn phase11_verification(domain: &str) -> Result<()> {
-    info!("Phase 11: Verification");
+pub fn phase12_verification(domain: &str) -> Result<()> {
+    info!("Phase 12: Verification");
 
     let api_url = format!("http://admin-api.{}/apps", domain);
     info!("Testing API endpoint: {}", api_url);
@@ -286,7 +319,7 @@ pub fn phase11_verification(domain: &str) -> Result<()> {
             Ok(response) => {
                 if response.status().is_success() {
                     info!("API endpoint responding successfully!");
-                    info!("Phase 11 completed successfully");
+                    info!("Phase 12 completed successfully");
                     return Ok(());
                 } else {
                     last_error = format!("HTTP {}", response.status());

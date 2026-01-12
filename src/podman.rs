@@ -198,9 +198,9 @@ pub async fn run_with_port(
 
     info!("Container exposes port: {}", container_port);
 
-    // Configure port bindings and volume binds
+    // Configure port bindings, volume binds, and restart policy
     let host_config = {
-        use bollard::models::{HostConfig, PortBinding};
+        use bollard::models::{HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum};
         use std::collections::HashMap;
 
         let mut config = HostConfig::default();
@@ -229,11 +229,13 @@ pub async fn run_with_port(
             config.binds = Some(volume_binds.clone());
         }
 
-        if config.port_bindings.is_some() || config.binds.is_some() {
-            Some(config)
-        } else {
-            None
-        }
+        // Always set restart policy to ALWAYS
+        config.restart_policy = Some(RestartPolicy {
+            name: Some(RestartPolicyNameEnum::ALWAYS),
+            maximum_retry_count: None,
+        });
+
+        Some(config)
     };
 
     // Format environment variables for container

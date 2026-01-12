@@ -465,7 +465,7 @@ async fn create_and_start_container(
         host_config: Some(HostConfig {
             port_bindings: Some(port_bindings),
             restart_policy: Some(RestartPolicy {
-                name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
+                name: Some(RestartPolicyNameEnum::ALWAYS),
                 maximum_retry_count: None,
             }),
             binds: Some(vec![
