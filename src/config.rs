@@ -173,6 +173,28 @@ pub fn get_app_data_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
     Ok(data_dir)
 }
 
+/// Get the app database path
+#[instrument]
+pub fn get_app_database_path(app_name: &str) -> Result<PathBuf, ConfigError> {
+    let data_dir = get_app_data_dir(app_name)?;
+    Ok(data_dir.join("app.db"))
+}
+
+/// Initialize the SQLite database for an app
+#[instrument]
+pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
+    let db_path = get_app_database_path(app_name)?;
+
+    // Create empty database file if it doesn't exist
+    if !db_path.exists() {
+        fs::File::create(&db_path)
+            .map_err(|e| ConfigError::IoError(format!("Failed to create database file: {}", e)))?;
+        tracing::info!("Created SQLite database for app '{}' at {}", app_name, db_path.display());
+    }
+
+    Ok(())
+}
+
 /// Get the app log file path
 #[instrument]
 pub fn get_app_log_path(app_name: &str) -> Result<PathBuf, ConfigError> {

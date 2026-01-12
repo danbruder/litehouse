@@ -7,5 +7,6 @@ pub mod config;
 pub mod db;
 pub mod git;
 pub mod init;
+pub mod litestream;
 pub mod models;
 pub mod podman;

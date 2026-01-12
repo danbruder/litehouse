@@ -31,7 +31,10 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     let app = App::new(app_name, port)?;
     db::app::save(pool, &app).await?;
 
-    info!("Created app '{}'", app.name);
+    // Initialize SQLite database for the app
+    config::init_app_database(app_name)?;
+
+    info!("Created app '{}' with SQLite database", app.name);
 
     Ok(())
 }
