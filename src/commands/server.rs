@@ -1,4 +1,5 @@
 use crate::caddy;
+use crate::litestream;
 use crate::podman;
 use anyhow::{Context, Result};
 use hyper::body::to_bytes;
@@ -29,12 +30,26 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
     let docker = podman::connect().await?;
+
+    // Start Caddy reverse proxy
     caddy::start(&docker, &config).await?;
 
     // Sync Caddy configuration with existing apps
     if let Err(e) = caddy::sync_configuration(&docker, &pool).await {
         tracing::warn!("Failed to sync Caddy configuration on startup: {}", e);
         // Don't fail startup if Caddy sync fails
+    }
+
+    // Start Litestream backup container
+    if let Err(e) = litestream::start(&docker).await {
+        tracing::warn!("Failed to start Litestream backup container: {}", e);
+        // Don't fail startup if Litestream fails
+    }
+
+    // Sync Litestream configuration with existing apps
+    if let Err(e) = litestream::sync_configuration(&docker, &pool).await {
+        tracing::warn!("Failed to sync Litestream configuration on startup: {}", e);
+        // Don't fail startup if Litestream sync fails
     }
 
     // Create shared state

@@ -3,6 +3,7 @@ use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
 use crate::caddy;
+use crate::config;
 use crate::db;
 use crate::models::AppState;
 use crate::podman;
@@ -66,9 +67,17 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
 
     tracing::info!("Found {} environment variables", env_vars.len());
 
+    // Prepare volume binds for SQLite database
+    let data_dir = config::get_app_data_dir(&app.name)?;
+    let volume_binds = vec![
+        format!("{}:/app/data", data_dir.display())
+    ];
+
+    tracing::info!("Mounting app data directory: {} -> /app/data", data_dir.display());
+
     // Start the app with podman
     tracing::info!("Running {} for {} on port {:?}", &app.name, &build.image_tag, app.port);
-    podman::run_with_port(&app.name, &build.image_tag, app.port, env_vars)
+    podman::run_with_port(&app.name, &build.image_tag, app.port, env_vars, volume_binds)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 

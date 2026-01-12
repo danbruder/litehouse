@@ -99,7 +99,7 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
 
 #[instrument]
 pub async fn run(name: &str, image_tag: &str) -> Result<()> {
-    run_with_port(name, image_tag, None, vec![]).await
+    run_with_port(name, image_tag, None, vec![], vec![]).await
 }
 
 #[instrument]
@@ -108,6 +108,7 @@ pub async fn run_with_port(
     image_tag: &str,
     host_port: Option<i64>,
     env_vars: Vec<EnvVar>,
+    volume_binds: Vec<String>,
 ) -> Result<()> {
     // Validate input parameters
     if name.trim().is_empty() {
@@ -197,28 +198,42 @@ pub async fn run_with_port(
 
     info!("Container exposes port: {}", container_port);
 
-    // Configure port bindings if host_port is provided
-    let host_config = if let Some(port) = host_port {
+    // Configure port bindings and volume binds
+    let host_config = {
         use bollard::models::{HostConfig, PortBinding};
         use std::collections::HashMap;
 
-        let mut port_bindings = HashMap::new();
-        port_bindings.insert(
-            container_port.clone(),
-            Some(vec![PortBinding {
-                host_ip: Some("0.0.0.0".to_string()),
-                host_port: Some(port.to_string()),
-            }]),
-        );
+        let mut config = HostConfig::default();
 
-        info!("Binding container port {} to host port {}", container_port, port);
+        // Add port bindings if host_port is provided
+        if let Some(port) = host_port {
+            let mut port_bindings = HashMap::new();
+            port_bindings.insert(
+                container_port.clone(),
+                Some(vec![PortBinding {
+                    host_ip: Some("0.0.0.0".to_string()),
+                    host_port: Some(port.to_string()),
+                }]),
+            );
 
-        Some(HostConfig {
-            port_bindings: Some(port_bindings),
-            ..Default::default()
-        })
-    } else {
-        None
+            info!("Binding container port {} to host port {}", container_port, port);
+            config.port_bindings = Some(port_bindings);
+        }
+
+        // Add volume binds if provided
+        if !volume_binds.is_empty() {
+            info!("Mounting {} volume(s)", volume_binds.len());
+            for bind in &volume_binds {
+                info!("  - {}", bind);
+            }
+            config.binds = Some(volume_binds.clone());
+        }
+
+        if config.port_bindings.is_some() || config.binds.is_some() {
+            Some(config)
+        } else {
+            None
+        }
     };
 
     // Format environment variables for container
