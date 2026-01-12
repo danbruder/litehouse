@@ -156,7 +156,7 @@ if [ ! -d "$RUNTIME_DIR" ]; then
 fi
 
 # Set proper environment and enable Podman socket as litehouse user
-sudo -u litehouse bash -c "
+cd /tmp && sudo -u litehouse bash -c "
 export XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID}
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${LITEHOUSE_UID}/bus
 
@@ -189,7 +189,7 @@ if [ ! -S "$SOCKET_PATH" ]; then
     echo "Error: Failed to create Podman socket after ${MAX_WAIT} seconds"
     echo "Attempting to debug..."
     ls -la "$RUNTIME_DIR" || echo "Runtime dir doesn't exist"
-    sudo -u litehouse bash -c "XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID} systemctl --user status podman.socket" || echo "Failed to get status"
+    cd /tmp && sudo -u litehouse bash -c "XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID} systemctl --user status podman.socket" || echo "Failed to get status"
     exit 1
 fi
 
@@ -232,7 +232,7 @@ set -e
 echo "Pulling litehouse-server container image..."
 
 # Run as litehouse user with proper environment
-sudo -u litehouse bash -c "
+cd /tmp && sudo -u litehouse bash -c "
 export XDG_RUNTIME_DIR=/run/user/{}
 export PODMAN_SOCK=/run/user/{}/podman/podman.sock
 

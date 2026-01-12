@@ -214,14 +214,14 @@ pub fn phase9_start_litehouse_container(ssh_target: &str) -> Result<()> {
     let _ = execute_remote(
         ssh_target,
         &format!(
-            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman stop -i litehouse-server'",
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman stop -i litehouse-server'",
             litehouse_uid
         ),
     );
     let _ = execute_remote(
         ssh_target,
         &format!(
-            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman rm -i litehouse-server'",
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman rm -i litehouse-server'",
             litehouse_uid
         ),
     );
@@ -229,7 +229,7 @@ pub fn phase9_start_litehouse_container(ssh_target: &str) -> Result<()> {
     // Start litehouse-server container with --restart=always
     info!("Starting litehouse-server container with restart policy");
     let start_command = format!(
-        r#"sudo -u litehouse bash -c '
+        r#"cd /tmp && sudo -u litehouse bash -c '
 export XDG_RUNTIME_DIR=/run/user/{}
 export PODMAN_SOCK=/run/user/{}/podman/podman.sock
 
@@ -258,7 +258,7 @@ podman run -d \
     let ps_output = execute_remote(
         ssh_target,
         &format!(
-            "sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=litehouse-server --format {{{{.Status}}}}'",
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=litehouse-server --format {{{{.Status}}}}'",
             litehouse_uid
         ),
     )?;

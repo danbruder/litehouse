@@ -690,54 +690,6 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
     }
 }
 
-async fn get_caddy_config(docker: &Docker) -> Result<CaddyConfig> {
-    // Use docker exec to get configuration from Caddy API
-    let exec_config = bollard::exec::CreateExecOptions {
-        cmd: Some(vec![
-            "curl".to_string(),
-            "-s".to_string(),
-            "http://localhost:2019/config/".to_string(),
-        ]),
-        attach_stdout: Some(true),
-        attach_stderr: Some(true),
-        ..Default::default()
-    };
-
-    let exec_result = docker.create_exec("caddy-container", exec_config).await?;
-    let stream = docker.start_exec(&exec_result.id, None).await?;
-
-    let mut output_data = Vec::new();
-
-    match stream {
-        bollard::exec::StartExecResults::Attached { mut output, .. } => {
-            while let Some(result) = output.next().await {
-                match result {
-                    Ok(chunk) => {
-                        use bollard::container::LogOutput;
-                        match chunk {
-                            LogOutput::StdOut { message } | LogOutput::StdErr { message } => {
-                                output_data.extend_from_slice(&message);
-                            }
-                            _ => {}
-                        }
-                    }
-                    Err(e) => {
-                        error!("Error executing curl command: {}", e);
-                        return Err(e.into());
-                    }
-                }
-            }
-        }
-        bollard::exec::StartExecResults::Detached => {
-            return Err(anyhow::anyhow!("Unexpected detached exec result"));
-        }
-    }
-
-    let config_json = String::from_utf8(output_data)?;
-    let config: CaddyConfig = serde_json::from_str(&config_json)?;
-    Ok(config)
-}
-
 /// Update Caddy configuration via API
 async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()> {
     // Use native HTTP client instead of docker exec to avoid dependency on curl in container
