@@ -89,3 +89,7 @@ All core functionality implemented:
 **Documentation:** See ROUTING_STATUS.md and DEPLOYMENT_GUIDE.md
 
 NEXT: Phase 2 - Web UI & GitHub Webhooks
+
+IDEA: 
+- to make the install feedback better, could have a TUI with parallel streaming logs etc. Or maybe a text visualization happening for each thing / a diagram of what's happening / phases?
+- Or a ASCII based first person driver game where you see billboards and stuff of what's happening on the server.
