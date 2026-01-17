@@ -139,7 +139,7 @@ pub fn phase5_podman_configuration(
     Ok(uid)
 }
 
-/// Phase 6: Container Image Pull
+/// Phase 6: Container Image Pull (litehouse, caddy, litestream)
 #[instrument(skip(log_window))]
 pub fn phase6_container_image_pull(
     ssh_target: &str,
@@ -151,26 +151,38 @@ pub fn phase6_container_image_pull(
     let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
     let litehouse_uid = uid_output.trim();
 
+    // Pull litehouse server image
     let script = templates::pull_container_script(litehouse_uid);
-
-    // Upload and execute the script
     upload_content(ssh_target, &script, "/tmp/pull_container.sh")?;
     execute_remote(ssh_target, "chmod +x /tmp/pull_container.sh")?;
     execute_remote_with_log(ssh_target, "sudo /tmp/pull_container.sh", log_window)?;
     execute_remote(ssh_target, "rm /tmp/pull_container.sh")?;
 
+    // Pull Caddy image
+    let caddy_script = templates::pull_caddy_image_script(litehouse_uid);
+    upload_content(ssh_target, &caddy_script, "/tmp/pull_caddy.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/pull_caddy.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/pull_caddy.sh", log_window)?;
+    execute_remote(ssh_target, "rm /tmp/pull_caddy.sh")?;
+
+    // Pull Litestream image
+    let litestream_script = templates::pull_litestream_image_script(litehouse_uid);
+    upload_content(ssh_target, &litestream_script, "/tmp/pull_litestream.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/pull_litestream.sh")?;
+    execute_remote_with_log(ssh_target, "sudo /tmp/pull_litestream.sh", log_window)?;
+    execute_remote(ssh_target, "rm /tmp/pull_litestream.sh")?;
+
     info!("Phase 6 completed successfully");
     Ok(())
 }
 
-/// Phase 7: Server Configuration
+/// Phase 7: Server Configuration (server config, initial Caddy config, initial Litestream config)
 #[instrument]
 pub fn phase7_server_configuration(ssh_target: &str, domain: &str) -> Result<()> {
     info!("Phase 7: Server Configuration");
 
-    let config_content = templates::server_config_template(domain);
-
     // Upload server config
+    let config_content = templates::server_config_template(domain);
     upload_content(ssh_target, &config_content, "/tmp/server-config.toml")?;
     execute_remote(
         ssh_target,
@@ -179,6 +191,25 @@ pub fn phase7_server_configuration(ssh_target: &str, domain: &str) -> Result<()>
     execute_remote(
         ssh_target,
         "sudo chown litehouse:litehouse /opt/litehouse/config/server-config.toml",
+    )?;
+
+    // Create initial Litestream config
+    info!("Creating initial Litestream configuration");
+    let litestream_config = templates::initial_litestream_config();
+    upload_content(ssh_target, litestream_config, "/tmp/litestream.yml")?;
+    execute_remote(
+        ssh_target,
+        "sudo mv /tmp/litestream.yml /opt/litehouse/data/litestream.yml",
+    )?;
+    execute_remote(
+        ssh_target,
+        "sudo chown litehouse:litehouse /opt/litehouse/data/litestream.yml",
+    )?;
+
+    // Create litestream replicas directory
+    execute_remote(
+        ssh_target,
+        "sudo mkdir -p /opt/litehouse/data/litestream-replicas && sudo chown litehouse:litehouse /opt/litehouse/data/litestream-replicas",
     )?;
 
     info!("Phase 7 completed successfully");
@@ -211,10 +242,85 @@ pub fn phase8_log_rotation(ssh_target: &str) -> Result<()> {
     Ok(())
 }
 
-/// Phase 9: Start litehouse-server Container
+/// Phase 9: Start Caddy Container
 #[instrument]
-pub fn phase9_start_litehouse_container(ssh_target: &str) -> Result<()> {
-    info!("Phase 9: Start litehouse-server Container");
+pub fn phase9_start_caddy_container(ssh_target: &str) -> Result<()> {
+    info!("Phase 9: Start Caddy Container");
+
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
+
+    let script = templates::start_caddy_container_script(litehouse_uid);
+
+    // Upload and execute the script
+    upload_content(ssh_target, &script, "/tmp/start_caddy.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/start_caddy.sh")?;
+    execute_remote(ssh_target, "sudo /tmp/start_caddy.sh")?;
+    execute_remote(ssh_target, "rm /tmp/start_caddy.sh")?;
+
+    // Wait a moment for container to start
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify container is running
+    let ps_output = execute_remote(
+        ssh_target,
+        &format!(
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=caddy-container --format {{{{.Status}}}}'",
+            litehouse_uid
+        ),
+    )?;
+
+    if !ps_output.contains("Up") {
+        anyhow::bail!("Caddy container is not running after start. Status: {}", ps_output.trim());
+    }
+
+    info!("Phase 9 completed successfully");
+    Ok(())
+}
+
+/// Phase 10: Start Litestream Container
+#[instrument]
+pub fn phase10_start_litestream_container(ssh_target: &str) -> Result<()> {
+    info!("Phase 10: Start Litestream Container");
+
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
+
+    let script = templates::start_litestream_container_script(litehouse_uid);
+
+    // Upload and execute the script
+    upload_content(ssh_target, &script, "/tmp/start_litestream.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/start_litestream.sh")?;
+    execute_remote(ssh_target, "sudo /tmp/start_litestream.sh")?;
+    execute_remote(ssh_target, "rm /tmp/start_litestream.sh")?;
+
+    // Wait a moment for container to start
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify container is running
+    let ps_output = execute_remote(
+        ssh_target,
+        &format!(
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=litestream-container --format {{{{.Status}}}}'",
+            litehouse_uid
+        ),
+    )?;
+
+    if !ps_output.contains("Up") {
+        // Litestream might fail if the database doesn't exist yet - that's okay, just warn
+        info!("Litestream container may not be running yet (database might not exist). Status: {}", ps_output.trim());
+    }
+
+    info!("Phase 10 completed successfully");
+    Ok(())
+}
+
+/// Phase 11: Start litehouse-server Container
+#[instrument]
+pub fn phase11_start_litehouse_container(ssh_target: &str) -> Result<()> {
+    info!("Phase 11: Start litehouse-server Container");
 
     // Get litehouse UID from remote system
     let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
@@ -236,7 +342,7 @@ pub fn phase9_start_litehouse_container(ssh_target: &str) -> Result<()> {
         ),
     );
 
-    // Start litehouse-server container with --restart=always
+    // Start litehouse-server container with --restart=unless-stopped
     info!("Starting litehouse-server container with restart policy");
     let start_command = format!(
         r#"cd /tmp && sudo -u litehouse bash -c '
@@ -245,7 +351,7 @@ export PODMAN_SOCK=/run/user/{}/podman/podman.sock
 
 podman run -d \
   --name litehouse-server \
-  --restart=always \
+  --restart=unless-stopped \
   --replace \
   --userns=keep-id \
   -p 3030:3030 \
@@ -299,27 +405,85 @@ podman run -d \
     }
 
     info!("litehouse-server container started successfully");
-    info!("Phase 9 completed successfully");
+    info!("Phase 11 completed successfully");
     Ok(())
 }
 
-/// Phase 10: Enable podman-restart Service
+/// Phase 12: Configure Caddy with initial routing
 #[instrument]
-pub fn phase10_enable_podman_restart(ssh_target: &str) -> Result<()> {
-    info!("Phase 10: Enable podman-restart Service");
+pub fn phase12_configure_caddy(ssh_target: &str, domain: &str) -> Result<()> {
+    info!("Phase 12: Configure Caddy with initial routing");
 
-    // Enable podman-restart.service to restore containers on boot
-    execute_remote(ssh_target, "sudo systemctl enable podman-restart.service")?;
+    let caddy_config = templates::initial_caddy_config(domain);
+
+    // Send configuration to Caddy's admin API via curl on the remote server
+    // We need to do this from the server since Caddy is only accessible there
+    let config_escaped = caddy_config.replace("'", "'\\''");
+    let curl_command = format!(
+        r#"curl -s -X POST -H "Content-Type: application/json" -d '{}' http://localhost:2019/load"#,
+        config_escaped
+    );
+
+    // Retry a few times in case Caddy is still starting up
+    let max_retries = 10;
+    let mut retries = 0;
+    let mut last_error = String::new();
+
+    while retries < max_retries {
+        match execute_remote(ssh_target, &curl_command) {
+            Ok(output) => {
+                if output.trim().is_empty() || output.contains("success") || !output.contains("error") {
+                    info!("Caddy configuration applied successfully");
+                    info!("Phase 12 completed successfully");
+                    return Ok(());
+                } else {
+                    last_error = output;
+                }
+            }
+            Err(e) => {
+                last_error = e.to_string();
+            }
+        }
+
+        retries += 1;
+        if retries < max_retries {
+            info!("Caddy API not ready yet, retrying... ({}/{})", retries, max_retries);
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+
+    anyhow::bail!(
+        "Failed to configure Caddy after {} attempts. Last error: {}",
+        max_retries,
+        last_error
+    );
+}
+
+/// Phase 13: Enable podman-restart Service
+#[instrument]
+pub fn phase13_enable_podman_restart(ssh_target: &str) -> Result<()> {
+    info!("Phase 13: Enable podman-restart Service");
+
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
+
+    // Enable podman-restart.service for the litehouse user (not system-wide)
+    let enable_cmd = format!(
+        "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; systemctl --user enable podman-restart.service'",
+        litehouse_uid
+    );
+    execute_remote(ssh_target, &enable_cmd)?;
 
     info!("podman-restart.service enabled - containers will restart on boot");
-    info!("Phase 10 completed successfully");
+    info!("Phase 13 completed successfully");
     Ok(())
 }
 
-/// Phase 11: Client Configuration
+/// Phase 14: Client Configuration
 #[instrument]
-pub fn phase11_client_configuration(domain: &str) -> Result<()> {
-    info!("Phase 11: Client Configuration");
+pub fn phase14_client_configuration(domain: &str) -> Result<()> {
+    info!("Phase 14: Client Configuration");
 
     // Load or create client config
     let base_url = format!("http://admin-api.{}", domain);
@@ -328,14 +492,14 @@ pub fn phase11_client_configuration(domain: &str) -> Result<()> {
     client_config.save()?;
 
     info!("Client config updated to: {}", client_config.base_url);
-    info!("Phase 11 completed successfully");
+    info!("Phase 14 completed successfully");
     Ok(())
 }
 
-/// Phase 12: Verification
+/// Phase 15: Verification
 #[instrument]
-pub fn phase12_verification(domain: &str) -> Result<()> {
-    info!("Phase 12: Verification");
+pub fn phase15_verification(domain: &str) -> Result<()> {
+    info!("Phase 15: Verification");
 
     let api_url = format!("http://admin-api.{}/apps", domain);
     info!("Testing API endpoint: {}", api_url);
@@ -350,7 +514,7 @@ pub fn phase12_verification(domain: &str) -> Result<()> {
             Ok(response) => {
                 if response.status().is_success() {
                     info!("API endpoint responding successfully!");
-                    info!("Phase 12 completed successfully");
+                    info!("Phase 15 completed successfully");
                     return Ok(());
                 } else {
                     last_error = format!("HTTP {}", response.status());

@@ -31,19 +31,13 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let docker = podman::connect().await?;
 
-    // Start Caddy reverse proxy
-    caddy::start(&docker, &config).await?;
+    // NOTE: Caddy and Litestream containers are started by the init script
+    // with restart=unless-stopped policy. Here we only sync their configurations.
 
     // Sync Caddy configuration with existing apps
     if let Err(e) = caddy::sync_configuration(&docker, &pool).await {
         tracing::warn!("Failed to sync Caddy configuration on startup: {}", e);
         // Don't fail startup if Caddy sync fails
-    }
-
-    // Start Litestream backup container with S3 config from database
-    if let Err(e) = litestream::start_with_pool(&docker, &pool).await {
-        tracing::warn!("Failed to start Litestream backup container: {}", e);
-        // Don't fail startup if Litestream fails
     }
 
     // Sync Litestream configuration with existing apps and S3 config

@@ -247,3 +247,161 @@ echo "Container image pull completed"
         litehouse_uid, litehouse_uid
     )
 }
+
+/// Script to pull Caddy container image
+pub fn pull_caddy_image_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Pulling Caddy container image..."
+
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+podman pull docker.io/library/caddy:latest
+
+echo 'Caddy image pulled successfully'
+"
+
+echo "Caddy container image pull completed"
+"#,
+        uid = litehouse_uid
+    )
+}
+
+/// Script to pull Litestream container image
+pub fn pull_litestream_image_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Pulling Litestream container image..."
+
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+podman pull docker.io/litestream/litestream:latest
+
+echo 'Litestream image pulled successfully'
+"
+
+echo "Litestream container image pull completed"
+"#,
+        uid = litehouse_uid
+    )
+}
+
+/// Script to start Caddy container
+pub fn start_caddy_container_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Starting Caddy container..."
+
+cd /tmp && sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+# Stop and remove any existing caddy container
+podman stop -i caddy-container 2>/dev/null || true
+podman rm -i caddy-container 2>/dev/null || true
+
+# Create volumes if they do not exist
+podman volume create caddy_data 2>/dev/null || true
+podman volume create caddy_config 2>/dev/null || true
+
+# Start Caddy container
+podman run -d \
+  --name caddy-container \
+  --restart=unless-stopped \
+  --replace \
+  -p 80:80 \
+  -p 443:443 \
+  -p 2019:2019 \
+  -v caddy_data:/data \
+  -v caddy_config:/config \
+  -e CADDY_ADMIN=0.0.0.0:2019 \
+  --add-host=host.containers.internal:host-gateway \
+  docker.io/library/caddy:latest \
+  caddy run --resume
+
+echo "Caddy container started"
+'
+"#,
+        uid = litehouse_uid
+    )
+}
+
+/// Script to start Litestream container
+pub fn start_litestream_container_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Starting Litestream container..."
+
+cd /tmp && sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+# Stop and remove any existing litestream container
+podman stop -i litestream-container 2>/dev/null || true
+podman rm -i litestream-container 2>/dev/null || true
+
+# Start Litestream container
+podman run -d \
+  --name litestream-container \
+  --restart=unless-stopped \
+  --replace \
+  -v /opt/litehouse/data:/data \
+  -v /opt/litehouse/config:/config \
+  -v /opt/litehouse/data/litestream.yml:/etc/litestream.yml \
+  docker.io/litestream/litestream:latest \
+  replicate -config /etc/litestream.yml
+
+echo "Litestream container started"
+'
+"#,
+        uid = litehouse_uid
+    )
+}
+
+/// Generate initial Caddy configuration JSON
+pub fn initial_caddy_config(domain: &str) -> String {
+    format!(
+        r#"{{
+  "apps": {{
+    "http": {{
+      "servers": {{
+        "app_proxy": {{
+          "listen": [":80", ":443"],
+          "routes": [
+            {{
+              "match": [{{ "host": ["admin-api.{domain}"] }}],
+              "handle": [{{
+                "handler": "reverse_proxy",
+                "upstreams": [{{ "dial": "host.containers.internal:3030" }}]
+              }}]
+            }}
+          ]
+        }}
+      }}
+    }}
+  }}
+}}"#,
+        domain = domain
+    )
+}
+
+/// Generate initial Litestream configuration YAML
+pub fn initial_litestream_config() -> &'static str {
+    r#"dbs:
+  - path: /config/litehouse.db
+    replicas:
+      - path: /data/litestream-replicas/main
+"#
+}

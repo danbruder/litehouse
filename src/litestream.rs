@@ -410,7 +410,7 @@ async fn create_and_start_container(
         env: if env_vars.is_empty() { None } else { Some(env_vars) },
         host_config: Some(HostConfig {
             restart_policy: Some(RestartPolicy {
-                name: Some(RestartPolicyNameEnum::ALWAYS),
+                name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
                 maximum_retry_count: None,
             }),
             binds: Some(vec![
