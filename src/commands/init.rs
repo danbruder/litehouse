@@ -74,13 +74,13 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 5: Podman Configuration
-    pb.set_message("Configuring Podman (rootless mode, socket)...");
-    log_window.set_message("Starting Podman configuration...");
-    match phase5_podman_configuration(ssh_target, Some(&log_window)) {
+    // Phase 5: Docker Configuration
+    pb.set_message("Configuring Docker (service and permissions)...");
+    log_window.set_message("Starting Docker configuration...");
+    match phase5_docker_configuration(ssh_target, Some(&log_window)) {
         Ok(_uid) => {},
         Err(e) => {
-            pb.finish_with_message("❌ Podman configuration failed");
+            pb.finish_with_message("❌ Docker configuration failed");
             error!("Phase 5 failed: {}", e);
             return Err(e);
         }
@@ -151,10 +151,10 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 13: Enable podman-restart Service
-    pb.set_message("Enabling podman-restart.service for boot restoration...");
-    if let Err(e) = phase13_enable_podman_restart(ssh_target) {
-        pb.finish_with_message("❌ podman-restart.service setup failed");
+    // Phase 13: Verify Docker Auto-Restart
+    pb.set_message("Verifying Docker auto-restart configuration...");
+    if let Err(e) = phase13_verify_docker_restart(ssh_target) {
+        pb.finish_with_message("❌ Docker auto-restart verification failed");
         error!("Phase 13 failed: {}", e);
         return Err(e);
     }
