@@ -4,7 +4,7 @@ use crate::commands::create;
 use crate::commands::delete;
 use crate::commands::logs;
 use crate::commands::remote;
-use crate::commands::server::ProxyState;
+use crate::commands::server::AppState;
 use crate::commands::{start, stop};
 use crate::db;
 use crate::db::system_config as db_system_config;
@@ -27,7 +27,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::instrument;
 
-pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
+pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
     Router::new()
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
@@ -50,7 +50,7 @@ pub fn create_api_router(state: Arc<RwLock<ProxyState>>) -> Router {
 }
 
 #[instrument(skip(state))]
-async fn list_apps(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
+async fn list_apps(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
     match db::app::get_all(&pool).await {
         Ok(apps) => {
@@ -74,7 +74,7 @@ async fn list_apps(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoRes
 
 #[instrument(skip(state))]
 async fn get_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -114,7 +114,7 @@ async fn get_app(
 
 #[instrument(skip(state))]
 async fn start_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -136,7 +136,7 @@ async fn start_app(
 
 #[instrument(skip(_state))]
 async fn stop_app(
-    State(_state): State<Arc<RwLock<ProxyState>>>,
+    State(_state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     match stop::execute(&name).await {
@@ -157,7 +157,7 @@ async fn stop_app(
 async fn get_logs(
     Path(name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-    State(_state): State<Arc<RwLock<ProxyState>>>,
+    State(_state): State<Arc<RwLock<AppState>>>,
 ) -> impl IntoResponse {
     let lines = params
         .get("lines")
@@ -207,7 +207,7 @@ async fn get_logs(
 
 #[instrument(skip(state, multipart))]
 async fn deploy_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
@@ -257,7 +257,7 @@ async fn deploy_app(
 
 #[instrument(skip(state))]
 async fn delete_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -282,7 +282,7 @@ struct CreateAppRequest {
 
 #[instrument(skip(state))]
 async fn create_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Json(payload): Json<CreateAppRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -315,7 +315,7 @@ struct SetEnvRequest {
 }
 
 async fn set_env(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
     Json(payload): Json<SetEnvRequest>,
 ) -> impl IntoResponse {
@@ -360,7 +360,7 @@ struct SetRemoteRequest {
 }
 
 async fn add_remote(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
     Json(payload): Json<SetRemoteRequest>,
 ) -> impl IntoResponse {
@@ -380,7 +380,7 @@ async fn add_remote(
 }
 
 async fn remove_remote(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -395,7 +395,7 @@ async fn remove_remote(
 }
 
 async fn build_app(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -421,7 +421,7 @@ struct SetS3ConfigRequest {
 
 #[instrument(skip(state))]
 async fn set_s3_config(
-    State(state): State<Arc<RwLock<ProxyState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Json(payload): Json<SetS3ConfigRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -466,7 +466,7 @@ async fn set_s3_config(
 }
 
 #[instrument(skip(state))]
-async fn get_s3_config(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
+async fn get_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
 
     match db_system_config::get_s3_config(&pool).await {
@@ -484,7 +484,7 @@ async fn get_s3_config(State(state): State<Arc<RwLock<ProxyState>>>) -> impl Int
 }
 
 #[instrument(skip(state))]
-async fn delete_s3_config(State(state): State<Arc<RwLock<ProxyState>>>) -> impl IntoResponse {
+async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
     let docker = state.read().await.docker.clone();
 

@@ -22,8 +22,7 @@ pub enum ConfigError {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
-    pub proxy_host: String,
-    pub proxy_port: u16,
+    pub port: u16,
     pub caddy_http_port: Option<u16>,
     pub caddy_https_port: Option<u16>,
     pub domain: Option<String>,
@@ -38,8 +37,7 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             host: "0.0.0.0".to_string(),
-            proxy_host: "0.0.0.0".to_string(),
-            proxy_port: 3030,
+            port: 3030,
             caddy_http_port: Some(9090),
             caddy_https_port: Some(9091), // Use default 443 in production
             domain: None,
@@ -50,7 +48,7 @@ impl Default for ServerConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://admin-api.localhost".to_string(),
+            base_url: "http://localhost:3030/api".to_string(),
         }
     }
 }
