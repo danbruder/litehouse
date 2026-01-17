@@ -1,3 +1,4 @@
+pub mod admin_spa;
 pub mod api;
 pub mod api_client;
 pub mod caddy;

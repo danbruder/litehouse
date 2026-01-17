@@ -16,7 +16,6 @@ use bollard::Docker;
 use crate::api;
 use crate::config::ServerConfig;
 use crate::db;
-use crate::models::AppState;
 
 /// Shared state for the proxy server
 pub struct ProxyState {
@@ -117,8 +116,12 @@ async fn handle_request(
         let body_bytes = to_bytes(body).await.unwrap_or_default();
         Ok(Response::from_parts(parts, Body::from(body_bytes)))
     } else if host.starts_with("admin.") {
-        // Regular admin interface
-        Ok(admin_interface(state).await)
+        // Serve the admin SPA
+        let admin_router = crate::admin_spa::create_admin_router();
+        let response = admin_router.oneshot(req).await.unwrap();
+        let (parts, body) = response.into_parts();
+        let body_bytes = to_bytes(body).await.unwrap_or_default();
+        Ok(Response::from_parts(parts, Body::from(body_bytes)))
     } else {
         // Extract app name from host
         let app_name = host.split('.').next().unwrap_or("");
@@ -141,75 +144,6 @@ async fn handle_request(
             }
         }
     }
-}
-
-/// Admin interface handler
-async fn admin_interface(state: Arc<RwLock<ProxyState>>) -> Response<Body> {
-    let pool = state.read().await.db_pool.clone();
-    let apps = db::app::get_all(&pool).await.unwrap_or_else(|_| vec![]);
-
-    // Build HTML response
-    let mut html = String::from(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>BinaryDrop Admin</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 20px; }
-        h1 { color: #333; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { text-align: left; padding: 8px; }
-        tr:nth-child(even) { background-color: #f2f2f2; }
-        th { background-color: #4CAF50; color: white; }
-        .running { color: green; }
-        .stopped { color: red; }
-        .created { color: blue; }
-    </style>
-</head>
-<body>
-    <h1>BinaryDrop Admin</h1>
-    <h2>Apps</h2>
-    <table>
-        <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Port</th>
-            <th>PID</th>
-            <th>URL</th>
-        </tr>
-"#,
-    );
-
-    // Add rows for each app
-    for app in apps {
-        let status_class = match app.state {
-            AppState::Running => "running",
-            AppState::Stopped => "stopped",
-            _ => "created",
-        };
-
-        html.push_str(&format!(
-            r#"<tr>
-            <td>{}</td>
-            <td class="{}">{}</td>
-        </tr>"#,
-            app.name, status_class, app.state,
-        ));
-    }
-
-    // Add API information
-    html.push_str(
-        r#"
-    </table>
-</body>
-</html>
-"#,
-    );
-
-    Response::builder()
-        .header("Content-Type", "text/html")
-        .body(Body::from(html))
-        .unwrap()
 }
 
 /// Proxy request to app
