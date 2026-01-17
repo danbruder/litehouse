@@ -184,7 +184,7 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     // Print success message with next steps
     println!("\n{}", "=".repeat(60));
     println!("✓ Server initialized successfully at {}", domain);
-    println!("✓ Client configured to use http://admin-api.{}", domain);
+    println!("✓ Client configured to use http://admin.{}", domain);
     println!("✓ Server is responding to API requests");
     println!("{}", "=".repeat(60));
     println!("\nNext steps:");

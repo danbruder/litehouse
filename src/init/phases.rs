@@ -486,7 +486,7 @@ pub fn phase14_client_configuration(domain: &str) -> Result<()> {
     info!("Phase 14: Client Configuration");
 
     // Load or create client config
-    let base_url = format!("http://admin-api.{}", domain);
+    let base_url = format!("http://admin.{}", domain);
 
     let client_config = crate::config::ClientConfig { base_url };
     client_config.save()?;
@@ -501,7 +501,7 @@ pub fn phase14_client_configuration(domain: &str) -> Result<()> {
 pub fn phase15_verification(ssh_target: &str, domain: &str) -> Result<()> {
     info!("Phase 15: Verification");
 
-    let api_url = format!("http://admin-api.{}/apps", domain);
+    let api_url = format!("http://admin.{}/apps", domain);
     info!("Testing API endpoint: {}", api_url);
 
     // Test from server via curl to avoid tokio runtime nesting issues

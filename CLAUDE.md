@@ -63,7 +63,7 @@ The CLI (`src/cli.rs`) sends HTTP requests to the server API (`src/api.rs`) via 
 
 **Client config:** `~/.config/litehouse/client-config.toml`
 ```toml
-base_url = "http://admin-api.localhost"
+base_url = "http://admin.localhost"
 ```
 
 #### 2. Database Schema

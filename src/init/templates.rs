@@ -381,7 +381,7 @@ pub fn initial_caddy_config(domain: &str) -> String {
           "listen": [":80", ":443"],
           "routes": [
             {{
-              "match": [{{ "host": ["admin-api.{domain}"] }}],
+              "match": [{{ "host": ["admin.{domain}"] }}],
               "handle": [{{
                 "handler": "reverse_proxy",
                 "upstreams": [{{ "dial": "host.containers.internal:3030" }}]

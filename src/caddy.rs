@@ -610,9 +610,9 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
     // Add admin API route
     if let Some(domain_str) = domain {
         let admin_host = if local_dev {
-            "admin-api.localhost".to_string()
+            "admin.localhost".to_string()
         } else {
-            format!("admin-api.{}", domain_str)
+            format!("admin.{}", domain_str)
         };
 
         let admin_route = Route {
