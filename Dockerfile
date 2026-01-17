@@ -1,4 +1,22 @@
-# Build stage
+# Frontend build stage
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /build/assets
+
+# Install Elm
+RUN npm install -g elm
+
+# Copy Elm source files
+COPY assets/elm.json ./
+COPY assets/src ./src
+COPY assets/public ./public
+
+# Build Elm app
+RUN mkdir -p dist && \
+    elm make src/Main.elm --optimize --output=dist/app.js && \
+    cp public/index.html dist/index.html
+
+# Backend build stage
 FROM rust:1.92-alpine AS builder
 
 # Install build dependencies
@@ -15,6 +33,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY migrations ./migrations
 COPY .sqlx ./.sqlx
+
+# Copy built frontend assets
+COPY --from=frontend-builder /build/assets/dist ./assets/dist
 
 # Build static binary
 ENV SQLX_OFFLINE=true
