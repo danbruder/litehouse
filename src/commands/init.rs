@@ -171,7 +171,7 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
 
     // Phase 15: Verification
     pb.set_message("Verifying server is responding...");
-    if let Err(e) = phase15_verification(domain) {
+    if let Err(e) = phase15_verification(ssh_target, domain) {
         pb.finish_with_message("❌ Verification failed");
         error!("Phase 15 failed: {}", e);
         return Err(e);

@@ -498,11 +498,14 @@ pub fn phase14_client_configuration(domain: &str) -> Result<()> {
 
 /// Phase 15: Verification
 #[instrument]
-pub fn phase15_verification(domain: &str) -> Result<()> {
+pub fn phase15_verification(ssh_target: &str, domain: &str) -> Result<()> {
     info!("Phase 15: Verification");
 
     let api_url = format!("http://admin-api.{}/apps", domain);
     info!("Testing API endpoint: {}", api_url);
+
+    // Test from server via curl to avoid tokio runtime nesting issues
+    let curl_command = format!("curl -s -o /dev/null -w '%{{http_code}}' {}", api_url);
 
     // Retry with backoff
     let max_retries = 30;
@@ -510,14 +513,15 @@ pub fn phase15_verification(domain: &str) -> Result<()> {
     let mut last_error = String::new();
 
     while retries < max_retries {
-        match reqwest::blocking::get(&api_url) {
-            Ok(response) => {
-                if response.status().is_success() {
+        match execute_remote(ssh_target, &curl_command) {
+            Ok(output) => {
+                let status_code = output.trim();
+                if status_code == "200" {
                     info!("API endpoint responding successfully!");
                     info!("Phase 15 completed successfully");
                     return Ok(());
                 } else {
-                    last_error = format!("HTTP {}", response.status());
+                    last_error = format!("HTTP {}", status_code);
                 }
             }
             Err(e) => {
