@@ -50,7 +50,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // GitHub OAuth client ID - default to litehouse's app, allow override
     const DEFAULT_GITHUB_CLIENT_ID: &str = "Ov23liTp4hQb5j4lzQfh";
     let github_client_id = Some(
-        std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string())
+        std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string()),
     );
 
     // Create shared state
@@ -83,7 +83,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Create server with graceful shutdown
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
+        //.with_graceful_shutdown(shutdown_signal())
         .await
         .context("Server error")?;
 

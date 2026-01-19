@@ -255,7 +255,7 @@ type Msg
     | GotGitHubConnectPoll (Result Http.Error GitHubConnectResponse)
     | GotRepoList (Result Http.Error (List RepoInfo))
     | RepoSearchChanged String
-    | SelectRepo RepoInfo
+    | ChooseRepo RepoInfo
     | SkipRepoSelection
     | GotAppCreated (Result Http.Error AppInfo)
 
@@ -735,7 +735,7 @@ update msg model =
                         CreateAppView createState ->
                             case createState.step of
                                 ConnectGitHub ghState ->
-                                    ( model, pollDeviceFlow state.token ghState.deviceCode )
+                                    ( model, pollDeviceFlow state.token ghState.deviceCode ghState.interval ghState.expiresIn )
 
                                 _ ->
                                     ( model, Cmd.none )
@@ -887,7 +887,7 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        SelectRepo repo ->
+        ChooseRepo repo ->
             case model.page of
                 Dashboard state ->
                     case state.view of
@@ -1071,8 +1071,8 @@ startDeviceFlow token =
         }
 
 
-pollDeviceFlow : String -> String -> Cmd Msg
-pollDeviceFlow token deviceCode =
+pollDeviceFlow : String -> String -> Int -> Int -> Cmd Msg
+pollDeviceFlow token deviceCode interval expiresIn =
     Http.request
         { method = "POST"
         , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
@@ -1081,6 +1081,8 @@ pollDeviceFlow token deviceCode =
             Http.jsonBody
                 (Encode.object
                     [ ( "device_code", Encode.string deviceCode )
+                    , ( "interval", Encode.int interval )
+                    , ( "expires_in", Encode.int expiresIn )
                     ]
                 )
         , expect = Http.expectJson GotGitHubConnectPoll githubConnectResponseDecoder
@@ -1656,7 +1658,7 @@ viewSelectRepo repos query =
 
 viewRepoItem : RepoInfo -> Html Msg
 viewRepoItem repo =
-    div [ class "repo-item", onClick (SelectRepo repo) ]
+    div [ class "repo-item", onClick (ChooseRepo repo) ]
         [ div [ class "repo-item-header" ]
             [ span [ class "repo-name" ] [ text repo.fullName ]
             , if repo.private then
