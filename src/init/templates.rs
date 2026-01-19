@@ -41,7 +41,7 @@ DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 
 echo "Installing required packages..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    docker.io \
+    podman \
     git \
     ufw \
     fail2ban \
@@ -105,53 +105,96 @@ echo "Setting ownership and permissions..."
 chown -R litehouse:litehouse /opt/litehouse
 chmod 755 /opt/litehouse
 
+echo "Configuring subuid/subgid for rootless Podman..."
+# Check if litehouse already has subuid/subgid mappings
+if ! grep -q "^litehouse:" /etc/subuid; then
+    echo "litehouse:100000:65536" >> /etc/subuid
+    echo "Added subuid mapping for litehouse"
+fi
+
+if ! grep -q "^litehouse:" /etc/subgid; then
+    echo "litehouse:100000:65536" >> /etc/subgid
+    echo "Added subgid mapping for litehouse"
+fi
+
 echo "User and directory setup completed successfully"
 "#
 }
 
-/// Script for Docker configuration
-pub fn docker_setup_script() -> &'static str {
+/// Script for Podman configuration
+pub fn podman_setup_script() -> &'static str {
     r#"#!/bin/bash
 set -e
 
-echo "Configuring Docker for litehouse user..."
+echo "Configuring Podman for litehouse user..."
 
 # Get litehouse user UID
 LITEHOUSE_UID=$(id -u litehouse)
 
-# Add litehouse user to docker group
-usermod -aG docker litehouse
+# Configure system to allow binding to privileged ports (< 1024) for rootless containers
+echo "Configuring unprivileged port access for rootless containers..."
+if ! grep -q "net.ipv4.ip_unprivileged_port_start" /etc/sysctl.conf; then
+    echo "net.ipv4.ip_unprivileged_port_start=80" >> /etc/sysctl.conf
+    sysctl -p /etc/sysctl.conf
+    echo "Configured unprivileged port start to 80"
+else
+    echo "Unprivileged port configuration already exists"
+fi
 
-# Start and enable Docker service
-systemctl enable docker
-systemctl start docker
+# Enable user lingering (allows user services to run without login)
+loginctl enable-linger litehouse
 
-# Wait for Docker socket to be available
-SOCKET_PATH="/var/run/docker.sock"
+# Wait a moment for the runtime directory to be created
+sleep 2
+
+# Verify runtime directory exists
+RUNTIME_DIR="/run/user/${LITEHOUSE_UID}"
+if [ ! -d "$RUNTIME_DIR" ]; then
+    echo "Creating runtime directory: $RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR"
+    chown litehouse:litehouse "$RUNTIME_DIR"
+    chmod 700 "$RUNTIME_DIR"
+fi
+
+# Set proper environment and enable Podman socket as litehouse user
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID}
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${LITEHOUSE_UID}/bus
+
+# Try to start systemd user session if not running
+systemctl --user status > /dev/null 2>&1 || {
+    echo 'Starting systemd user session...'
+}
+
+# Enable and start podman socket
+systemctl --user enable podman.socket
+systemctl --user start podman.socket
+"
+
+# Verify socket exists
+SOCKET_PATH="/run/user/${LITEHOUSE_UID}/podman/podman.sock"
 MAX_WAIT=10
 WAITED=0
 
 while [ $WAITED -lt $MAX_WAIT ]; do
     if [ -S "$SOCKET_PATH" ]; then
-        echo "Docker socket verified at $SOCKET_PATH"
+        echo "Podman socket verified at $SOCKET_PATH"
         break
     fi
-    echo "Waiting for Docker socket... ($WAITED/$MAX_WAIT)"
+    echo "Waiting for Podman socket... ($WAITED/$MAX_WAIT)"
     sleep 1
     WAITED=$((WAITED + 1))
 done
 
 if [ ! -S "$SOCKET_PATH" ]; then
-    echo "Error: Failed to find Docker socket after ${MAX_WAIT} seconds"
+    echo "Error: Failed to create Podman socket after ${MAX_WAIT} seconds"
     echo "Attempting to debug..."
-    systemctl status docker || echo "Failed to get docker status"
+    ls -la "$RUNTIME_DIR" || echo "Runtime dir doesn't exist"
+    cd /tmp && sudo -u litehouse bash -c "XDG_RUNTIME_DIR=/run/user/${LITEHOUSE_UID} systemctl --user status podman.socket" || echo "Failed to get status"
     exit 1
 fi
 
-# Ensure litehouse user has access to Docker socket
-chmod 666 "$SOCKET_PATH" || true
-
-echo "Docker configuration completed successfully"
+echo "Podman configuration completed successfully"
 echo "UID:$LITEHOUSE_UID"
 "#
 }
@@ -189,17 +232,20 @@ set -e
 
 echo "Pulling litehouse-server container image..."
 
-# Run as litehouse user
-sudo -u litehouse bash -c "
+# Run as litehouse user with proper environment
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{}
+export PODMAN_SOCK=/run/user/{}/podman/podman.sock
+
 # Pull the latest image
-docker pull ghcr.io/danbruder/litehouse:latest
+podman pull ghcr.io/danbruder/litehouse:latest
 
 echo 'Image pulled successfully'
 "
 
 echo "Container image pull completed"
 "#,
-        litehouse_uid
+        litehouse_uid, litehouse_uid
     )
 }
 
@@ -211,8 +257,11 @@ set -e
 
 echo "Pulling Caddy container image..."
 
-sudo -u litehouse bash -c "
-docker pull docker.io/library/caddy:latest
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+podman pull docker.io/library/caddy:latest
 
 echo 'Caddy image pulled successfully'
 "
@@ -231,8 +280,11 @@ set -e
 
 echo "Pulling Litestream container image..."
 
-sudo -u litehouse bash -c "
-docker pull docker.io/litestream/litestream:latest
+cd /tmp && sudo -u litehouse bash -c "
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+podman pull docker.io/litestream/litestream:latest
 
 echo 'Litestream image pulled successfully'
 "
@@ -251,26 +303,30 @@ set -e
 
 echo "Starting Caddy container..."
 
-sudo -u litehouse bash -c '
+cd /tmp && sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
 # Stop and remove any existing caddy container
-docker stop caddy-container 2>/dev/null || true
-docker rm caddy-container 2>/dev/null || true
+podman stop -i caddy-container 2>/dev/null || true
+podman rm -i caddy-container 2>/dev/null || true
 
 # Create volumes if they do not exist
-docker volume create caddy_data 2>/dev/null || true
-docker volume create caddy_config 2>/dev/null || true
+podman volume create caddy_data 2>/dev/null || true
+podman volume create caddy_config 2>/dev/null || true
 
 # Start Caddy container
-docker run -d \
+podman run -d \
   --name caddy-container \
   --restart=unless-stopped \
+  --replace \
   -p 80:80 \
   -p 443:443 \
   -p 2019:2019 \
   -v caddy_data:/data \
   -v caddy_config:/config \
   -e CADDY_ADMIN=0.0.0.0:2019 \
-  --add-host=host.docker.internal:host-gateway \
+  --add-host=host.containers.internal:host-gateway \
   docker.io/library/caddy:latest \
   caddy run --resume
 
@@ -289,15 +345,19 @@ set -e
 
 echo "Starting Litestream container..."
 
-sudo -u litehouse bash -c '
+cd /tmp && sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
 # Stop and remove any existing litestream container
-docker stop litestream-container 2>/dev/null || true
-docker rm litestream-container 2>/dev/null || true
+podman stop -i litestream-container 2>/dev/null || true
+podman rm -i litestream-container 2>/dev/null || true
 
 # Start Litestream container
-docker run -d \
+podman run -d \
   --name litestream-container \
   --restart=unless-stopped \
+  --replace \
   -v /opt/litehouse/data:/data \
   -v /opt/litehouse/config:/config \
   -v /opt/litehouse/data/litestream.yml:/etc/litestream.yml \

@@ -105,27 +105,27 @@ pub fn phase4_user_setup(ssh_target: &str, log_window: Option<&ProgressBar>) -> 
     Ok(())
 }
 
-/// Phase 5: Docker Configuration
+/// Phase 5: Podman Configuration
 #[instrument(skip(log_window))]
-pub fn phase5_docker_configuration(
+pub fn phase5_podman_configuration(
     ssh_target: &str,
     log_window: Option<&ProgressBar>,
 ) -> Result<String> {
-    info!("Phase 5: Docker Configuration");
+    info!("Phase 5: Podman Configuration");
 
-    let script = templates::docker_setup_script();
+    let script = templates::podman_setup_script();
 
     // Upload and execute the script
-    upload_content(ssh_target, script, "/tmp/docker_setup.sh")?;
-    execute_remote(ssh_target, "chmod +x /tmp/docker_setup.sh")?;
-    let output = execute_remote_with_log(ssh_target, "sudo /tmp/docker_setup.sh", log_window)?;
-    execute_remote(ssh_target, "rm /tmp/docker_setup.sh")?;
+    upload_content(ssh_target, script, "/tmp/podman_setup.sh")?;
+    execute_remote(ssh_target, "chmod +x /tmp/podman_setup.sh")?;
+    let output = execute_remote_with_log(ssh_target, "sudo /tmp/podman_setup.sh", log_window)?;
+    execute_remote(ssh_target, "rm /tmp/podman_setup.sh")?;
 
     // Extract UID from output
     let uid_line = output
         .lines()
         .find(|line| line.starts_with("UID:"))
-        .context("Failed to get litehouse user UID from docker setup output")?;
+        .context("Failed to get litehouse user UID from podman setup output")?;
 
     let uid = uid_line
         .strip_prefix("UID:")
@@ -459,19 +459,23 @@ pub fn phase12_configure_caddy(ssh_target: &str, domain: &str) -> Result<()> {
     );
 }
 
-/// Phase 13: Verify Docker Auto-Restart
+/// Phase 13: Enable podman-restart Service
 #[instrument]
-pub fn phase13_verify_docker_restart(ssh_target: &str) -> Result<()> {
-    info!("Phase 13: Verify Docker Auto-Restart");
+pub fn phase13_enable_podman_restart(ssh_target: &str) -> Result<()> {
+    info!("Phase 13: Enable podman-restart Service");
 
-    // Verify Docker service is enabled to start on boot
-    let status = execute_remote(ssh_target, "systemctl is-enabled docker")?;
+    // Get litehouse UID from remote system
+    let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
+    let litehouse_uid = uid_output.trim();
 
-    if status.trim() != "enabled" {
-        anyhow::bail!("Docker service is not enabled to start on boot");
-    }
+    // Enable podman-restart.service for the litehouse user (not system-wide)
+    let enable_cmd = format!(
+        "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; systemctl --user enable podman-restart.service'",
+        litehouse_uid
+    );
+    execute_remote(ssh_target, &enable_cmd)?;
 
-    info!("Docker service is enabled - containers with restart policy will auto-restart on boot");
+    info!("podman-restart.service enabled - containers will restart on boot");
     info!("Phase 13 completed successfully");
     Ok(())
 }

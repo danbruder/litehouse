@@ -22,7 +22,7 @@ pub enum PodmanError {
 
 pub async fn connect() -> Result<Docker> {
     let docker = Docker::connect_with_unix(
-        &resolve_docker_socket_path()?,
+        &resolve_podman_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -38,38 +38,38 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    info!("Starting container image build with Docker CLI...");
+    info!("Starting container image build with Podman CLI...");
 
-    // Use Docker CLI directly instead of Bollard build stream
-    let output = AsyncCommand::new("docker")
+    // Use Podman CLI directly instead of Bollard build stream
+    let output = AsyncCommand::new("podman")
         .args(["build", "-t", tag, "."])
         .current_dir(directory)
         .output()
         .await
-        .map_err(|e| PodmanError::BuildError(format!("Failed to execute docker build: {}", e)))?;
+        .map_err(|e| PodmanError::BuildError(format!("Failed to execute podman build: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        tracing::error!("Docker build failed:");
+        tracing::error!("Podman build failed:");
         tracing::error!("STDOUT: {}", stdout);
         tracing::error!("STDERR: {}", stderr);
 
         return Err(PodmanError::BuildError(format!(
-            "Docker build failed: {}\nSTDOUT: {}\nSTDERR: {}",
+            "Podman build failed: {}\nSTDOUT: {}\nSTDERR: {}",
             output.status, stdout, stderr
         ))
         .into());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("Docker build output: {}", stdout);
+    info!("Podman build output: {}", stdout);
 
     info!("Container image build completed successfully");
 
     // Get the image ID by inspecting the built image
-    let inspect_output = AsyncCommand::new("docker")
+    let inspect_output = AsyncCommand::new("podman")
         .args(["inspect", tag, "--format", "{{.Id}}"])
         .output()
         .await
@@ -118,7 +118,7 @@ pub async fn run_with_port(
     info!("Running app: {} (host_port: {:?})", name, host_port);
 
     let docker = Docker::connect_with_unix(
-        &resolve_docker_socket_path()?,
+        &resolve_podman_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -285,7 +285,7 @@ pub async fn remove(tag: &str) -> Result<()> {
     info!("Removing container image with tag: {}", tag);
 
     let docker = Docker::connect_with_unix(
-        &resolve_docker_socket_path()?,
+        &resolve_podman_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -316,7 +316,7 @@ pub async fn logs_stream(
     info!("Getting logs stream for app: {}", app_name);
 
     let docker = Docker::connect_with_unix(
-        &resolve_docker_socket_path()?,
+        &resolve_podman_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -390,7 +390,7 @@ pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
     let docker = Docker::connect_with_unix(
-        &resolve_docker_socket_path()?,
+        &resolve_podman_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -446,23 +446,66 @@ pub async fn stop(app: &App) -> Result<()> {
     Ok(())
 }
 
-fn resolve_docker_socket_path() -> Result<String> {
+fn resolve_podman_socket_path() -> Result<String> {
     // User-provided overrides
-    if let Ok(sock) = std::env::var("DOCKER_HOST") {
-        if let Some(path) = sock.strip_prefix("unix://") {
-            return Ok(path.to_string());
-        }
-        // If DOCKER_HOST doesn't have unix:// prefix, assume it's a path
-        if sock.starts_with('/') {
-            return Ok(sock);
-        }
-    }
-    if let Ok(sock) = std::env::var("DOCKER_SOCK") {
+    if let Ok(sock) = std::env::var("PODMAN_SSH_SOCK") {
         return Ok(sock);
     }
+    if let Ok(sock) = std::env::var("PODMAN_SOCK") {
+        return Ok(sock);
+    }
+    if let Ok(ch) = std::env::var("CONTAINER_HOST") {
+        if let Some(path) = ch.strip_prefix("unix://") {
+            return Ok(path.to_string());
+        }
+    }
 
-    // Fallback to well-known default Docker socket
-    Ok("/var/run/docker.sock".to_string())
+    // Discover from default connection
+    let list = Command::new("podman")
+        .args([
+            "system",
+            "connection",
+            "ls",
+            "--format",
+            "{{.Name}} {{.Default}} {{.URI}}",
+        ])
+        .output()?;
+
+    if list.status.success() {
+        let stdout = String::from_utf8_lossy(&list.stdout);
+        for line in stdout.lines() {
+            let mut parts = line.split_whitespace();
+            if let (Some(name), Some(default_flag), Some(uri)) =
+                (parts.next(), parts.next(), parts.next())
+            {
+                if default_flag == "true" {
+                    if let Some(path) = uri.strip_prefix("unix://") {
+                        return Ok(path.to_string());
+                    } else if uri.starts_with("ssh://") {
+                        // On macOS with Podman Machine, use the local forwarded API socket
+                        let inspect = Command::new("podman")
+                            .args([
+                                "machine",
+                                "inspect",
+                                name,
+                                "--format",
+                                "{{.ConnectionInfo.PodmanSocket.Path}}",
+                            ])
+                            .output()?;
+                        if inspect.status.success() {
+                            let path = String::from_utf8_lossy(&inspect.stdout).trim().to_string();
+                            if !path.is_empty() {
+                                return Ok(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback to well-known default
+    Ok("/run/podman/podman.sock".to_string())
 }
 
 #[cfg(test)]
@@ -470,9 +513,9 @@ mod test_helpers {
     use anyhow::Result;
     use std::process::Command;
 
-    /// Check if a container exists and was started by calling docker ps -a
+    /// Check if a container exists and was started by calling podman ps -a
     pub fn is_container_started(container_name: &str) -> Result<bool> {
-        let output = Command::new("docker")
+        let output = Command::new("podman")
             .args([
                 "ps",
                 "-a", // Show all containers, including stopped ones
@@ -494,7 +537,7 @@ mod test_helpers {
     /// Clean up a test container by stopping and removing it
     pub fn cleanup_container(container_name: &str) -> Result<()> {
         // Stop the container
-        let stop_result = docker_stop(container_name);
+        let stop_result = podman_stop(container_name);
 
         if let Err(e) = stop_result {
             println!(
@@ -504,7 +547,7 @@ mod test_helpers {
         }
 
         // Remove the container
-        let remove_result = docker_rm(container_name);
+        let remove_result = podman_rm(container_name);
 
         if let Err(e) = remove_result {
             println!(
@@ -516,9 +559,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Stop a container using docker
-    pub fn docker_stop(container_name: &str) -> Result<()> {
-        let output = Command::new("docker")
+    /// Stop a container using podman
+    pub fn podman_stop(container_name: &str) -> Result<()> {
+        let output = Command::new("podman")
             .args(["stop", container_name])
             .output()?;
 
@@ -532,9 +575,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Remove a container using docker
-    pub fn docker_rm(container_name: &str) -> Result<()> {
-        let output = Command::new("docker")
+    /// Remove a container using podman
+    pub fn podman_rm(container_name: &str) -> Result<()> {
+        let output = Command::new("podman")
             .args(["rm", container_name])
             .output()?;
 
@@ -548,9 +591,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Get container state using docker ps
+    /// Get container state using podman ps
     pub fn get_container_state(container_name: &str) -> Result<String> {
-        let output = Command::new("docker")
+        let output = Command::new("podman")
             .args([
                 "ps",
                 "-a",
