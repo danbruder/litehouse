@@ -403,7 +403,7 @@ userInfoDecoder =
 authResponseDecoder : Decode.Decoder AuthResponse
 authResponseDecoder =
     Decode.map2 AuthResponse
-        (Decode.field "access_token" Decode.string)
+        (Decode.at [ "tokens", "access_token" ] Decode.string)
         (Decode.field "user" userDecoder)
 
 
