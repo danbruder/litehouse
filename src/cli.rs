@@ -31,6 +31,13 @@ enum Commands {
         skip_verify: bool,
     },
 
+    /// Upgrade litehouse binary and container image (run as root)
+    Upgrade {
+        /// Specific version to upgrade to (default: latest)
+        #[arg(long)]
+        version: Option<String>,
+    },
+
     /// Create a new app
     Create {
         /// Name of the app (optional if using --from-github)
@@ -240,6 +247,9 @@ pub async fn run() -> Result<()> {
         Commands::Install { domain, skip_verify } => {
             crate::commands::install::execute(&domain, skip_verify).await
         }
+        Commands::Upgrade { version } => {
+            crate::commands::upgrade::execute(version.as_deref()).await
+        }
         Commands::Serve => {
             let config = ServerConfig::load()?;
             server::execute(config).await
@@ -371,7 +381,7 @@ pub async fn run() -> Result<()> {
             GithubCmd::Repos { limit } => crate::commands::github::repos::execute(&api_client, limit).await,
             GithubCmd::Search { query } => crate::commands::github::search::execute(&api_client, &query).await,
         },
-        Commands::Install { .. } | Commands::Serve => unreachable!("Already handled above"),
+        Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => unreachable!("Already handled above"),
             }
         }
     }

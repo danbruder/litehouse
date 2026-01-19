@@ -11,3 +11,4 @@ pub mod server;
 pub mod start;
 pub mod status;
 pub mod stop;
+pub mod upgrade;
