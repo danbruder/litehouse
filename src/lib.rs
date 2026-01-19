@@ -8,6 +8,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod git;
+pub mod github;
 pub mod init;
 pub mod litestream;
 pub mod models;

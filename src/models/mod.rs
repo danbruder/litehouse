@@ -24,3 +24,5 @@ pub mod refresh_token;
 pub use refresh_token::*;
 pub mod auth;
 pub use auth::*;
+pub mod github_connection;
+pub use github_connection::*;

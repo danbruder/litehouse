@@ -8,8 +8,9 @@ use crate::commands::server::AppState;
 use crate::commands::{start, stop};
 use crate::db;
 use crate::db::system_config as db_system_config;
+use crate::github;
 use crate::litestream;
-use crate::models::{S3Config, S3ConfigRedacted, SystemConfig};
+use crate::models::{GitHubConnection, S3Config, S3ConfigRedacted, SystemConfig};
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
@@ -21,7 +22,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -56,6 +57,13 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
+        // GitHub OAuth routes
+        .route("/github/connect/start", post(github_connect_start))
+        .route("/github/connect/poll", post(github_connect_poll))
+        .route("/github/connection", delete(github_disconnect))
+        .route("/github/status", get(github_status))
+        .route("/github/repos", get(github_list_repos))
+        .route("/github/repos/search", get(github_search_repos))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::auth_middleware,
@@ -298,26 +306,93 @@ async fn delete_app(
 #[derive(Debug, serde::Deserialize)]
 struct CreateAppRequest {
     name: String,
+    from_github: Option<String>,
 }
 
 #[instrument(skip(state))]
 async fn create_app(
     State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Json(payload): Json<CreateAppRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match create::execute(&pool, &payload.name).await {
-        Ok(_) => (
-            axum::http::StatusCode::CREATED,
-            format!("App '{}' created", payload.name),
-        )
-            .into_response(),
-        Err(e) => (
+
+    // Create the app
+    if let Err(e) = create::execute(&pool, &payload.name).await {
+        return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create app: {}", e),
         )
-            .into_response(),
+            .into_response();
     }
+
+    // If from_github is provided, add it as a remote
+    if let Some(repo) = payload.from_github {
+        // Get the GitHub connection for the user
+        let connection = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+            Ok(Some(conn)) => conn,
+            Ok(None) => {
+                return (
+                    StatusCode::PRECONDITION_REQUIRED,
+                    "GitHub account not connected. Connect GitHub first.",
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to get GitHub connection: {}", e),
+                )
+                    .into_response();
+            }
+        };
+
+        // Verify access to the repository
+        let gh_client = github::GitHubClient::new(&connection.access_token);
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() != 2 {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Invalid repository format. Use owner/repo",
+            )
+                .into_response();
+        }
+
+        let repo_info = match gh_client.get_repo(parts[0], parts[1]).await {
+            Ok(info) => info,
+            Err(e) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!("Repository not found or not accessible: {}", e),
+                )
+                    .into_response();
+            }
+        };
+
+        // Add the remote
+        if let Err(e) = remote::add::execute(&pool, &payload.name, &repo_info.clone_url).await {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("App created but failed to add remote: {}", e),
+            )
+                .into_response();
+        }
+
+        return (
+            StatusCode::CREATED,
+            format!(
+                "App '{}' created with remote {}",
+                payload.name, repo_info.clone_url
+            ),
+        )
+            .into_response();
+    }
+
+    (
+        axum::http::StatusCode::CREATED,
+        format!("App '{}' created", payload.name),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -686,6 +761,290 @@ async fn get_current_user(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to get user: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+// ===== GITHUB ENDPOINTS =====
+
+#[derive(Debug, Serialize)]
+struct DeviceFlowStartResponse {
+    user_code: String,
+    verification_uri: String,
+    device_code: String,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[instrument(skip(state))]
+async fn github_connect_start(
+    State(state): State<Arc<RwLock<AppState>>>,
+) -> impl IntoResponse {
+    let client_id = match state.read().await.github_client_id.clone() {
+        Some(id) => id,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GitHub OAuth is not configured (GITHUB_CLIENT_ID not set)",
+            )
+                .into_response();
+        }
+    };
+
+    match github::start_device_flow(&client_id).await {
+        Ok(response) => Json(DeviceFlowStartResponse {
+            user_code: response.user_code,
+            verification_uri: response.verification_uri,
+            device_code: response.device_code,
+            expires_in: response.expires_in,
+            interval: response.interval,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to start GitHub device flow: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceFlowPollRequest {
+    device_code: String,
+    interval: u64,
+    expires_in: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct GitHubConnectResponse {
+    username: String,
+    email: Option<String>,
+}
+
+#[instrument(skip(state))]
+async fn github_connect_poll(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+    Json(payload): Json<DeviceFlowPollRequest>,
+) -> impl IntoResponse {
+    let (client_id, pool) = {
+        let state = state.read().await;
+        let client_id = match state.github_client_id.clone() {
+            Some(id) => id,
+            None => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "GitHub OAuth is not configured",
+                )
+                    .into_response();
+            }
+        };
+        (client_id, state.db_pool.clone())
+    };
+
+    // Poll for token
+    let (access_token, scopes) = match github::poll_for_token(
+        &client_id,
+        &payload.device_code,
+        payload.interval,
+        payload.expires_in,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(github::OAuthError::AuthorizationTimeout) => {
+            return (StatusCode::REQUEST_TIMEOUT, "Authorization timed out").into_response();
+        }
+        Err(github::OAuthError::AccessDenied) => {
+            return (StatusCode::FORBIDDEN, "Authorization was denied").into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to poll for token: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Get GitHub user info
+    let gh_client = github::GitHubClient::new(&access_token);
+    let gh_user = match gh_client.get_user().await {
+        Ok(user) => user,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get GitHub user: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Save connection to database
+    let connection = GitHubConnection::new(
+        &auth_user.user_id,
+        gh_user.id,
+        &gh_user.login,
+        gh_user.email.clone(),
+        &access_token,
+        &scopes,
+    );
+
+    if let Err(e) = db::github_connection::save(&pool, &connection).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save GitHub connection: {}", e),
+        )
+            .into_response();
+    }
+
+    Json(GitHubConnectResponse {
+        username: gh_user.login,
+        email: gh_user.email,
+    })
+    .into_response()
+}
+
+#[instrument(skip(state))]
+async fn github_disconnect(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db::github_connection::delete_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(_) => (StatusCode::OK, "GitHub connection removed").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to remove GitHub connection: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct GitHubStatusResponse {
+    connected: bool,
+    username: Option<String>,
+    email: Option<String>,
+    scopes: Option<String>,
+}
+
+#[instrument(skip(state))]
+async fn github_status(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(Some(connection)) => Json(GitHubStatusResponse {
+            connected: true,
+            username: Some(connection.github_username),
+            email: connection.github_email,
+            scopes: Some(connection.scopes),
+        })
+        .into_response(),
+        Ok(None) => Json(GitHubStatusResponse {
+            connected: false,
+            username: None,
+            email: None,
+            scopes: None,
+        })
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to get GitHub status: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ListReposQuery {
+    limit: Option<u32>,
+}
+
+#[instrument(skip(state))]
+async fn github_list_repos(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+    Query(query): Query<ListReposQuery>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    // Get GitHub connection
+    let connection = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(Some(conn)) => conn,
+        Ok(None) => {
+            return (
+                StatusCode::PRECONDITION_REQUIRED,
+                "GitHub account not connected. Run 'lh github connect' first.",
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get GitHub connection: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    let gh_client = github::GitHubClient::new(&connection.access_token);
+    let limit = query.limit.unwrap_or(30);
+
+    match gh_client.list_repos(limit).await {
+        Ok(repos) => Json(repos).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to list repositories: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchReposQuery {
+    q: String,
+}
+
+#[instrument(skip(state))]
+async fn github_search_repos(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+    Query(query): Query<SearchReposQuery>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    // Get GitHub connection
+    let connection = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(Some(conn)) => conn,
+        Ok(None) => {
+            return (
+                StatusCode::PRECONDITION_REQUIRED,
+                "GitHub account not connected. Run 'lh github connect' first.",
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get GitHub connection: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    let gh_client = github::GitHubClient::new(&connection.access_token);
+
+    match gh_client.search_repos(&query.q).await {
+        Ok(repos) => Json(repos).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to search repositories: {}", e),
         )
             .into_response(),
     }

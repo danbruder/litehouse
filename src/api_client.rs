@@ -1,10 +1,11 @@
 use crate::config::ClientConfig;
+use crate::github::RepoInfo;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub enum LogStream {
     Lines(BoxStream<'static, anyhow::Result<String>>),
@@ -340,4 +341,169 @@ impl ApiClient {
             Err(anyhow!("Failed to delete S3 config: {}", error))
         }
     }
+
+    // ===== GitHub Methods =====
+
+    pub async fn github_connect_start(&self) -> Result<DeviceFlowStartResponse> {
+        let response = self
+            .client
+            .post(&format!("{}/github/connect/start", self.config.base_url))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let data: DeviceFlowStartResponse = response.json().await?;
+            Ok(data)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to start GitHub connection: {}", error))
+        }
+    }
+
+    pub async fn github_connect_poll(
+        &self,
+        device_code: &str,
+        interval: u64,
+        expires_in: u64,
+    ) -> Result<GitHubConnectResponse> {
+        let response = self
+            .client
+            .post(&format!("{}/github/connect/poll", self.config.base_url))
+            .json(&serde_json::json!({
+                "device_code": device_code,
+                "interval": interval,
+                "expires_in": expires_in
+            }))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let data: GitHubConnectResponse = response.json().await?;
+            Ok(data)
+        } else {
+            let status = response.status();
+            let error = response.text().await?;
+            if status.as_u16() == 408 {
+                return Err(anyhow!("Authorization timed out"));
+            }
+            if status.as_u16() == 403 {
+                return Err(anyhow!("Authorization was denied"));
+            }
+            Err(anyhow!("Failed to complete GitHub connection: {}", error))
+        }
+    }
+
+    pub async fn github_disconnect(&self) -> Result<()> {
+        let response = self
+            .client
+            .delete(&format!("{}/github/connection", self.config.base_url))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to disconnect GitHub: {}", error))
+        }
+    }
+
+    pub async fn github_status(&self) -> Result<GitHubStatusResponse> {
+        let response = self
+            .client
+            .get(&format!("{}/github/status", self.config.base_url))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let data: GitHubStatusResponse = response.json().await?;
+            Ok(data)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to get GitHub status: {}", error))
+        }
+    }
+
+    pub async fn github_list_repos(&self, limit: u32) -> Result<Vec<RepoInfo>> {
+        let response = self
+            .client
+            .get(&format!(
+                "{}/github/repos?limit={}",
+                self.config.base_url, limit
+            ))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let repos: Vec<RepoInfo> = response.json().await?;
+            Ok(repos)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to list GitHub repos: {}", error))
+        }
+    }
+
+    pub async fn github_search_repos(&self, query: &str) -> Result<Vec<RepoInfo>> {
+        let response = self
+            .client
+            .get(&format!(
+                "{}/github/repos/search?q={}",
+                self.config.base_url,
+                urlencoding::encode(query)
+            ))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let repos: Vec<RepoInfo> = response.json().await?;
+            Ok(repos)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to search GitHub repos: {}", error))
+        }
+    }
+
+    pub async fn create_app_from_github(&self, app_name: &str, github_repo: &str) -> Result<()> {
+        let response = self
+            .client
+            .post(&format!("{}/apps", self.config.base_url))
+            .json(&serde_json::json!({
+                "name": app_name,
+                "from_github": github_repo
+            }))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            println!("App '{}' created from GitHub repo '{}'", app_name, github_repo);
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to create app from GitHub: {}", error))
+        }
+    }
+}
+
+// GitHub response types
+#[derive(Debug, Deserialize)]
+pub struct DeviceFlowStartResponse {
+    pub user_code: String,
+    pub verification_uri: String,
+    pub device_code: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitHubConnectResponse {
+    pub username: String,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GitHubStatusResponse {
+    pub connected: bool,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub scopes: Option<String>,
 }

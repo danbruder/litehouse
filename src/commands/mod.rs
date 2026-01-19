@@ -3,6 +3,7 @@ pub mod auth;
 pub mod build;
 pub mod create;
 pub mod delete;
+pub mod github;
 pub mod init;
 pub mod logs;
 pub mod remote;

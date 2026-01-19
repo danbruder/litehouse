@@ -32,8 +32,12 @@ enum Commands {
 
     /// Create a new app
     Create {
-        /// Name of the app
-        app_name: String,
+        /// Name of the app (optional if using --from-github)
+        app_name: Option<String>,
+
+        /// Create from a GitHub repository (format: owner/repo)
+        #[arg(long)]
+        from_github: Option<String>,
     },
 
     /// Delete an app
@@ -132,6 +136,12 @@ enum Commands {
         #[command(subcommand)]
         command: RemoteCmd,
     },
+
+    /// Manage GitHub integration
+    Github {
+        #[command(subcommand)]
+        command: GithubCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,12 +156,36 @@ enum PodmanCmd {
 enum RemoteCmd {
     /// Add a remote
     Add {
-
         /// Remote name
         remote: String,
     },
     /// Remove a remote
-    Remove ,
+    Remove,
+}
+
+#[derive(Subcommand)]
+enum GithubCmd {
+    /// Connect your GitHub account
+    Connect,
+
+    /// Disconnect GitHub account
+    Disconnect,
+
+    /// Show connection status
+    Status,
+
+    /// List your repositories
+    Repos {
+        /// Maximum number of repositories to list
+        #[arg(short, long, default_value = "30")]
+        limit: u32,
+    },
+
+    /// Search repositories
+    Search {
+        /// Search query
+        query: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -215,7 +249,30 @@ pub async fn run() -> Result<()> {
             let api_client = ApiClient::new(config);
 
             match cli.command {
-        Commands::Create { app_name } => api_client.create_app(&app_name).await,
+        Commands::Create { app_name, from_github } => {
+            match (app_name, from_github) {
+                (Some(name), Some(repo)) => {
+                    // Create app with explicit name from GitHub repo
+                    api_client.create_app_from_github(&name, &repo).await?;
+                    println!("Run 'lh build {}' to build and deploy", name);
+                    Ok(())
+                }
+                (None, Some(repo)) => {
+                    // Derive app name from repo name
+                    let name = repo.split('/').last().unwrap_or(&repo);
+                    api_client.create_app_from_github(name, &repo).await?;
+                    println!("Run 'lh build {}' to build and deploy", name);
+                    Ok(())
+                }
+                (Some(name), None) => {
+                    // Standard app creation
+                    api_client.create_app(&name).await
+                }
+                (None, None) => {
+                    anyhow::bail!("Either app_name or --from-github must be provided");
+                }
+            }
+        }
         Commands::Start { app_name } => api_client.start_app(&app_name).await,
         Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
         Commands::Restart { app_name } => {
@@ -306,6 +363,13 @@ pub async fn run() -> Result<()> {
             RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
         },
         Commands::Build { app_name } => api_client.build(&app_name).await,
+        Commands::Github { command } => match command {
+            GithubCmd::Connect => crate::commands::github::connect::execute(&api_client).await,
+            GithubCmd::Disconnect => crate::commands::github::disconnect::execute(&api_client).await,
+            GithubCmd::Status => crate::commands::github::status::execute(&api_client).await,
+            GithubCmd::Repos { limit } => crate::commands::github::repos::execute(&api_client, limit).await,
+            GithubCmd::Search { query } => crate::commands::github::search::execute(&api_client, &query).await,
+        },
         Commands::Init { .. } | Commands::Serve => unreachable!("Already handled above"),
             }
         }

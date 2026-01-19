@@ -19,6 +19,7 @@ pub struct AppState {
     pub db_pool: sqlx::Pool<sqlx::Sqlite>,
     pub docker: Docker,
     pub jwt_secret: String,
+    pub github_client_id: Option<String>,
 }
 
 /// Start the Litehouse server
@@ -46,11 +47,18 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Get JWT secret from environment or use default (warning will be logged)
     let jwt_secret = crate::auth::jwt::get_jwt_secret();
 
+    // Get GitHub client ID from environment (optional)
+    let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok();
+    if github_client_id.is_none() {
+        tracing::info!("GITHUB_CLIENT_ID not set - GitHub OAuth will be disabled");
+    }
+
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
         db_pool: pool.clone(),
         docker: docker.clone(),
         jwt_secret,
+        github_client_id,
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else
