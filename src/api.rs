@@ -30,6 +30,7 @@ use tracing::instrument;
 pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
     // Public routes (no authentication required)
     let public_routes = Router::new()
+        .route("/auth/status", get(auth_status_handler))
         .route("/auth/register", post(register_handler))
         .route("/auth/login", post(login_handler))
         .route("/auth/refresh", post(refresh_token_handler))
@@ -532,6 +533,34 @@ async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl In
 }
 
 // ===== AUTH ENDPOINTS =====
+
+#[derive(Debug, serde::Serialize)]
+struct AuthStatusResponse {
+    initialized: bool,
+    version: String,
+}
+
+#[instrument(skip(state))]
+async fn auth_status_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match crate::db::user::count(&pool).await {
+        Ok(count) => {
+            let response = AuthStatusResponse {
+                initialized: count > 0,
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            };
+            Json(response).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to check server status: {}", e),
+        )
+            .into_response(),
+    }
+}
 
 #[instrument(skip(state))]
 async fn register_handler(

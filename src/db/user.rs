@@ -158,3 +158,12 @@ pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<User>> {
 
     Ok(users)
 }
+
+/// Count total number of users
+#[instrument(skip(pool))]
+pub async fn count(pool: &Pool<Sqlite>) -> Result<i64> {
+    let result = sqlx::query_scalar!(r#"SELECT COUNT(*) as "count: i64" FROM user"#)
+        .fetch_one(pool)
+        .await?;
+    Ok(result)
+}
