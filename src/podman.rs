@@ -322,13 +322,18 @@ pub async fn logs_stream(
     )?;
     let container_name = format!("{}-container", app_name);
 
-    // Check if container exists
-    let all_containers = docker.list_containers::<String>(None).await?;
+    // Check if container exists (include stopped containers)
+    let options = Some(bollard::container::ListContainersOptions::<String> {
+        all: true,
+        ..Default::default()
+    });
+    let all_containers = docker.list_containers::<String>(options).await?;
 
     let mut container_found = false;
     for container in all_containers {
         if let Some(names) = &container.names {
-            if names.iter().any(|n| n == &container_name) {
+            // Use contains() because Podman returns names with leading "/" (e.g., "/app-container")
+            if names.iter().any(|n| n.contains(&container_name)) {
                 container_found = true;
                 break;
             }
