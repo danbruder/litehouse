@@ -18,7 +18,7 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     let multi = MultiProgress::new();
 
     // Create progress bar for phases (pinned at top)
-    let pb = multi.add(ProgressBar::new(15));
+    let pb = multi.add(ProgressBar::new(12));
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len}: {msg}")
@@ -115,65 +115,39 @@ pub async fn execute(ssh_target: &str, domain: &str) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 9: Start Caddy Container
-    pb.set_message("Starting Caddy reverse proxy container...");
-    if let Err(e) = phase9_start_caddy_container(ssh_target) {
-        pb.finish_with_message("❌ Caddy container start failed");
+    // Phase 9: Start litehouse-server Container
+    // Note: Caddy and Litestream containers are started by the litehouse server itself
+    pb.set_message("Starting litehouse-server container...");
+    if let Err(e) = phase11_start_litehouse_container(ssh_target) {
+        pb.finish_with_message("❌ litehouse-server container start failed");
         error!("Phase 9 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 10: Start Litestream Container
-    pb.set_message("Starting Litestream backup container...");
-    if let Err(e) = phase10_start_litestream_container(ssh_target) {
-        pb.finish_with_message("❌ Litestream container start failed");
+    // Phase 10: Enable podman-restart Service
+    pb.set_message("Enabling podman-restart.service for boot restoration...");
+    if let Err(e) = phase13_enable_podman_restart(ssh_target) {
+        pb.finish_with_message("❌ podman-restart.service setup failed");
         error!("Phase 10 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 11: Start litehouse-server Container
-    pb.set_message("Starting litehouse-server container...");
-    if let Err(e) = phase11_start_litehouse_container(ssh_target) {
-        pb.finish_with_message("❌ litehouse-server container start failed");
+    // Phase 11: Client Configuration
+    pb.set_message("Updating local client configuration...");
+    if let Err(e) = phase14_client_configuration(domain) {
+        pb.finish_with_message("❌ Client configuration failed");
         error!("Phase 11 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
 
-    // Phase 12: Configure Caddy with initial routing
-    pb.set_message("Configuring Caddy routing for admin API...");
-    if let Err(e) = phase12_configure_caddy(ssh_target, domain) {
-        pb.finish_with_message("❌ Caddy configuration failed");
-        error!("Phase 12 failed: {}", e);
-        return Err(e);
-    }
-    pb.inc(1);
-
-    // Phase 13: Enable podman-restart Service
-    pb.set_message("Enabling podman-restart.service for boot restoration...");
-    if let Err(e) = phase13_enable_podman_restart(ssh_target) {
-        pb.finish_with_message("❌ podman-restart.service setup failed");
-        error!("Phase 13 failed: {}", e);
-        return Err(e);
-    }
-    pb.inc(1);
-
-    // Phase 14: Client Configuration
-    pb.set_message("Updating local client configuration...");
-    if let Err(e) = phase14_client_configuration(domain) {
-        pb.finish_with_message("❌ Client configuration failed");
-        error!("Phase 14 failed: {}", e);
-        return Err(e);
-    }
-    pb.inc(1);
-
-    // Phase 15: Verification
+    // Phase 12: Verification
     pb.set_message("Verifying server is responding...");
     if let Err(e) = phase15_verification(ssh_target, domain) {
         pb.finish_with_message("❌ Verification failed");
-        error!("Phase 15 failed: {}", e);
+        error!("Phase 12 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);

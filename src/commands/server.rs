@@ -29,8 +29,22 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let docker = podman::connect().await?;
 
-    // NOTE: Caddy and Litestream containers are started by the init script
-    // with restart=unless-stopped policy. Here we only sync their configurations.
+    // Reconcile Caddy and Litestream containers on startup.
+    // The server is responsible for ensuring these containers are running
+    // and properly configured. This handles cases where containers were
+    // stopped, crashed, or never started.
+
+    // Start/reconcile Caddy container
+    if let Err(e) = caddy::start(&docker, &config).await {
+        tracing::warn!("Failed to start Caddy on startup: {}", e);
+        // Don't fail startup - Caddy might already be running or will recover
+    }
+
+    // Start/reconcile Litestream container
+    if let Err(e) = litestream::start_with_pool(&docker, &pool).await {
+        tracing::warn!("Failed to start Litestream on startup: {}", e);
+        // Don't fail startup - Litestream is optional for local development
+    }
 
     // Sync Caddy configuration with existing apps
     if let Err(e) = caddy::sync_configuration(&docker, &pool).await {
