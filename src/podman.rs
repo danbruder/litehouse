@@ -1,11 +1,12 @@
 use crate::models::{App, EnvVar};
 use anyhow::Result;
+use bollard::image::BuildImageOptions;
 use bollard::Docker;
-use futures_util::{StreamExt, stream::unfold};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use futures_util::{stream::unfold, StreamExt};
 use std::path::Path;
 use std::pin::Pin;
-use std::process::Command;
-use tokio::process::Command as AsyncCommand;
 use tracing::{info, instrument};
 
 #[derive(Debug, thiserror::Error)]
@@ -38,63 +39,105 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    info!("Starting container image build with Podman CLI...");
+    info!("Starting container image build with Bollard API...");
 
-    // Use Podman CLI directly instead of Bollard build stream
-    let output = AsyncCommand::new("podman")
-        .args(["build", "-t", tag, "."])
-        .current_dir(directory)
-        .output()
-        .await
-        .map_err(|e| PodmanError::BuildError(format!("Failed to execute podman build: {}", e)))?;
+    // Create a tar archive of the build context
+    let tar_gz = create_build_context_tar(directory)?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    let docker = connect().await?;
 
-        tracing::error!("Podman build failed:");
-        tracing::error!("STDOUT: {}", stdout);
-        tracing::error!("STDERR: {}", stderr);
+    let build_options = BuildImageOptions {
+        t: tag,
+        rm: true,
+        ..Default::default()
+    };
 
-        return Err(PodmanError::BuildError(format!(
-            "Podman build failed: {}\nSTDOUT: {}\nSTDERR: {}",
-            output.status, stdout, stderr
-        ))
-        .into());
+    // Build the image using Bollard API
+    let mut build_stream = docker.build_image(build_options, None, Some(tar_gz.into()));
+
+    let mut last_error: Option<String> = None;
+
+    while let Some(result) = build_stream.next().await {
+        match result {
+            Ok(output) => {
+                if let Some(stream) = output.stream {
+                    let msg = stream.trim();
+                    if !msg.is_empty() {
+                        info!("Build: {}", msg);
+                    }
+                }
+                if let Some(error) = output.error {
+                    tracing::error!("Build error: {}", error);
+                    last_error = Some(error);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Build stream error: {}", e);
+                return Err(PodmanError::BuildStreamError(e.to_string()).into());
+            }
+        }
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("Podman build output: {}", stdout);
+    if let Some(error) = last_error {
+        return Err(PodmanError::BuildError(error).into());
+    }
 
     info!("Container image build completed successfully");
 
-    // Get the image ID by inspecting the built image
-    let inspect_output = AsyncCommand::new("podman")
-        .args(["inspect", tag, "--format", "{{.Id}}"])
-        .output()
-        .await
-        .map_err(|e| PodmanError::BuildError(format!("Failed to inspect image: {}", e)))?;
+    // Get the image ID by inspecting the built image using Bollard API
+    let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
+        PodmanError::BuildError(format!("Failed to inspect built image: {}", e))
+    })?;
 
-    if !inspect_output.status.success() {
-        let stderr = String::from_utf8_lossy(&inspect_output.stderr);
-        return Err(
-            PodmanError::BuildError(format!("Failed to inspect built image: {}", stderr)).into(),
-        );
-    }
-
-    let image_id = String::from_utf8_lossy(&inspect_output.stdout)
-        .trim()
-        .to_string();
-
-    if image_id.is_empty() {
-        return Err(PodmanError::BuildError(
-            "Failed to get image ID from build result".to_string(),
-        )
-        .into());
-    }
+    let image_id = image_inspect
+        .id
+        .ok_or_else(|| PodmanError::BuildError("Failed to get image ID from build result".to_string()))?;
 
     info!("Built image ID: {}", image_id);
     Ok(image_id)
+}
+
+/// Create a gzipped tar archive of the build context directory
+fn create_build_context_tar(directory: &str) -> Result<Vec<u8>> {
+    use std::fs;
+    use walkdir::WalkDir;
+
+    let dir_path = Path::new(directory);
+
+    let mut tar_data = Vec::new();
+    {
+        let encoder = GzEncoder::new(&mut tar_data, Compression::default());
+        let mut tar_builder = tar::Builder::new(encoder);
+
+        for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let relative_path = path.strip_prefix(dir_path)?;
+
+            // Skip empty relative paths (the root directory itself)
+            if relative_path.as_os_str().is_empty() {
+                continue;
+            }
+
+            // Skip .git directory
+            if relative_path
+                .components()
+                .any(|c| c.as_os_str() == ".git")
+            {
+                continue;
+            }
+
+            if path.is_file() {
+                let mut file = fs::File::open(path)?;
+                tar_builder.append_file(relative_path, &mut file)?;
+            } else if path.is_dir() {
+                tar_builder.append_dir(relative_path, path)?;
+            }
+        }
+
+        tar_builder.into_inner()?.finish()?;
+    }
+
+    Ok(tar_data)
 }
 
 #[instrument]
@@ -452,64 +495,39 @@ pub async fn stop(app: &App) -> Result<()> {
 }
 
 fn resolve_podman_socket_path() -> Result<String> {
-    // User-provided overrides
+    // User-provided overrides via environment variables
+    // These are the preferred way to configure the socket path in containerized environments
     if let Ok(sock) = std::env::var("PODMAN_SSH_SOCK") {
+        info!("Using PODMAN_SSH_SOCK: {}", sock);
         return Ok(sock);
     }
     if let Ok(sock) = std::env::var("PODMAN_SOCK") {
+        info!("Using PODMAN_SOCK: {}", sock);
         return Ok(sock);
     }
     if let Ok(ch) = std::env::var("CONTAINER_HOST") {
         if let Some(path) = ch.strip_prefix("unix://") {
+            info!("Using CONTAINER_HOST: {}", path);
             return Ok(path.to_string());
         }
     }
 
-    // Discover from default connection
-    let list = Command::new("podman")
-        .args([
-            "system",
-            "connection",
-            "ls",
-            "--format",
-            "{{.Name}} {{.Default}} {{.URI}}",
-        ])
-        .output()?;
+    // Check well-known socket paths
+    let well_known_paths = [
+        "/run/podman/podman.sock",
+        "/var/run/podman/podman.sock",
+        "/var/run/docker.sock",
+    ];
 
-    if list.status.success() {
-        let stdout = String::from_utf8_lossy(&list.stdout);
-        for line in stdout.lines() {
-            let mut parts = line.split_whitespace();
-            if let (Some(name), Some(default_flag), Some(uri)) =
-                (parts.next(), parts.next(), parts.next())
-            {
-                if default_flag == "true" {
-                    if let Some(path) = uri.strip_prefix("unix://") {
-                        return Ok(path.to_string());
-                    } else if uri.starts_with("ssh://") {
-                        // On macOS with Podman Machine, use the local forwarded API socket
-                        let inspect = Command::new("podman")
-                            .args([
-                                "machine",
-                                "inspect",
-                                name,
-                                "--format",
-                                "{{.ConnectionInfo.PodmanSocket.Path}}",
-                            ])
-                            .output()?;
-                        if inspect.status.success() {
-                            let path = String::from_utf8_lossy(&inspect.stdout).trim().to_string();
-                            if !path.is_empty() {
-                                return Ok(path);
-                            }
-                        }
-                    }
-                }
-            }
+    for path in &well_known_paths {
+        if std::path::Path::new(path).exists() {
+            info!("Found socket at well-known path: {}", path);
+            return Ok(path.to_string());
         }
     }
 
-    // Fallback to well-known default
+    // Fallback to the most common default
+    info!("Using default socket path: /run/podman/podman.sock");
     Ok("/run/podman/podman.sock".to_string())
 }
 

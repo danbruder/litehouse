@@ -45,7 +45,8 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies (git for cloning repos, podman CLI for builds)
+# Install runtime dependencies (git for cloning repos)
+# Note: podman/docker builds are done via the Bollard API through a mounted socket
 RUN apk add --no-cache \
     ca-certificates \
     git
