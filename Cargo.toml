@@ -31,6 +31,11 @@ bytes = "1"
 indicatif = "0.17"
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2.0"
+jsonwebtoken = "9.2"
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

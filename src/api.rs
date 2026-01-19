@@ -28,7 +28,17 @@ use tokio::sync::RwLock;
 use tracing::instrument;
 
 pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
-    Router::new()
+    // Public routes (no authentication required)
+    let public_routes = Router::new()
+        .route("/auth/register", post(register_handler))
+        .route("/auth/login", post(login_handler))
+        .route("/auth/refresh", post(refresh_token_handler))
+        .with_state(state.clone());
+
+    // Protected routes (require authentication)
+    let protected_routes = Router::new()
+        .route("/auth/logout", post(logout_handler))
+        .route("/auth/me", get(get_current_user))
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
         .route("/apps/:name", get(get_app))
@@ -45,8 +55,17 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::auth_middleware,
+        ))
+        .with_state(state.clone());
+
+    // Combine routes
+    Router::new()
+        .merge(public_routes)
+        .merge(protected_routes)
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
-        .with_state(state)
 }
 
 #[instrument(skip(state))]
@@ -507,6 +526,137 @@ async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl In
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to delete S3 config: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+// ===== AUTH ENDPOINTS =====
+
+#[instrument(skip(state))]
+async fn register_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<crate::models::RegisterRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let jwt_secret = state.read().await.jwt_secret.clone();
+
+    match crate::commands::auth::register::execute(
+        &pool,
+        &payload.email,
+        &payload.password,
+        payload.full_name,
+        payload.organization_name,
+        &jwt_secret,
+    )
+    .await
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => match e {
+            crate::commands::auth::register::RegisterError::UserAlreadyExists(_) => {
+                (StatusCode::CONFLICT, format!("{}", e)).into_response()
+            }
+            crate::commands::auth::register::RegisterError::OrganizationAlreadyExists(_) => {
+                (StatusCode::CONFLICT, format!("{}", e)).into_response()
+            }
+            crate::commands::auth::register::RegisterError::UserError(_) => {
+                (StatusCode::BAD_REQUEST, format!("{}", e)).into_response()
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
+        },
+    }
+}
+
+#[instrument(skip(state))]
+async fn login_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<crate::models::LoginRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let jwt_secret = state.read().await.jwt_secret.clone();
+
+    match crate::commands::auth::login::execute(&pool, &payload.email, &payload.password, &jwt_secret).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => match e {
+            crate::commands::auth::login::LoginError::InvalidCredentials => {
+                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
+            }
+            crate::commands::auth::login::LoginError::UserNotActive => {
+                (StatusCode::FORBIDDEN, format!("{}", e)).into_response()
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
+        },
+    }
+}
+
+#[instrument(skip(state))]
+async fn logout_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<crate::models::RefreshTokenRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match crate::commands::auth::logout::execute(&pool, &payload.refresh_token).await {
+        Ok(_) => (StatusCode::OK, "Logged out successfully").into_response(),
+        Err(e) => match e {
+            crate::commands::auth::logout::LogoutError::InvalidToken => {
+                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
+        },
+    }
+}
+
+#[instrument(skip(state))]
+async fn refresh_token_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<crate::models::RefreshTokenRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let jwt_secret = state.read().await.jwt_secret.clone();
+
+    match crate::commands::auth::refresh::execute(&pool, &payload.refresh_token, &jwt_secret).await {
+        Ok(tokens) => Json(tokens).into_response(),
+        Err(e) => match e {
+            crate::commands::auth::refresh::RefreshError::InvalidToken
+            | crate::commands::auth::refresh::RefreshError::TokenRevoked => {
+                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
+            }
+            crate::commands::auth::refresh::RefreshError::UserNotActive => {
+                (StatusCode::FORBIDDEN, format!("{}", e)).into_response()
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
+        },
+    }
+}
+
+#[instrument(skip(state))]
+async fn get_current_user(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match crate::db::user::get_by_id(&pool, &auth_user.user_id).await {
+        Ok(Some(user)) => {
+            // Get user's organizations
+            match crate::db::organization::get_user_organizations(&pool, &user.id).await {
+                Ok(orgs) => Json(crate::models::AuthenticatedUser {
+                    user,
+                    organizations: orgs,
+                })
+                .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to get user organizations: {}", e),
+                )
+                    .into_response(),
+            }
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "User not found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to get user: {}", e),
         )
             .into_response(),
     }
