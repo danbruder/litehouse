@@ -25,7 +25,9 @@ pub fn test_ssh_connection(target: &str) -> Result<()> {
     let output = Command::new("ssh")
         .args([
             "-o", "BatchMode=yes",
-            "-o", "ConnectTimeout=5",
+            "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=5",
+            "-o", "ServerAliveCountMax=3",
             target,
             "echo",
             "Connection successful"
@@ -55,10 +57,27 @@ pub fn execute_remote_with_log(
     command: &str,
     log_window: Option<&ProgressBar>,
 ) -> Result<String> {
+    execute_remote_with_timeout(target, command, log_window, 300) // 5 minute default timeout
+}
+
+/// Execute a command on the remote server via SSH with optional log window and configurable timeout
+#[instrument(skip(log_window))]
+pub fn execute_remote_with_timeout(
+    target: &str,
+    command: &str,
+    log_window: Option<&ProgressBar>,
+    timeout_secs: u64,
+) -> Result<String> {
     info!("Executing remote command: {}", command);
 
     let mut child = Command::new("ssh")
-        .args([target, command])
+        .args([
+            "-o", "ConnectTimeout=30",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+            target,
+            command,
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -126,12 +145,42 @@ pub fn execute_remote_with_log(
         }
     });
 
+    // Wait for command to finish with timeout
+    let child_id = child.id();
+    let start_time = std::time::Instant::now();
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start_time.elapsed() > timeout_duration {
+                    // Kill the process
+                    let _ = child.kill();
+                    let _ = child.wait(); // Reap the process
+
+                    // Wait for threads to finish (they should complete once the process is killed)
+                    let _ = stdout_handle.join();
+                    let _ = stderr_handle.join();
+
+                    anyhow::bail!(
+                        "Remote command timed out after {} seconds (pid {}). Command: {}",
+                        timeout_secs,
+                        child_id,
+                        command
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to wait for SSH command: {}", e);
+            }
+        }
+    };
+
     // Wait for threads to finish
     stdout_handle.join().unwrap();
     stderr_handle.join().unwrap();
-
-    // Wait for command to finish
-    let status = child.wait().context("Failed to wait for SSH command")?;
 
     if !status.success() {
         let all_lines = all_output.lock().unwrap();

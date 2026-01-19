@@ -326,18 +326,18 @@ pub fn phase11_start_litehouse_container(ssh_target: &str) -> Result<()> {
     let uid_output = execute_remote(ssh_target, "id -u litehouse")?;
     let litehouse_uid = uid_output.trim();
 
-    // Stop and remove any existing litehouse-server container
+    // Stop and remove any existing litehouse-server container (--time 0 for immediate stop)
     let _ = execute_remote(
         ssh_target,
         &format!(
-            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman stop -i litehouse-server'",
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman stop --time 0 -i litehouse-server'",
             litehouse_uid
         ),
     );
     let _ = execute_remote(
         ssh_target,
         &format!(
-            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman rm -i litehouse-server'",
+            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman rm -f litehouse-server'",
             litehouse_uid
         ),
     );

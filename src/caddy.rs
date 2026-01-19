@@ -694,7 +694,10 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
 async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()> {
     // Use native HTTP client instead of docker exec to avoid dependency on curl in container
     let client = reqwest::Client::new();
-    let caddy_api_url = "http://localhost:2019/load";
+    // In containers, use CADDY_API_URL env var or default to host.containers.internal for Podman
+    // When running directly on host, localhost works
+    let caddy_api_url = std::env::var("CADDY_API_URL")
+        .unwrap_or_else(|_| "http://host.containers.internal:2019/load".to_string());
 
     info!("Sending configuration to Caddy API at {}", caddy_api_url);
 

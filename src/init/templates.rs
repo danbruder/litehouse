@@ -2,8 +2,9 @@
 pub fn server_config_template(domain: &str) -> String {
     format!(
         r#"host = "0.0.0.0"
-proxy_host = "0.0.0.0"
-proxy_port = 3030
+port = 3030
+caddy_http_port = 80
+caddy_https_port = 443
 domain = "{}"
 "#,
         domain
