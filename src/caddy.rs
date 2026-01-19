@@ -44,6 +44,13 @@ struct HttpApp {
 struct Server {
     listen: Vec<String>,
     routes: Vec<Route>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automatic_https: Option<AutomaticHttps>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct AutomaticHttps {
+    disable: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -608,17 +615,17 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
     let mut routes = Vec::new();
 
     // Add admin API route
-    if let Some(domain_str) = domain {
-        let admin_host = if local_dev {
-            "admin.localhost".to_string()
-        } else {
-            format!("admin.{}", domain_str)
-        };
+    let admin_host = if local_dev {
+        // Always add admin.localhost for local dev
+        Some("admin.localhost".to_string())
+    } else {
+        // In production, only add if domain is configured
+        domain.map(|d| format!("admin.{}", d))
+    };
 
+    if let Some(host) = admin_host {
         let admin_route = Route {
-            match_rules: vec![HostMatcher {
-                host: vec![admin_host],
-            }],
+            match_rules: vec![HostMatcher { host: vec![host] }],
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream {
@@ -642,17 +649,13 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
                     format!("{}.{}", app.name, domain_str)
                 } else {
                     // Fallback to old hardcoded domain for backwards compatibility
-                    format!("{}.s.danbruder.com", app.name)
+                    format!("{}.lh.danbruder.com", app.name)
                 }
             };
 
-            let upstream = if local_dev {
-                // In local dev, containers can reach host via 0.0.0.0
-                format!("0.0.0.0:{}", port)
-            } else {
-                // In production with containerized Caddy, use host.containers.internal
-                format!("host.containers.internal:{}", port)
-            };
+            // Caddy runs in a container, so it needs host.containers.internal to reach
+            // apps running on the host (both local dev and production)
+            let upstream = format!("host.containers.internal:{}", port);
 
             let route = Route {
                 match_rules: vec![HostMatcher { host: vec![host] }],
@@ -667,12 +670,16 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
     }
 
     let mut servers = HashMap::new();
-    let listen_ports = if local_dev {
-        // For local development, use different ports to avoid conflicts
-        vec![":9090".to_string(), ":9443".to_string()]
+    // Caddy always listens on :80/:443 inside the container.
+    // The container port mapping handles exposing on different host ports
+    // (e.g., 9090/9443 for local dev, 80/443 for production).
+    let listen_ports = vec![":80".to_string(), ":443".to_string()];
+
+    // Disable automatic HTTPS for local dev (no valid certs for .localhost)
+    let automatic_https = if local_dev {
+        Some(AutomaticHttps { disable: true })
     } else {
-        // For production, use standard HTTP/HTTPS ports
-        vec![":80".to_string(), ":443".to_string()]
+        None
     };
 
     servers.insert(
@@ -680,6 +687,7 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
         Server {
             listen: listen_ports,
             routes,
+            automatic_https,
         },
     );
 
@@ -694,10 +702,10 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
 async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()> {
     // Use native HTTP client instead of docker exec to avoid dependency on curl in container
     let client = reqwest::Client::new();
-    // In containers, use CADDY_API_URL env var or default to host.containers.internal for Podman
-    // When running directly on host, localhost works
+    // The litehouse server runs on the host, so use localhost to reach Caddy's admin API.
+    // Use CADDY_API_URL env var to override if needed.
     let caddy_api_url = std::env::var("CADDY_API_URL")
-        .unwrap_or_else(|_| "http://host.containers.internal:2019/load".to_string());
+        .unwrap_or_else(|_| "http://localhost:2019/load".to_string());
 
     info!("Sending configuration to Caddy API at {}", caddy_api_url);
 
@@ -736,7 +744,7 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     info!("Synchronizing Caddy configuration with database apps");
 
     // Detect if we're running in local development mode
-    let local_dev = std::env::var("BINDROP_LOCAL_DEV").is_ok() || cfg!(debug_assertions);
+    let local_dev = std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions);
 
     // Load server config to get domain
     let server_config = ServerConfig::load().unwrap_or_default();
