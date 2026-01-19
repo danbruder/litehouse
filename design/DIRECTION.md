@@ -207,3 +207,7 @@ Avoid:
 - “Uh oh”
 - “🔥” style urgency
 
+
+---
+
+Visual direction is in ./mockup.png
