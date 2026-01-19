@@ -3,3 +3,4 @@ config/litehouse.*
 .env
 assets/elm-stuff
 assets/dist
+assets/node_modules

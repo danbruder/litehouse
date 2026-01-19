@@ -2,8 +2,8 @@ port module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
-import Html exposing (..)
-import Html.Attributes exposing (..)
+import Html exposing (Html, a, aside, button, div, footer, h1, h2, h3, header, input, label, main_, nav, p, pre, span, text)
+import Html.Attributes exposing (class, disabled, for, href, id, placeholder, required, target, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
@@ -131,6 +131,13 @@ type alias UserInfo =
     }
 
 
+type SidebarItem
+    = MyApps
+    | Activity
+    | Backups
+    | Settings
+
+
 type alias DashboardState =
     { user : UserInfo
     , view : DashboardView
@@ -138,6 +145,7 @@ type alias DashboardState =
     , appsLoading : Bool
     , githubStatus : GitHubStatus
     , token : String
+    , activeSidebarItem : SidebarItem
     }
 
 
@@ -523,6 +531,7 @@ update msg model =
                             , appsLoading = True
                             , githubStatus = GitHubUnknown
                             , token = response.token
+                            , activeSidebarItem = MyApps
                             }
                     in
                     ( { model | page = Dashboard dashboardState }
@@ -552,6 +561,7 @@ update msg model =
                                     , appsLoading = True
                                     , githubStatus = GitHubUnknown
                                     , token = response.accessToken
+                                    , activeSidebarItem = MyApps
                                     }
                             in
                             ( { model | page = Dashboard dashboardState }
@@ -584,6 +594,7 @@ update msg model =
                                     , appsLoading = True
                                     , githubStatus = GitHubUnknown
                                     , token = response.accessToken
+                                    , activeSidebarItem = MyApps
                                     }
                             in
                             ( { model | page = Dashboard dashboardState }
@@ -2040,24 +2051,24 @@ getPageTitle page =
 
 viewLoading : Html Msg
 viewLoading =
-    div [ class "auth-container" ]
-        [ div [ class "auth-card" ]
-            [ div [ class "spinner" ] []
-            , p [ class "loading-text" ] [ text "Loading..." ]
+    div [ class "min-h-screen bg-litehouse-bg flex items-center justify-center" ]
+        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft p-10 text-center" ]
+            [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
+            , p [ class "text-litehouse-muted" ] [ text "Loading..." ]
             ]
         ]
 
 
 viewSetup : SetupForm -> String -> Html Msg
 viewSetup form version =
-    div [ class "auth-container" ]
-        [ div [ class "auth-card" ]
-            [ h1 [] [ text "Welcome to Litehouse" ]
-            , p [ class "subtitle" ] [ text "Create your admin account to get started" ]
+    div [ class "min-h-screen bg-litehouse-bg flex items-center justify-center p-5" ]
+        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft p-10 w-full max-w-md text-center" ]
+            [ h1 [ class "text-2xl font-semibold text-litehouse-text mb-2" ] [ text "Welcome to Litehouse" ]
+            , p [ class "text-litehouse-muted mb-6" ] [ text "Create your admin account to get started" ]
             , Html.form [ onSubmit SubmitSetup ]
                 [ viewError form.error
-                , div [ class "form-group" ]
-                    [ label [ for "fullName" ] [ text "Full Name" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "fullName", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Full Name" ]
                     , input
                         [ type_ "text"
                         , id "fullName"
@@ -2066,11 +2077,12 @@ viewSetup form version =
                         , placeholder "John Doe"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
-                , div [ class "form-group" ]
-                    [ label [ for "email" ] [ text "Email" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "email", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Email" ]
                     , input
                         [ type_ "email"
                         , id "email"
@@ -2079,11 +2091,12 @@ viewSetup form version =
                         , placeholder "admin@example.com"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
-                , div [ class "form-group" ]
-                    [ label [ for "orgName" ] [ text "Organization Name" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "orgName", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Organization Name" ]
                     , input
                         [ type_ "text"
                         , id "orgName"
@@ -2092,11 +2105,12 @@ viewSetup form version =
                         , placeholder "My Organization"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
-                , div [ class "form-group" ]
-                    [ label [ for "password" ] [ text "Password" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "password", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Password" ]
                     , input
                         [ type_ "password"
                         , id "password"
@@ -2105,11 +2119,12 @@ viewSetup form version =
                         , placeholder "At least 8 characters"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
-                , div [ class "form-group" ]
-                    [ label [ for "confirmPassword" ] [ text "Confirm Password" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "confirmPassword", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Confirm Password" ]
                     , input
                         [ type_ "password"
                         , id "confirmPassword"
@@ -2118,12 +2133,13 @@ viewSetup form version =
                         , placeholder "Re-enter your password"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
                 , button
                     [ type_ "submit"
-                    , class "btn-primary"
+                    , class "w-full px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors mt-2 disabled:bg-litehouse-border disabled:cursor-not-allowed"
                     , disabled form.submitting
                     ]
                     [ text
@@ -2142,14 +2158,14 @@ viewSetup form version =
 
 viewLogin : LoginForm -> String -> Html Msg
 viewLogin form version =
-    div [ class "auth-container" ]
-        [ div [ class "auth-card" ]
-            [ h1 [] [ text "Litehouse" ]
-            , p [ class "subtitle" ] [ text "Sign in to your account" ]
+    div [ class "min-h-screen bg-litehouse-bg flex items-center justify-center p-5" ]
+        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft p-10 w-full max-w-md text-center" ]
+            [ h1 [ class "text-2xl font-semibold text-litehouse-text mb-2" ] [ text "Litehouse" ]
+            , p [ class "text-litehouse-muted mb-6" ] [ text "Sign in to your account" ]
             , Html.form [ onSubmit SubmitLogin ]
                 [ viewError form.error
-                , div [ class "form-group" ]
-                    [ label [ for "email" ] [ text "Email" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "email", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Email" ]
                     , input
                         [ type_ "email"
                         , id "email"
@@ -2158,11 +2174,12 @@ viewLogin form version =
                         , placeholder "admin@example.com"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
-                , div [ class "form-group" ]
-                    [ label [ for "password" ] [ text "Password" ]
+                , div [ class "mb-4 text-left" ]
+                    [ label [ for "password", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "Password" ]
                     , input
                         [ type_ "password"
                         , id "password"
@@ -2171,12 +2188,13 @@ viewLogin form version =
                         , placeholder "Your password"
                         , required True
                         , disabled form.submitting
+                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:bg-litehouse-bg disabled:cursor-not-allowed"
                         ]
                         []
                     ]
                 , button
                     [ type_ "submit"
-                    , class "btn-primary"
+                    , class "w-full px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors mt-2 disabled:bg-litehouse-border disabled:cursor-not-allowed"
                     , disabled form.submitting
                     ]
                     [ text
@@ -2195,43 +2213,93 @@ viewLogin form version =
 
 viewDashboard : DashboardState -> String -> Html Msg
 viewDashboard state version =
-    div [ class "dashboard" ]
-        [ header [ class "dashboard-header" ]
-            [ div [ class "header-brand" ]
-                [ a [ href "/dashboard", class "brand-link" ] [ h1 [] [ text "Litehouse" ] ]
-                ]
-            , div [ class "header-user" ]
-                [ viewGitHubStatusBadge state.githubStatus
-                , span [ class "user-name" ] [ text state.user.fullName ]
-                , button [ class "btn-secondary", onClick Logout ] [ text "Logout" ]
+    div [ class "min-h-screen bg-litehouse-bg flex flex-col" ]
+        [ viewHeader state
+        , div [ class "flex flex-1" ]
+            [ viewSidebar state
+            , main_ [ class "flex-1 p-6" ]
+                [ div [ class "max-w-6xl mx-auto" ]
+                    [ case state.view of
+                        AppsListView ->
+                            viewAppsList state
+
+                        CreateAppView createState ->
+                            viewCreateApp state createState
+
+                        AppDetailView detailState ->
+                            viewAppDetail detailState
+                    ]
                 ]
             ]
-        , main_ [ class "dashboard-content" ]
-            [ case state.view of
-                AppsListView ->
-                    viewAppsList state
-
-                CreateAppView createState ->
-                    viewCreateApp state createState
-
-                AppDetailView detailState ->
-                    viewAppDetail detailState
-            ]
-        , footer [ class "dashboard-footer" ]
+        , footer [ class "p-4 text-center border-t border-litehouse-border" ]
             [ viewVersion version
             ]
         ]
+
+
+viewHeader : DashboardState -> Html Msg
+viewHeader state =
+    header [ class "bg-litehouse-surface border-b border-litehouse-border px-6 py-4 flex justify-between items-center" ]
+        [ div [ class "flex items-center gap-4" ]
+            [ a [ href "/dashboard", class "text-xl font-semibold text-litehouse-text hover:opacity-80 transition-opacity" ] [ text "Litehouse" ]
+            ]
+        , div [ class "flex items-center gap-4" ]
+            [ viewGitHubStatusBadge state.githubStatus
+            , span [ class "text-sm text-litehouse-muted" ] [ text state.user.fullName ]
+            , button
+                [ class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
+                , onClick ShowCreateApp
+                ]
+                [ text "+ New App" ]
+            , button
+                [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
+                , onClick Logout
+                ]
+                [ text "Logout" ]
+            ]
+        ]
+
+
+viewSidebar : DashboardState -> Html Msg
+viewSidebar state =
+    aside [ class "w-56 bg-litehouse-surface border-r border-litehouse-border p-4" ]
+        [ nav [ class "space-y-1" ]
+            [ viewSidebarItem "My Apps" MyApps state.activeSidebarItem
+            , viewSidebarItem "Activity" Activity state.activeSidebarItem
+            , viewSidebarItem "Backups" Backups state.activeSidebarItem
+            , viewSidebarItem "Settings" Settings state.activeSidebarItem
+            ]
+        ]
+
+
+viewSidebarItem : String -> SidebarItem -> SidebarItem -> Html Msg
+viewSidebarItem label item activeItem =
+    let
+        isActive =
+            item == activeItem
+
+        baseClasses =
+            "block w-full px-3 py-2 rounded-xl text-sm font-medium transition-colors text-left"
+
+        activeClasses =
+            if isActive then
+                "bg-litehouse-amber/10 text-litehouse-amber"
+
+            else
+                "text-litehouse-muted hover:bg-litehouse-bg hover:text-litehouse-text"
+    in
+    button [ class (baseClasses ++ " " ++ activeClasses) ] [ text label ]
 
 
 viewGitHubStatusBadge : GitHubStatus -> Html Msg
 viewGitHubStatusBadge status =
     case status of
         GitHubConnected username ->
-            span [ class "github-badge github-connected" ]
+            span [ class "px-2.5 py-1 rounded-full text-xs font-medium bg-litehouse-success/20 text-litehouse-success" ]
                 [ text ("GitHub: " ++ username) ]
 
         GitHubNotConnected ->
-            span [ class "github-badge github-not-connected" ]
+            span [ class "px-2.5 py-1 rounded-full text-xs font-medium bg-litehouse-warning/20 text-litehouse-warning" ]
                 [ text "GitHub: Not connected" ]
 
         GitHubUnknown ->
@@ -2240,39 +2308,72 @@ viewGitHubStatusBadge status =
 
 viewAppsList : DashboardState -> Html Msg
 viewAppsList state =
-    div [ class "apps-section" ]
-        [ div [ class "apps-header" ]
-            [ h2 [] [ text "Apps" ]
-            , button [ class "btn-primary", onClick ShowCreateApp ] [ text "Create App" ]
+    div []
+        [ div [ class "flex justify-between items-center mb-6" ]
+            [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "My Apps" ]
             ]
         , if state.appsLoading then
-            div [ class "apps-loading" ]
-                [ div [ class "spinner" ] []
+            div [ class "flex flex-col items-center justify-center py-16 text-litehouse-muted" ]
+                [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mb-4" ] []
                 , p [] [ text "Loading apps..." ]
                 ]
 
           else if List.isEmpty state.apps then
-            div [ class "apps-empty" ]
-                [ p [] [ text "No apps yet. Create your first app to get started." ]
+            div [ class "bg-litehouse-surface rounded-2xl shadow-soft p-12 text-center" ]
+                [ p [ class "text-litehouse-muted mb-4" ] [ text "No apps yet. Create your first app to get started." ]
+                , button
+                    [ class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
+                    , onClick ShowCreateApp
+                    ]
+                    [ text "Create App" ]
                 ]
 
           else
-            div [ class "apps-list" ]
+            div [ class "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" ]
                 (List.map viewAppCard state.apps)
         ]
 
 
 viewAppCard : AppInfo -> Html Msg
 viewAppCard app =
-    a [ class "app-card", href ("/apps/" ++ app.name) ]
-        [ div [ class "app-card-header" ]
-            [ h3 [ class "app-name" ] [ text app.name ]
-            , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
-            ]
-        , div [ class "app-card-footer" ]
-            [ span [ class "app-id" ] [ text ("ID: " ++ app.id) ]
-            ]
+    a
+        [ class "block bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-5 hover:border-litehouse-amber transition-colors cursor-pointer"
+        , href ("/apps/" ++ app.name)
         ]
+        [ div [ class "flex justify-between items-start mb-3" ]
+            [ h3 [ class "text-base font-semibold text-litehouse-text" ] [ text app.name ]
+            , viewStatusBadge app.state
+            ]
+        , div [ class "text-xs text-litehouse-muted font-mono" ]
+            [ text ("ID: " ++ app.id) ]
+        ]
+
+
+viewStatusBadge : String -> Html Msg
+viewStatusBadge state =
+    let
+        ( bgColor, textColor ) =
+            case state of
+                "running" ->
+                    ( "bg-litehouse-success/20", "text-litehouse-success" )
+
+                "starting" ->
+                    ( "bg-litehouse-warning/20", "text-litehouse-warning" )
+
+                "building" ->
+                    ( "bg-litehouse-warning/20", "text-litehouse-warning" )
+
+                "stopped" ->
+                    ( "bg-litehouse-error/20", "text-litehouse-error" )
+
+                "error" ->
+                    ( "bg-litehouse-error/20", "text-litehouse-error" )
+
+                _ ->
+                    ( "bg-litehouse-border/50", "text-litehouse-muted" )
+    in
+    span [ class ("px-2.5 py-1 rounded-full text-xs font-medium uppercase " ++ bgColor ++ " " ++ textColor) ]
+        [ text state ]
 
 
 viewAppDetail : AppDetailState -> Html Msg
@@ -2290,23 +2391,24 @@ viewAppDetail state =
         actionDisabled =
             state.actionInProgress /= Nothing
     in
-    div [ class "app-detail" ]
-        [ -- Header with back button and actions
-          div [ class "app-detail-header" ]
-            [ div [ class "app-detail-title" ]
-                [ button [ class "btn-back", onClick BackToApps ] [ text "< Apps" ]
-                , h2 [] [ text app.name ]
-                , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
-                ]
-            , div [ class "app-detail-actions" ]
+    div [ class "space-y-6" ]
+        [ -- Header with back button
+          div [ class "flex items-center justify-between" ]
+            [ div [ class "flex items-center gap-4" ]
                 [ button
-                    [ class "btn-icon"
-                    , onClick RefreshAppDetail
-                    , disabled actionDisabled
-                    , title "Refresh"
+                    [ class "text-litehouse-slateBlue hover:bg-litehouse-mistBlue px-3 py-1.5 rounded-xl transition-colors text-sm"
+                    , onClick BackToApps
                     ]
-                    [ text "Refresh" ]
+                    [ text "< Apps" ]
+                , h2 [ class "text-2xl font-semibold text-litehouse-text" ] [ text app.name ]
+                , viewStatusBadge app.state
                 ]
+            , button
+                [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors disabled:opacity-50"
+                , onClick RefreshAppDetail
+                , disabled actionDisabled
+                ]
+                [ text "Refresh" ]
             ]
 
         -- Error message
@@ -2315,8 +2417,8 @@ viewAppDetail state =
         -- Action in progress indicator
         , case state.actionInProgress of
             Just action ->
-                div [ class "action-progress" ]
-                    [ div [ class "spinner spinner-small" ] []
+                div [ class "flex items-center gap-3 p-4 bg-litehouse-warning/10 text-litehouse-warning rounded-xl" ]
+                    [ div [ class "w-5 h-5 border-2 border-litehouse-warning/30 border-t-litehouse-warning rounded-full animate-spin-slow" ] []
                     , span []
                         [ text
                             (case action of
@@ -2338,170 +2440,168 @@ viewAppDetail state =
             Nothing ->
                 text ""
 
-        -- Main content sections
-        , div [ class "app-detail-content" ]
-            [ -- Info section
-              div [ class "app-detail-section" ]
-                [ h3 [] [ text "Information" ]
-                , div [ class "app-info-grid" ]
-                    [ div [ class "app-info-item" ]
-                        [ span [ class "app-info-label" ] [ text "ID" ]
-                        , span [ class "app-info-value monospace" ] [ text app.id ]
-                        ]
-                    , div [ class "app-info-item" ]
-                        [ span [ class "app-info-label" ] [ text "State" ]
-                        , span [ class "app-info-value" ]
-                            [ span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
-                            ]
-                        ]
-                    , div [ class "app-info-item" ]
-                        [ span [ class "app-info-label" ] [ text "Port" ]
-                        , span [ class "app-info-value" ]
-                            [ text
-                                (case app.port_ of
-                                    Just p ->
-                                        String.fromInt p
+        -- Info section
+        , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+            [ h3 [ class "text-base font-semibold text-litehouse-text mb-4" ] [ text "Information" ]
+            , div [ class "grid grid-cols-2 md:grid-cols-4 gap-4" ]
+                [ div []
+                    [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "ID" ]
+                    , span [ class "text-sm text-litehouse-text font-mono break-all" ] [ text app.id ]
+                    ]
+                , div []
+                    [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "State" ]
+                    , viewStatusBadge app.state
+                    ]
+                , div []
+                    [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "Port" ]
+                    , span [ class "text-sm text-litehouse-text" ]
+                        [ text
+                            (case app.port_ of
+                                Just p ->
+                                    String.fromInt p
 
-                                    Nothing ->
-                                        "Not assigned"
-                                )
-                            ]
-                        ]
-                    , div [ class "app-info-item" ]
-                        [ span [ class "app-info-label" ] [ text "Created" ]
-                        , span [ class "app-info-value" ] [ text app.createdAt ]
-                        ]
-                    , div [ class "app-info-item" ]
-                        [ span [ class "app-info-label" ] [ text "Updated" ]
-                        , span [ class "app-info-value" ] [ text app.updatedAt ]
+                                Nothing ->
+                                    "Not assigned"
+                            )
                         ]
                     ]
+                , div []
+                    [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "Created" ]
+                    , span [ class "text-sm text-litehouse-text" ] [ text app.createdAt ]
+                    ]
                 ]
+            ]
 
-            -- Repository section
-            , div [ class "app-detail-section" ]
-                [ h3 [] [ text "Repository" ]
-                , case app.remote of
-                    Just remote ->
-                        div [ class "app-info-grid" ]
-                            [ div [ class "app-info-item" ]
-                                [ span [ class "app-info-label" ] [ text "URL" ]
-                                , span [ class "app-info-value monospace" ] [ text remote.url ]
-                                ]
-                            , div [ class "app-info-item" ]
-                                [ span [ class "app-info-label" ] [ text "Branch" ]
-                                , span [ class "app-info-value" ] [ text remote.branch ]
-                                ]
+        -- Repository section
+        , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+            [ h3 [ class "text-base font-semibold text-litehouse-text mb-4" ] [ text "Repository" ]
+            , case app.remote of
+                Just remote ->
+                    div [ class "grid grid-cols-2 gap-4" ]
+                        [ div []
+                            [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "URL" ]
+                            , span [ class "text-sm text-litehouse-text font-mono break-all" ] [ text remote.url ]
                             ]
-
-                    Nothing ->
-                        p [ class "app-info-empty" ] [ text "No repository connected" ]
-                ]
-
-            -- Actions section
-            , div [ class "app-detail-section" ]
-                [ h3 [] [ text "Actions" ]
-                , div [ class "app-actions-grid" ]
-                    [ -- Start/Stop button
-                      if isRunning then
-                        button
-                            [ class "btn-action btn-stop"
-                            , onClick StopApp
-                            , disabled actionDisabled
+                        , div []
+                            [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "Branch" ]
+                            , span [ class "text-sm text-litehouse-text" ] [ text remote.branch ]
                             ]
-                            [ text "Stop" ]
+                        ]
 
-                      else
-                        button
-                            [ class "btn-action btn-start"
-                            , onClick StartApp
-                            , disabled actionDisabled
-                            ]
-                            [ text "Start" ]
+                Nothing ->
+                    p [ class "text-sm text-litehouse-muted italic" ] [ text "No repository connected" ]
+            ]
 
-                    -- Build button (only if has remote)
-                    , if hasRemote then
-                        button
-                            [ class "btn-action btn-build"
-                            , onClick BuildApp
-                            , disabled actionDisabled
-                            ]
-                            [ text "Build" ]
-
-                      else
-                        text ""
-
-                    -- Delete button
-                    , button
-                        [ class "btn-action btn-delete"
-                        , onClick ConfirmDeleteApp
+        -- Actions section
+        , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+            [ h3 [ class "text-base font-semibold text-litehouse-text mb-4" ] [ text "Actions" ]
+            , div [ class "flex flex-wrap gap-3" ]
+                [ -- Start/Stop button
+                  if isRunning then
+                    button
+                        [ class "px-5 py-2.5 bg-litehouse-warning hover:bg-litehouse-warning/80 text-white font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        , onClick StopApp
                         , disabled actionDisabled
                         ]
-                        [ text "Delete" ]
-                    ]
-                ]
-
-            -- Logs section
-            , div [ class "app-detail-section app-logs-section" ]
-                [ div [ class "section-header" ]
-                    [ h3 [] [ text "Logs" ]
-                    , button
-                        [ class "btn-secondary btn-small"
-                        , onClick FetchLogs
-                        , disabled state.logsLoading
-                        ]
-                        [ text "Refresh Logs" ]
-                    ]
-                , if state.logsLoading then
-                    div [ class "logs-loading" ]
-                        [ div [ class "spinner spinner-small" ] []
-                        , span [] [ text "Loading logs..." ]
-                        ]
-
-                  else if String.isEmpty state.logs then
-                    div [ class "logs-empty" ]
-                        [ text "No logs available" ]
+                        [ text "Stop" ]
 
                   else
-                    pre [ class "logs-content" ] [ text state.logs ]
+                    button
+                        [ class "px-5 py-2.5 bg-litehouse-success hover:bg-litehouse-success/80 text-white font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        , onClick StartApp
+                        , disabled actionDisabled
+                        ]
+                        [ text "Start" ]
+
+                -- Build button (only if has remote)
+                , if hasRemote then
+                    button
+                        [ class "px-5 py-2.5 bg-litehouse-slateBlue hover:bg-litehouse-slateBlue/80 text-white font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        , onClick BuildApp
+                        , disabled actionDisabled
+                        ]
+                        [ text "Build" ]
+
+                  else
+                    text ""
+
+                -- Delete button
+                , button
+                    [ class "px-5 py-2.5 bg-litehouse-error hover:bg-litehouse-error/80 text-white font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    , onClick ConfirmDeleteApp
+                    , disabled actionDisabled
+                    ]
+                    [ text "Delete" ]
                 ]
+            ]
+
+        -- Logs section
+        , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+            [ div [ class "flex justify-between items-center mb-4" ]
+                [ h3 [ class "text-base font-semibold text-litehouse-text" ] [ text "Logs" ]
+                , button
+                    [ class "px-3 py-1.5 text-sm border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors disabled:opacity-50"
+                    , onClick FetchLogs
+                    , disabled state.logsLoading
+                    ]
+                    [ text "Refresh Logs" ]
+                ]
+            , if state.logsLoading then
+                div [ class "flex items-center justify-center gap-3 py-10 text-litehouse-muted" ]
+                    [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
+                    , span [] [ text "Loading logs..." ]
+                    ]
+
+              else if String.isEmpty state.logs then
+                div [ class "py-10 text-center text-litehouse-muted" ]
+                    [ text "No logs available" ]
+
+              else
+                pre [ class "bg-gray-900 text-gray-300 font-mono text-xs p-4 rounded-xl overflow-auto max-h-96 whitespace-pre-wrap break-all" ]
+                    [ text state.logs ]
             ]
         ]
 
 
 viewCreateApp : DashboardState -> CreateAppState -> Html Msg
 viewCreateApp dashState createState =
-    div [ class "create-app-wizard" ]
-        [ div [ class "wizard-header" ]
-            [ h2 [] [ text "Create New App" ]
-            , button [ class "btn-secondary", onClick CancelCreateApp ] [ text "Cancel" ]
+    div [ class "max-w-xl" ]
+        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+            [ div [ class "flex justify-between items-center mb-6 pb-4 border-b border-litehouse-border" ]
+                [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "Create New App" ]
+                , button
+                    [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
+                    , onClick CancelCreateApp
+                    ]
+                    [ text "Cancel" ]
+                ]
+            , viewError createState.error
+            , case createState.step of
+                EnterName ->
+                    viewEnterName createState
+
+                CheckingGitHub ->
+                    viewCheckingGitHub
+
+                ConnectGitHub ghState ->
+                    viewConnectGitHub ghState
+
+                SelectRepo repos query ->
+                    viewSelectRepo repos query
+
+                Creating ->
+                    viewCreating
             ]
-        , viewError createState.error
-        , case createState.step of
-            EnterName ->
-                viewEnterName createState
-
-            CheckingGitHub ->
-                viewCheckingGitHub
-
-            ConnectGitHub ghState ->
-                viewConnectGitHub ghState
-
-            SelectRepo repos query ->
-                viewSelectRepo repos query
-
-            Creating ->
-                viewCreating
         ]
 
 
 viewEnterName : CreateAppState -> Html Msg
 viewEnterName createState =
-    div [ class "wizard-step" ]
-        [ h3 [] [ text "Step 1: Name your app" ]
+    div [ class "py-4" ]
+        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 1: Name your app" ]
         , Html.form [ onSubmit SubmitAppName ]
-            [ div [ class "form-group" ]
-                [ label [ for "appName" ] [ text "App Name" ]
+            [ div [ class "mb-4" ]
+                [ label [ for "appName", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "App Name" ]
                 , input
                     [ type_ "text"
                     , id "appName"
@@ -2509,53 +2609,71 @@ viewEnterName createState =
                     , onInput AppNameChanged
                     , placeholder "my-awesome-app"
                     , required True
+                    , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
                     ]
                     []
-                , p [ class "form-help" ] [ text "Use lowercase letters, numbers, and hyphens only" ]
+                , p [ class "mt-1 text-xs text-litehouse-muted" ] [ text "Use lowercase letters, numbers, and hyphens only" ]
                 ]
-            , button [ type_ "submit", class "btn-primary" ] [ text "Next" ]
+            , button
+                [ type_ "submit"
+                , class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
+                ]
+                [ text "Next" ]
             ]
         ]
 
 
 viewCheckingGitHub : Html Msg
 viewCheckingGitHub =
-    div [ class "wizard-step" ]
-        [ div [ class "spinner" ] []
-        , p [] [ text "Checking GitHub connection..." ]
+    div [ class "py-8 text-center" ]
+        [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
+        , p [ class "text-litehouse-muted" ] [ text "Checking GitHub connection..." ]
         ]
 
 
 viewConnectGitHub : GitHubConnectState -> Html Msg
 viewConnectGitHub ghState =
-    div [ class "wizard-step" ]
-        [ h3 [] [ text "Step 2: Connect GitHub (Optional)" ]
+    div [ class "py-4" ]
+        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 2: Connect GitHub (Optional)" ]
         , if String.isEmpty ghState.userCode then
-            div [ class "github-connect-prompt" ]
-                [ p [] [ text "Connect your GitHub account to import repositories." ]
-                , div [ class "button-group" ]
-                    [ button [ class "btn-primary", onClick StartGitHubConnect ] [ text "Connect GitHub" ]
-                    , button [ class "btn-secondary", onClick SkipRepoSelection ] [ text "Skip" ]
+            div [ class "text-center py-4" ]
+                [ p [ class "text-litehouse-muted mb-4" ] [ text "Connect your GitHub account to import repositories." ]
+                , div [ class "flex justify-center gap-3" ]
+                    [ button
+                        [ class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
+                        , onClick StartGitHubConnect
+                        ]
+                        [ text "Connect GitHub" ]
+                    , button
+                        [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
+                        , onClick SkipRepoSelection
+                        ]
+                        [ text "Skip" ]
                     ]
                 ]
 
           else
-            div [ class "github-connect-code" ]
-                [ p [] [ text "Go to GitHub and enter this code:" ]
-                , div [ class "user-code" ] [ text ghState.userCode ]
-                , p []
+            div [ class "text-center py-4" ]
+                [ p [ class "text-litehouse-muted mb-2" ] [ text "Go to GitHub and enter this code:" ]
+                , div [ class "text-3xl font-bold font-mono tracking-widest py-5 px-6 bg-litehouse-bg rounded-xl my-4 text-litehouse-text" ]
+                    [ text ghState.userCode ]
+                , p [ class "text-litehouse-muted" ]
                     [ text "Open "
-                    , a [ href ghState.verificationUri, target "_blank" ] [ text ghState.verificationUri ]
+                    , a [ href ghState.verificationUri, target "_blank", class "text-litehouse-slateBlue hover:underline" ] [ text ghState.verificationUri ]
                     , text " and enter the code above."
                     ]
                 , if ghState.polling then
-                    div [ class "polling-indicator" ]
-                        [ div [ class "spinner spinner-small" ] []
+                    div [ class "flex items-center justify-center gap-3 mt-4 text-litehouse-muted" ]
+                        [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
                         , span [] [ text "Waiting for authorization..." ]
                         ]
 
                   else
-                    button [ class "btn-secondary", onClick SkipRepoSelection ] [ text "Skip" ]
+                    button
+                        [ class "mt-4 px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
+                        , onClick SkipRepoSelection
+                        ]
+                        [ text "Skip" ]
                 ]
         ]
 
@@ -2575,30 +2693,33 @@ viewSelectRepo repos query =
                     )
                     repos
     in
-    div [ class "wizard-step" ]
-        [ h3 [] [ text "Step 3: Select Repository (Optional)" ]
-        , div [ class "form-group" ]
+    div [ class "py-4" ]
+        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 3: Select Repository (Optional)" ]
+        , div [ class "mb-4" ]
             [ input
                 [ type_ "text"
                 , placeholder "Search repositories..."
                 , value query
                 , onInput RepoSearchChanged
-                , class "search-input"
+                , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
                 ]
                 []
             ]
         , if List.isEmpty repos then
-            div [ class "repos-loading" ]
-                [ div [ class "spinner" ] []
-                , p [] [ text "Loading repositories..." ]
+            div [ class "py-10 text-center" ]
+                [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
+                , p [ class "text-litehouse-muted" ] [ text "Loading repositories..." ]
                 ]
 
           else
             div []
-                [ div [ class "repo-list" ]
+                [ div [ class "max-h-80 overflow-y-auto border border-litehouse-border rounded-xl" ]
                     (List.map viewRepoItem filteredRepos)
-                , div [ class "skip-section" ]
-                    [ button [ class "btn-secondary", onClick SkipRepoSelection ]
+                , div [ class "mt-4 text-center" ]
+                    [ button
+                        [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
+                        , onClick SkipRepoSelection
+                        ]
                         [ text "Create without repository" ]
                     ]
                 ]
@@ -2607,30 +2728,33 @@ viewSelectRepo repos query =
 
 viewRepoItem : RepoInfo -> Html Msg
 viewRepoItem repo =
-    div [ class "repo-item", onClick (ChooseRepo repo) ]
-        [ div [ class "repo-item-header" ]
-            [ span [ class "repo-name" ] [ text repo.fullName ]
+    div
+        [ class "px-4 py-3 border-b border-litehouse-border last:border-b-0 cursor-pointer hover:bg-litehouse-bg transition-colors"
+        , onClick (ChooseRepo repo)
+        ]
+        [ div [ class "flex justify-between items-center mb-1" ]
+            [ span [ class "font-medium text-litehouse-text" ] [ text repo.fullName ]
             , if repo.private then
-                span [ class "repo-badge repo-private" ] [ text "Private" ]
+                span [ class "px-2 py-0.5 rounded text-xs font-medium bg-litehouse-warning/20 text-litehouse-warning" ] [ text "Private" ]
 
               else
-                span [ class "repo-badge repo-public" ] [ text "Public" ]
+                span [ class "px-2 py-0.5 rounded text-xs font-medium bg-litehouse-border/50 text-litehouse-muted" ] [ text "Public" ]
             ]
         , case repo.description of
             Just desc ->
-                p [ class "repo-description" ] [ text desc ]
+                p [ class "text-sm text-litehouse-muted truncate mb-1" ] [ text desc ]
 
             Nothing ->
                 text ""
-        , span [ class "repo-branch" ] [ text ("Default branch: " ++ repo.defaultBranch) ]
+        , span [ class "text-xs text-litehouse-muted" ] [ text ("Default branch: " ++ repo.defaultBranch) ]
         ]
 
 
 viewCreating : Html Msg
 viewCreating =
-    div [ class "wizard-step" ]
-        [ div [ class "spinner" ] []
-        , p [] [ text "Creating app..." ]
+    div [ class "py-8 text-center" ]
+        [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
+        , p [ class "text-litehouse-muted" ] [ text "Creating app..." ]
         ]
 
 
@@ -2638,7 +2762,7 @@ viewError : Maybe String -> Html Msg
 viewError maybeError =
     case maybeError of
         Just error ->
-            div [ class "error-message" ] [ text error ]
+            div [ class "bg-litehouse-error/10 text-litehouse-error p-3 rounded-xl mb-4 text-sm text-left" ] [ text error ]
 
         Nothing ->
             text ""
@@ -2650,4 +2774,4 @@ viewVersion version =
         text ""
 
     else
-        p [ class "version" ] [ text ("v" ++ version) ]
+        p [ class "text-xs text-litehouse-muted" ] [ text ("v" ++ version) ]
