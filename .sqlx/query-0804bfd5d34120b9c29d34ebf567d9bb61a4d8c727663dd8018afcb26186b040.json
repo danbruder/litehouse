@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO refresh_token (\n                id, user_id, token_hash, expires_at, revoked, created_at\n            ) VALUES (?, ?, ?, ?, ?, ?)\n            ON CONFLICT(token_hash) DO UPDATE SET\n                revoked = excluded.revoked\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "0804bfd5d34120b9c29d34ebf567d9bb61a4d8c727663dd8018afcb26186b040"
+}

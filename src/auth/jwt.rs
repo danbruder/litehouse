@@ -35,7 +35,7 @@ pub fn generate_access_token_with_ttl(
 
 /// Generate a cryptographically secure random refresh token
 pub fn generate_refresh_token() -> String {
-    let random_bytes: [u8; 32] = rand::thread_rng().gen();
+    let random_bytes: [u8; 32] = rand::thread_rng().r#gen();
     hex::encode(random_bytes)
 }
 

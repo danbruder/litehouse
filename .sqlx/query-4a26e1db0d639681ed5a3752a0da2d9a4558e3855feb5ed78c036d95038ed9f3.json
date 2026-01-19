@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            ORDER BY name\n            ",
+  "query": "\n            SELECT id, user_id, token_hash, expires_at, revoked, created_at\n            FROM refresh_token\n            WHERE token_hash = ?\n            ",
   "describe": {
     "columns": [
       {
@@ -9,48 +9,42 @@
         "type_info": "Text"
       },
       {
-        "name": "name",
+        "name": "user_id",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "state",
+        "name": "token_hash",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "port",
+        "name": "expires_at",
         "ordinal": 3,
-        "type_info": "Int64"
+        "type_info": "Datetime"
+      },
+      {
+        "name": "revoked",
+        "ordinal": 4,
+        "type_info": "Bool"
       },
       {
         "name": "created_at",
-        "ordinal": 4,
-        "type_info": "Datetime"
-      },
-      {
-        "name": "updated_at",
         "ordinal": 5,
         "type_info": "Datetime"
-      },
-      {
-        "name": "organization_id",
-        "ordinal": 6,
-        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
-      true,
       false,
       false,
-      true
+      false
     ]
   },
-  "hash": "d7f87b34cea747e187b69cf4994a9a1102c99a2bb2650a43ac1a1d153591dbdc"
+  "hash": "4a26e1db0d639681ed5a3752a0da2d9a4558e3855feb5ed78c036d95038ed9f3"
 }

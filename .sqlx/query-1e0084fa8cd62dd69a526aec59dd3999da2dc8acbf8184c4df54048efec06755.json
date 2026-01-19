@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            ORDER BY name\n            ",
+  "query": "\n            SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, om.role\n            FROM organization o\n            INNER JOIN organization_member om ON o.id = om.organization_id\n            WHERE om.user_id = ?\n            ORDER BY o.name\n            ",
   "describe": {
     "columns": [
       {
@@ -14,43 +14,37 @@
         "type_info": "Text"
       },
       {
-        "name": "state",
+        "name": "slug",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "port",
-        "ordinal": 3,
-        "type_info": "Int64"
-      },
-      {
         "name": "created_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Datetime"
       },
       {
         "name": "updated_at",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Datetime"
       },
       {
-        "name": "organization_id",
-        "ordinal": 6,
+        "name": "role",
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
-      true,
       false,
       false,
-      true
+      false
     ]
   },
-  "hash": "d7f87b34cea747e187b69cf4994a9a1102c99a2bb2650a43ac1a1d153591dbdc"
+  "hash": "1e0084fa8cd62dd69a526aec59dd3999da2dc8acbf8184c4df54048efec06755"
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE organization_member\n            SET role = ?, updated_at = datetime('now')\n            WHERE organization_id = ? AND user_id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fafd7ccbc72dfed335213f52920658dea2c70e94c8705d5a6603f836e0e7eee3"
+}

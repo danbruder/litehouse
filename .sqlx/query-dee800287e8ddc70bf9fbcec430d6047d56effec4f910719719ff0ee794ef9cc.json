@@ -32,6 +32,11 @@
         "name": "updated_at",
         "ordinal": 5,
         "type_info": "Datetime"
+      },
+      {
+        "name": "organization_id",
+        "ordinal": 6,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -43,7 +48,8 @@
       false,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
   "hash": "dee800287e8ddc70bf9fbcec430d6047d56effec4f910719719ff0ee794ef9cc"

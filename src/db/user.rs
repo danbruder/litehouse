@@ -54,6 +54,7 @@ pub async fn get_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Option<User>> {
 /// Get a user by email
 #[instrument(skip(pool))]
 pub async fn get_by_email(pool: &Pool<Sqlite>, email: &str) -> Result<Option<User>> {
+    let email_lower = email.to_lowercase();
     let user = sqlx::query_as!(
         User,
         r#"
@@ -61,7 +62,7 @@ pub async fn get_by_email(pool: &Pool<Sqlite>, email: &str) -> Result<Option<Use
             FROM user
             WHERE email = ?
             "#,
-        email.to_lowercase()
+        email_lower
     )
     .fetch_optional(pool)
     .await?;

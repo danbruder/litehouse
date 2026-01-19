@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT u.id, u.email, u.password_hash, u.full_name, u.is_active,\n                   u.email_verified, u.created_at as user_created_at,\n                   u.updated_at as user_updated_at, om.role\n            FROM user u\n            INNER JOIN organization_member om ON u.id = om.user_id\n            WHERE om.organization_id = ?\n            ORDER BY om.role, u.email\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "email",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "password_hash",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "full_name",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_active",
+        "ordinal": 4,
+        "type_info": "Bool"
+      },
+      {
+        "name": "email_verified",
+        "ordinal": 5,
+        "type_info": "Bool"
+      },
+      {
+        "name": "user_created_at",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "user_updated_at",
+        "ordinal": 7,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "role",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f9cceb4d554ef4c955b40cc792f9c9ebdcbe8e98e3a09f19ece6734099b92a92"
+}

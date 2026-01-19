@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            ORDER BY name\n            ",
+  "query": "\n            SELECT id, name, slug, created_at, updated_at\n            FROM organization\n            WHERE slug = ?\n            ",
   "describe": {
     "columns": [
       {
@@ -14,43 +14,31 @@
         "type_info": "Text"
       },
       {
-        "name": "state",
+        "name": "slug",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "port",
-        "ordinal": 3,
-        "type_info": "Int64"
-      },
-      {
         "name": "created_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Datetime"
       },
       {
         "name": "updated_at",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Datetime"
-      },
-      {
-        "name": "organization_id",
-        "ordinal": 6,
-        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false,
       false,
-      true,
       false,
-      false,
-      true
+      false
     ]
   },
-  "hash": "d7f87b34cea747e187b69cf4994a9a1102c99a2bb2650a43ac1a1d153591dbdc"
+  "hash": "6207048b106a2e620cab870c01fc5c596ffa2b0b07bad15079ac6c87e2a887a5"
 }
