@@ -227,6 +227,322 @@
         .dashboard-footer .version {
             margin-top: 0;
         }
+
+        /* GitHub status badge */
+        .github-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .github-connected {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .github-not-connected {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        /* Apps section */
+        .apps-section {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+        }
+
+        .apps-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .apps-header h2 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .apps-loading,
+        .apps-empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+        }
+
+        .apps-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        /* App card */
+        .app-card {
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            padding: 16px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .app-card:hover {
+            border-color: #0066cc;
+            box-shadow: 0 2px 8px rgba(0, 102, 204, 0.1);
+        }
+
+        .app-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .app-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+            color: #333;
+        }
+
+        .app-state {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .app-state-created {
+            background-color: #e5e5e5;
+            color: #666;
+        }
+
+        .app-state-building {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        .app-state-running {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+
+        .app-state-stopped {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
+
+        .app-state-error {
+            background-color: #fee2e2;
+            color: #dc2626;
+        }
+
+        .app-card-footer {
+            margin-top: 8px;
+        }
+
+        .app-id {
+            font-size: 12px;
+            color: #999;
+            font-family: monospace;
+        }
+
+        /* Create app wizard */
+        .create-app-wizard {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            max-width: 600px;
+        }
+
+        .wizard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        .wizard-header h2 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .wizard-step {
+            padding: 16px 0;
+        }
+
+        .wizard-step h3 {
+            font-size: 16px;
+            margin: 0 0 16px 0;
+            color: #333;
+        }
+
+        .form-help {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        /* GitHub connect */
+        .github-connect-prompt {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .github-connect-prompt p {
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .github-connect-code {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .github-connect-code p {
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .user-code {
+            font-size: 32px;
+            font-weight: 700;
+            font-family: monospace;
+            letter-spacing: 4px;
+            padding: 20px;
+            background-color: #f5f5f5;
+            border-radius: 8px;
+            margin: 16px 0;
+            color: #333;
+        }
+
+        .github-connect-code a {
+            color: #0066cc;
+            text-decoration: none;
+        }
+
+        .github-connect-code a:hover {
+            text-decoration: underline;
+        }
+
+        .polling-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            color: #666;
+        }
+
+        .spinner-small {
+            width: 20px;
+            height: 20px;
+            border-width: 2px;
+        }
+
+        /* Repository list */
+        .search-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: #0066cc;
+            box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+        }
+
+        .repos-loading {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+        }
+
+        .repo-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e5e5e5;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+
+        .repo-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e5e5e5;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .repo-item:last-child {
+            border-bottom: none;
+        }
+
+        .repo-item:hover {
+            background-color: #f5f5f5;
+        }
+
+        .repo-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 4px;
+        }
+
+        .repo-name {
+            font-weight: 500;
+            color: #333;
+        }
+
+        .repo-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .repo-private {
+            background-color: #fef3c7;
+            color: #92400e;
+        }
+
+        .repo-public {
+            background-color: #e5e5e5;
+            color: #666;
+        }
+
+        .repo-description {
+            font-size: 13px;
+            color: #666;
+            margin: 4px 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .repo-branch {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .skip-section {
+            margin-top: 16px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>

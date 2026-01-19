@@ -7,6 +7,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Time
 
 
 -- PORTS
@@ -28,7 +29,7 @@ main =
         { init = init
         , update = update
         , view = view
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = subscriptions
         }
 
 
@@ -49,7 +50,7 @@ type Page
     = Loading
     | Setup SetupForm
     | Login LoginForm
-    | Dashboard UserInfo
+    | Dashboard DashboardState
 
 
 type alias SetupForm =
@@ -74,6 +75,69 @@ type alias LoginForm =
 type alias UserInfo =
     { email : String
     , fullName : String
+    }
+
+
+type alias DashboardState =
+    { user : UserInfo
+    , view : DashboardView
+    , apps : List AppInfo
+    , appsLoading : Bool
+    , githubStatus : GitHubStatus
+    , token : String
+    }
+
+
+type DashboardView
+    = AppsListView
+    | CreateAppView CreateAppState
+
+
+type alias CreateAppState =
+    { appName : String
+    , step : CreateAppStep
+    , error : Maybe String
+    }
+
+
+type CreateAppStep
+    = EnterName
+    | CheckingGitHub
+    | ConnectGitHub GitHubConnectState
+    | SelectRepo (List RepoInfo) String
+    | Creating
+
+
+type alias GitHubConnectState =
+    { userCode : String
+    , verificationUri : String
+    , deviceCode : String
+    , expiresIn : Int
+    , interval : Int
+    , polling : Bool
+    }
+
+
+type GitHubStatus
+    = GitHubUnknown
+    | GitHubNotConnected
+    | GitHubConnected String
+
+
+type alias AppInfo =
+    { id : String
+    , name : String
+    , state : String
+    }
+
+
+type alias RepoInfo =
+    { name : String
+    , fullName : String
+    , description : Maybe String
+    , private : Bool
+    , cloneUrl : String
+    , defaultBranch : String
     }
 
 
@@ -104,6 +168,14 @@ emptyLoginForm =
     }
 
 
+emptyCreateAppState : CreateAppState
+emptyCreateAppState =
+    { appName = ""
+    , step = EnterName
+    , error = Nothing
+    }
+
+
 init : Flags -> ( Model, Cmd Msg )
 init flags =
     case flags.token of
@@ -121,12 +193,40 @@ init flags =
 
 
 
+-- SUBSCRIPTIONS
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    case model.page of
+        Dashboard state ->
+            case state.view of
+                CreateAppView createState ->
+                    case createState.step of
+                        ConnectGitHub ghState ->
+                            if ghState.polling then
+                                Time.every (toFloat ghState.interval * 1000) (\_ -> PollGitHubConnect)
+
+                            else
+                                Sub.none
+
+                        _ ->
+                            Sub.none
+
+                _ ->
+                    Sub.none
+
+        _ ->
+            Sub.none
+
+
+
 -- UPDATE
 
 
 type Msg
     = GotServerStatus (Result Http.Error ServerStatus)
-    | GotTokenVerification (Result Http.Error UserInfo)
+    | GotTokenVerification (Result Http.Error TokenVerificationResponse)
     | GotLoginResponse (Result Http.Error AuthResponse)
     | GotRegisterResponse (Result Http.Error AuthResponse)
       -- Setup form
@@ -142,6 +242,22 @@ type Msg
     | SubmitLogin
       -- Dashboard
     | Logout
+    | GotApps (Result Http.Error (List AppInfo))
+    | GotGitHubStatus (Result Http.Error GitHubStatusResponse)
+      -- Create app flow
+    | ShowCreateApp
+    | CancelCreateApp
+    | AppNameChanged String
+    | SubmitAppName
+    | StartGitHubConnect
+    | GotDeviceFlowStart (Result Http.Error DeviceFlowStartResponse)
+    | PollGitHubConnect
+    | GotGitHubConnectPoll (Result Http.Error GitHubConnectResponse)
+    | GotRepoList (Result Http.Error (List RepoInfo))
+    | RepoSearchChanged String
+    | SelectRepo RepoInfo
+    | SkipRepoSelection
+    | GotAppCreated (Result Http.Error AppInfo)
 
 
 type alias ServerStatus =
@@ -153,6 +269,32 @@ type alias ServerStatus =
 type alias AuthResponse =
     { accessToken : String
     , user : UserInfo
+    }
+
+
+type alias TokenVerificationResponse =
+    { user : UserInfo
+    , token : String
+    }
+
+
+type alias GitHubStatusResponse =
+    { connected : Bool
+    , username : Maybe String
+    }
+
+
+type alias DeviceFlowStartResponse =
+    { userCode : String
+    , verificationUri : String
+    , deviceCode : String
+    , expiresIn : Int
+    , interval : Int
+    }
+
+
+type alias GitHubConnectResponse =
+    { username : String
     }
 
 
@@ -185,9 +327,22 @@ update msg model =
 
         GotTokenVerification result ->
             case result of
-                Ok userInfo ->
-                    ( { model | page = Dashboard userInfo }
-                    , Cmd.none
+                Ok response ->
+                    let
+                        dashboardState =
+                            { user = response.user
+                            , view = AppsListView
+                            , apps = []
+                            , appsLoading = True
+                            , githubStatus = GitHubUnknown
+                            , token = response.token
+                            }
+                    in
+                    ( { model | page = Dashboard dashboardState }
+                    , Cmd.batch
+                        [ fetchApps response.token
+                        , fetchGitHubStatus response.token
+                        ]
                     )
 
                 Err _ ->
@@ -201,8 +356,22 @@ update msg model =
                 Login form ->
                     case result of
                         Ok response ->
-                            ( { model | page = Dashboard response.user }
-                            , saveToken response.accessToken
+                            let
+                                dashboardState =
+                                    { user = response.user
+                                    , view = AppsListView
+                                    , apps = []
+                                    , appsLoading = True
+                                    , githubStatus = GitHubUnknown
+                                    , token = response.accessToken
+                                    }
+                            in
+                            ( { model | page = Dashboard dashboardState }
+                            , Cmd.batch
+                                [ saveToken response.accessToken
+                                , fetchApps response.accessToken
+                                , fetchGitHubStatus response.accessToken
+                                ]
                             )
 
                         Err err ->
@@ -218,8 +387,22 @@ update msg model =
                 Setup form ->
                     case result of
                         Ok response ->
-                            ( { model | page = Dashboard response.user }
-                            , saveToken response.accessToken
+                            let
+                                dashboardState =
+                                    { user = response.user
+                                    , view = AppsListView
+                                    , apps = []
+                                    , appsLoading = True
+                                    , githubStatus = GitHubUnknown
+                                    , token = response.accessToken
+                                    }
+                            in
+                            ( { model | page = Dashboard dashboardState }
+                            , Cmd.batch
+                                [ saveToken response.accessToken
+                                , fetchApps response.accessToken
+                                , fetchGitHubStatus response.accessToken
+                                ]
                             )
 
                         Err err ->
@@ -324,6 +507,473 @@ update msg model =
             , clearToken ()
             )
 
+        -- Dashboard messages
+        GotApps result ->
+            case model.page of
+                Dashboard state ->
+                    case result of
+                        Ok apps ->
+                            ( { model | page = Dashboard { state | apps = apps, appsLoading = False } }
+                            , Cmd.none
+                            )
+
+                        Err _ ->
+                            ( { model | page = Dashboard { state | appsLoading = False } }
+                            , Cmd.none
+                            )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotGitHubStatus result ->
+            case model.page of
+                Dashboard state ->
+                    case result of
+                        Ok response ->
+                            let
+                                status =
+                                    if response.connected then
+                                        case response.username of
+                                            Just username ->
+                                                GitHubConnected username
+
+                                            Nothing ->
+                                                GitHubConnected ""
+
+                                    else
+                                        GitHubNotConnected
+                            in
+                            ( { model | page = Dashboard { state | githubStatus = status } }
+                            , Cmd.none
+                            )
+
+                        Err _ ->
+                            ( { model | page = Dashboard { state | githubStatus = GitHubNotConnected } }
+                            , Cmd.none
+                            )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        -- Create app flow
+        ShowCreateApp ->
+            case model.page of
+                Dashboard state ->
+                    ( { model | page = Dashboard { state | view = CreateAppView emptyCreateAppState } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        CancelCreateApp ->
+            case model.page of
+                Dashboard state ->
+                    ( { model | page = Dashboard { state | view = AppsListView } }
+                    , Cmd.none
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        AppNameChanged name ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view = CreateAppView { createState | appName = name }
+                                        }
+                              }
+                            , Cmd.none
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SubmitAppName ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            if String.isEmpty (String.trim createState.appName) then
+                                ( { model
+                                    | page =
+                                        Dashboard
+                                            { state
+                                                | view = CreateAppView { createState | error = Just "App name is required" }
+                                            }
+                                  }
+                                , Cmd.none
+                                )
+
+                            else
+                                -- Check GitHub status and proceed accordingly
+                                case state.githubStatus of
+                                    GitHubConnected _ ->
+                                        -- Already connected, fetch repos
+                                        ( { model
+                                            | page =
+                                                Dashboard
+                                                    { state
+                                                        | view = CreateAppView { createState | step = SelectRepo [] "", error = Nothing }
+                                                    }
+                                          }
+                                        , fetchRepos state.token
+                                        )
+
+                                    GitHubNotConnected ->
+                                        -- Show GitHub connect option
+                                        ( { model
+                                            | page =
+                                                Dashboard
+                                                    { state
+                                                        | view =
+                                                            CreateAppView
+                                                                { createState
+                                                                    | step =
+                                                                        ConnectGitHub
+                                                                            { userCode = ""
+                                                                            , verificationUri = ""
+                                                                            , deviceCode = ""
+                                                                            , expiresIn = 0
+                                                                            , interval = 5
+                                                                            , polling = False
+                                                                            }
+                                                                    , error = Nothing
+                                                                }
+                                                    }
+                                          }
+                                        , Cmd.none
+                                        )
+
+                                    GitHubUnknown ->
+                                        -- Still loading, check again
+                                        ( { model
+                                            | page =
+                                                Dashboard
+                                                    { state
+                                                        | view = CreateAppView { createState | step = CheckingGitHub, error = Nothing }
+                                                    }
+                                          }
+                                        , fetchGitHubStatus state.token
+                                        )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        StartGitHubConnect ->
+            case model.page of
+                Dashboard state ->
+                    ( model, startDeviceFlow state.token )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotDeviceFlowStart result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            case result of
+                                Ok response ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        CreateAppView
+                                                            { createState
+                                                                | step =
+                                                                    ConnectGitHub
+                                                                        { userCode = response.userCode
+                                                                        , verificationUri = response.verificationUri
+                                                                        , deviceCode = response.deviceCode
+                                                                        , expiresIn = response.expiresIn
+                                                                        , interval = response.interval
+                                                                        , polling = True
+                                                                        }
+                                                                , error = Nothing
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                Err err ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        CreateAppView
+                                                            { createState | error = Just (httpErrorToString err) }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PollGitHubConnect ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            case createState.step of
+                                ConnectGitHub ghState ->
+                                    ( model, pollDeviceFlow state.token ghState.deviceCode )
+
+                                _ ->
+                                    ( model, Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotGitHubConnectPoll result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            case result of
+                                Ok response ->
+                                    -- Successfully connected, update status and fetch repos
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | githubStatus = GitHubConnected response.username
+                                                    , view =
+                                                        CreateAppView
+                                                            { createState
+                                                                | step = SelectRepo [] ""
+                                                                , error = Nothing
+                                                            }
+                                                }
+                                      }
+                                    , fetchRepos state.token
+                                    )
+
+                                Err err ->
+                                    -- Check if it's a "pending" error (authorization_pending)
+                                    -- In that case, keep polling. Otherwise, show error
+                                    case err of
+                                        Http.BadStatus 202 ->
+                                            -- Still pending, keep polling
+                                            ( model, Cmd.none )
+
+                                        _ ->
+                                            -- Real error, stop polling
+                                            case createState.step of
+                                                ConnectGitHub ghState ->
+                                                    ( { model
+                                                        | page =
+                                                            Dashboard
+                                                                { state
+                                                                    | view =
+                                                                        CreateAppView
+                                                                            { createState
+                                                                                | step = ConnectGitHub { ghState | polling = False }
+                                                                                , error = Just (httpErrorToString err)
+                                                                            }
+                                                                }
+                                                      }
+                                                    , Cmd.none
+                                                    )
+
+                                                _ ->
+                                                    ( model, Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotRepoList result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            case result of
+                                Ok repos ->
+                                    case createState.step of
+                                        SelectRepo _ query ->
+                                            ( { model
+                                                | page =
+                                                    Dashboard
+                                                        { state
+                                                            | view =
+                                                                CreateAppView
+                                                                    { createState | step = SelectRepo repos query }
+                                                        }
+                                              }
+                                            , Cmd.none
+                                            )
+
+                                        _ ->
+                                            ( { model
+                                                | page =
+                                                    Dashboard
+                                                        { state
+                                                            | view =
+                                                                CreateAppView
+                                                                    { createState | step = SelectRepo repos "" }
+                                                        }
+                                              }
+                                            , Cmd.none
+                                            )
+
+                                Err err ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        CreateAppView
+                                                            { createState | error = Just (httpErrorToString err) }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        RepoSearchChanged query ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            case createState.step of
+                                SelectRepo repos _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        CreateAppView
+                                                            { createState | step = SelectRepo repos query }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                _ ->
+                                    ( model, Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SelectRepo repo ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                CreateAppView
+                                                    { createState | step = Creating, error = Nothing }
+                                        }
+                              }
+                            , createAppWithRepo state.token createState.appName repo.fullName
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SkipRepoSelection ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        CreateAppView createState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                CreateAppView
+                                                    { createState | step = Creating, error = Nothing }
+                                        }
+                              }
+                            , createApp state.token createState.appName
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotAppCreated result ->
+            case model.page of
+                Dashboard state ->
+                    case result of
+                        Ok app ->
+                            -- App created, add to list and go back to apps view
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | apps = app :: state.apps
+                                            , view = AppsListView
+                                        }
+                              }
+                            , Cmd.none
+                            )
+
+                        Err err ->
+                            case state.view of
+                                CreateAppView createState ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        CreateAppView
+                                                            { createState
+                                                                | step = EnterName
+                                                                , error = Just (httpErrorToString err)
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                _ ->
+                                    ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- HTTP
@@ -344,7 +994,7 @@ verifyToken token =
         , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
         , url = "/api/auth/me"
         , body = Http.emptyBody
-        , expect = Http.expectJson GotTokenVerification userInfoDecoder
+        , expect = Http.expectJson GotTokenVerification (tokenVerificationDecoder token)
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -382,6 +1032,113 @@ submitRegister form =
         }
 
 
+fetchApps : String -> Cmd Msg
+fetchApps token =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps"
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotApps appsListDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+fetchGitHubStatus : String -> Cmd Msg
+fetchGitHubStatus token =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/github/status"
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotGitHubStatus githubStatusDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+startDeviceFlow : String -> Cmd Msg
+startDeviceFlow token =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/github/connect/start"
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotDeviceFlowStart deviceFlowStartDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+pollDeviceFlow : String -> String -> Cmd Msg
+pollDeviceFlow token deviceCode =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/github/connect/poll"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "device_code", Encode.string deviceCode )
+                    ]
+                )
+        , expect = Http.expectJson GotGitHubConnectPoll githubConnectResponseDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+fetchRepos : String -> Cmd Msg
+fetchRepos token =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/github/repos"
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotRepoList reposListDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+createApp : String -> String -> Cmd Msg
+createApp token name =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "name", Encode.string name )
+                    ]
+                )
+        , expect = Http.expectJson GotAppCreated appInfoDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+createAppWithRepo : String -> String -> String -> Cmd Msg
+createAppWithRepo token name repoFullName =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "name", Encode.string name )
+                    , ( "from_github", Encode.string repoFullName )
+                    ]
+                )
+        , expect = Http.expectJson GotAppCreated appInfoDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 
 -- DECODERS
 
@@ -400,6 +1157,16 @@ userInfoDecoder =
         (Decode.at [ "user", "full_name" ] Decode.string)
 
 
+tokenVerificationDecoder : String -> Decode.Decoder TokenVerificationResponse
+tokenVerificationDecoder token =
+    Decode.map2 TokenVerificationResponse
+        (Decode.map2 UserInfo
+            (Decode.at [ "user", "email" ] Decode.string)
+            (Decode.at [ "user", "full_name" ] Decode.string)
+        )
+        (Decode.succeed token)
+
+
 authResponseDecoder : Decode.Decoder AuthResponse
 authResponseDecoder =
     Decode.map2 AuthResponse
@@ -412,6 +1179,58 @@ userDecoder =
     Decode.map2 UserInfo
         (Decode.field "email" Decode.string)
         (Decode.field "full_name" Decode.string)
+
+
+appsListDecoder : Decode.Decoder (List AppInfo)
+appsListDecoder =
+    Decode.list appInfoDecoder
+
+
+appInfoDecoder : Decode.Decoder AppInfo
+appInfoDecoder =
+    Decode.map3 AppInfo
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "state" Decode.string)
+
+
+githubStatusDecoder : Decode.Decoder GitHubStatusResponse
+githubStatusDecoder =
+    Decode.map2 GitHubStatusResponse
+        (Decode.field "connected" Decode.bool)
+        (Decode.maybe (Decode.field "username" Decode.string))
+
+
+deviceFlowStartDecoder : Decode.Decoder DeviceFlowStartResponse
+deviceFlowStartDecoder =
+    Decode.map5 DeviceFlowStartResponse
+        (Decode.field "user_code" Decode.string)
+        (Decode.field "verification_uri" Decode.string)
+        (Decode.field "device_code" Decode.string)
+        (Decode.field "expires_in" Decode.int)
+        (Decode.field "interval" Decode.int)
+
+
+githubConnectResponseDecoder : Decode.Decoder GitHubConnectResponse
+githubConnectResponseDecoder =
+    Decode.map GitHubConnectResponse
+        (Decode.field "username" Decode.string)
+
+
+reposListDecoder : Decode.Decoder (List RepoInfo)
+reposListDecoder =
+    Decode.list repoInfoDecoder
+
+
+repoInfoDecoder : Decode.Decoder RepoInfo
+repoInfoDecoder =
+    Decode.map6 RepoInfo
+        (Decode.field "name" Decode.string)
+        (Decode.field "full_name" Decode.string)
+        (Decode.maybe (Decode.field "description" Decode.string))
+        (Decode.field "private" Decode.bool)
+        (Decode.field "clone_url" Decode.string)
+        (Decode.field "default_branch" Decode.string)
 
 
 
@@ -461,8 +1280,8 @@ view model =
         Login form ->
             viewLogin form model.serverVersion
 
-        Dashboard userInfo ->
-            viewDashboard userInfo model.serverVersion
+        Dashboard state ->
+            viewDashboard state model.serverVersion
 
 
 viewLoading : Html Msg
@@ -620,28 +1439,247 @@ viewLogin form version =
         ]
 
 
-viewDashboard : UserInfo -> String -> Html Msg
-viewDashboard userInfo version =
+viewDashboard : DashboardState -> String -> Html Msg
+viewDashboard state version =
     div [ class "dashboard" ]
         [ header [ class "dashboard-header" ]
             [ div [ class "header-brand" ]
                 [ h1 [] [ text "Litehouse" ]
                 ]
             , div [ class "header-user" ]
-                [ span [ class "user-name" ] [ text userInfo.fullName ]
+                [ viewGitHubStatusBadge state.githubStatus
+                , span [ class "user-name" ] [ text state.user.fullName ]
                 , button [ class "btn-secondary", onClick Logout ] [ text "Logout" ]
                 ]
             ]
         , main_ [ class "dashboard-content" ]
-            [ div [ class "welcome-card" ]
-                [ h2 [] [ text ("Welcome, " ++ userInfo.fullName ++ "!") ]
-                , p [] [ text "Your Litehouse server is ready." ]
-                , p [ class "user-email" ] [ text userInfo.email ]
-                ]
+            [ case state.view of
+                AppsListView ->
+                    viewAppsList state
+
+                CreateAppView createState ->
+                    viewCreateApp state createState
             ]
         , footer [ class "dashboard-footer" ]
             [ viewVersion version
             ]
+        ]
+
+
+viewGitHubStatusBadge : GitHubStatus -> Html Msg
+viewGitHubStatusBadge status =
+    case status of
+        GitHubConnected username ->
+            span [ class "github-badge github-connected" ]
+                [ text ("GitHub: " ++ username) ]
+
+        GitHubNotConnected ->
+            span [ class "github-badge github-not-connected" ]
+                [ text "GitHub: Not connected" ]
+
+        GitHubUnknown ->
+            text ""
+
+
+viewAppsList : DashboardState -> Html Msg
+viewAppsList state =
+    div [ class "apps-section" ]
+        [ div [ class "apps-header" ]
+            [ h2 [] [ text "Apps" ]
+            , button [ class "btn-primary", onClick ShowCreateApp ] [ text "Create App" ]
+            ]
+        , if state.appsLoading then
+            div [ class "apps-loading" ]
+                [ div [ class "spinner" ] []
+                , p [] [ text "Loading apps..." ]
+                ]
+
+          else if List.isEmpty state.apps then
+            div [ class "apps-empty" ]
+                [ p [] [ text "No apps yet. Create your first app to get started." ]
+                ]
+
+          else
+            div [ class "apps-list" ]
+                (List.map viewAppCard state.apps)
+        ]
+
+
+viewAppCard : AppInfo -> Html Msg
+viewAppCard app =
+    div [ class "app-card" ]
+        [ div [ class "app-card-header" ]
+            [ h3 [ class "app-name" ] [ text app.name ]
+            , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
+            ]
+        , div [ class "app-card-footer" ]
+            [ span [ class "app-id" ] [ text ("ID: " ++ app.id) ]
+            ]
+        ]
+
+
+viewCreateApp : DashboardState -> CreateAppState -> Html Msg
+viewCreateApp dashState createState =
+    div [ class "create-app-wizard" ]
+        [ div [ class "wizard-header" ]
+            [ h2 [] [ text "Create New App" ]
+            , button [ class "btn-secondary", onClick CancelCreateApp ] [ text "Cancel" ]
+            ]
+        , viewError createState.error
+        , case createState.step of
+            EnterName ->
+                viewEnterName createState
+
+            CheckingGitHub ->
+                viewCheckingGitHub
+
+            ConnectGitHub ghState ->
+                viewConnectGitHub ghState
+
+            SelectRepo repos query ->
+                viewSelectRepo repos query
+
+            Creating ->
+                viewCreating
+        ]
+
+
+viewEnterName : CreateAppState -> Html Msg
+viewEnterName createState =
+    div [ class "wizard-step" ]
+        [ h3 [] [ text "Step 1: Name your app" ]
+        , Html.form [ onSubmit SubmitAppName ]
+            [ div [ class "form-group" ]
+                [ label [ for "appName" ] [ text "App Name" ]
+                , input
+                    [ type_ "text"
+                    , id "appName"
+                    , value createState.appName
+                    , onInput AppNameChanged
+                    , placeholder "my-awesome-app"
+                    , required True
+                    ]
+                    []
+                , p [ class "form-help" ] [ text "Use lowercase letters, numbers, and hyphens only" ]
+                ]
+            , button [ type_ "submit", class "btn-primary" ] [ text "Next" ]
+            ]
+        ]
+
+
+viewCheckingGitHub : Html Msg
+viewCheckingGitHub =
+    div [ class "wizard-step" ]
+        [ div [ class "spinner" ] []
+        , p [] [ text "Checking GitHub connection..." ]
+        ]
+
+
+viewConnectGitHub : GitHubConnectState -> Html Msg
+viewConnectGitHub ghState =
+    div [ class "wizard-step" ]
+        [ h3 [] [ text "Step 2: Connect GitHub (Optional)" ]
+        , if String.isEmpty ghState.userCode then
+            div [ class "github-connect-prompt" ]
+                [ p [] [ text "Connect your GitHub account to import repositories." ]
+                , div [ class "button-group" ]
+                    [ button [ class "btn-primary", onClick StartGitHubConnect ] [ text "Connect GitHub" ]
+                    , button [ class "btn-secondary", onClick SkipRepoSelection ] [ text "Skip" ]
+                    ]
+                ]
+
+          else
+            div [ class "github-connect-code" ]
+                [ p [] [ text "Go to GitHub and enter this code:" ]
+                , div [ class "user-code" ] [ text ghState.userCode ]
+                , p []
+                    [ text "Open "
+                    , a [ href ghState.verificationUri, target "_blank" ] [ text ghState.verificationUri ]
+                    , text " and enter the code above."
+                    ]
+                , if ghState.polling then
+                    div [ class "polling-indicator" ]
+                        [ div [ class "spinner spinner-small" ] []
+                        , span [] [ text "Waiting for authorization..." ]
+                        ]
+
+                  else
+                    button [ class "btn-secondary", onClick SkipRepoSelection ] [ text "Skip" ]
+                ]
+        ]
+
+
+viewSelectRepo : List RepoInfo -> String -> Html Msg
+viewSelectRepo repos query =
+    let
+        filteredRepos =
+            if String.isEmpty query then
+                repos
+
+            else
+                List.filter
+                    (\repo ->
+                        String.contains (String.toLower query) (String.toLower repo.name)
+                            || String.contains (String.toLower query) (String.toLower repo.fullName)
+                    )
+                    repos
+    in
+    div [ class "wizard-step" ]
+        [ h3 [] [ text "Step 3: Select Repository (Optional)" ]
+        , div [ class "form-group" ]
+            [ input
+                [ type_ "text"
+                , placeholder "Search repositories..."
+                , value query
+                , onInput RepoSearchChanged
+                , class "search-input"
+                ]
+                []
+            ]
+        , if List.isEmpty repos then
+            div [ class "repos-loading" ]
+                [ div [ class "spinner" ] []
+                , p [] [ text "Loading repositories..." ]
+                ]
+
+          else
+            div []
+                [ div [ class "repo-list" ]
+                    (List.map viewRepoItem filteredRepos)
+                , div [ class "skip-section" ]
+                    [ button [ class "btn-secondary", onClick SkipRepoSelection ]
+                        [ text "Create without repository" ]
+                    ]
+                ]
+        ]
+
+
+viewRepoItem : RepoInfo -> Html Msg
+viewRepoItem repo =
+    div [ class "repo-item", onClick (SelectRepo repo) ]
+        [ div [ class "repo-item-header" ]
+            [ span [ class "repo-name" ] [ text repo.fullName ]
+            , if repo.private then
+                span [ class "repo-badge repo-private" ] [ text "Private" ]
+
+              else
+                span [ class "repo-badge repo-public" ] [ text "Public" ]
+            ]
+        , case repo.description of
+            Just desc ->
+                p [ class "repo-description" ] [ text desc ]
+
+            Nothing ->
+                text ""
+        , span [ class "repo-branch" ] [ text ("Default branch: " ++ repo.defaultBranch) ]
+        ]
+
+
+viewCreating : Html Msg
+viewCreating =
+    div [ class "wizard-step" ]
+        [ div [ class "spinner" ] []
+        , p [] [ text "Creating app..." ]
         ]
 
 
