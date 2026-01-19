@@ -74,9 +74,9 @@ Guidance:
 
 ### Headings: humanist sans
 Recommended:
+- Manrope (excellent for product UI) - LET's USE THIS ONE
 - Inter (safe default)
 - Source Sans 3
-- Manrope (excellent for product UI)
 - IBM Plex Sans (subtle engineering cred)
 
 ### Body

@@ -13,3 +13,4 @@ pub mod init;
 pub mod litestream;
 pub mod models;
 pub mod podman;
+pub mod reconciler;

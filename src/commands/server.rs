@@ -1,11 +1,11 @@
-use crate::caddy;
-use crate::litestream;
 use crate::podman;
+use crate::reconciler::Reconciler;
 use anyhow::{Context, Result};
 use axum::Router;
 use bollard::Docker;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{info, instrument};
 
@@ -29,33 +29,33 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let docker = podman::connect().await?;
 
-    // Reconcile Caddy and Litestream containers on startup.
-    // The server is responsible for ensuring these containers are running
-    // and properly configured. This handles cases where containers were
-    // stopped, crashed, or never started.
+    // Create reconciler and run initial reconciliation
+    let reconciler = Reconciler::new(pool.clone(), docker.clone());
+    let report = reconciler.reconcile_all(&config).await;
+    Reconciler::log_report(&report);
 
-    // Start/reconcile Caddy container
-    if let Err(e) = caddy::start(&docker, &config).await {
-        tracing::warn!("Failed to start Caddy on startup: {}", e);
-        // Don't fail startup - Caddy might already be running or will recover
-    }
-
-    // Start/reconcile Litestream container
-    if let Err(e) = litestream::start_with_pool(&docker, &pool).await {
-        tracing::warn!("Failed to start Litestream on startup: {}", e);
-        // Don't fail startup - Litestream is optional for local development
-    }
-
-    // Sync Caddy configuration with existing apps
-    if let Err(e) = caddy::sync_configuration(&docker, &pool).await {
-        tracing::warn!("Failed to sync Caddy configuration on startup: {}", e);
-        // Don't fail startup if Caddy sync fails
-    }
-
-    // Sync Litestream configuration with existing apps and S3 config
-    if let Err(e) = litestream::sync_configuration(&docker, &pool).await {
-        tracing::warn!("Failed to sync Litestream configuration on startup: {}", e);
-        // Don't fail startup if Litestream sync fails
+    // Spawn background reconciliation loop if interval > 0
+    let reconcile_interval = config.reconcile_interval_secs;
+    if reconcile_interval > 0 {
+        let reconciler_clone = reconciler.clone();
+        let config_clone = config.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(reconcile_interval);
+            loop {
+                tokio::time::sleep(interval).await;
+                let report = reconciler_clone.reconcile_all(&config_clone).await;
+                // Only log if something changed (fixes or failures)
+                if report.has_fixes_or_failures() {
+                    Reconciler::log_report(&report);
+                }
+            }
+        });
+        info!(
+            "Background reconciliation enabled (interval: {}s)",
+            reconcile_interval
+        );
+    } else {
+        info!("Background reconciliation disabled");
     }
 
     // Get JWT secret from environment or use default (warning will be logged)
