@@ -47,11 +47,11 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Get JWT secret from environment or use default (warning will be logged)
     let jwt_secret = crate::auth::jwt::get_jwt_secret();
 
-    // Get GitHub client ID from environment (optional)
-    let github_client_id = std::env::var("GITHUB_CLIENT_ID").ok();
-    if github_client_id.is_none() {
-        tracing::info!("GITHUB_CLIENT_ID not set - GitHub OAuth will be disabled");
-    }
+    // GitHub OAuth client ID - default to litehouse's app, allow override
+    const DEFAULT_GITHUB_CLIENT_ID: &str = "Ov23liTp4hQb5j4lzQfh";
+    let github_client_id = Some(
+        std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string())
+    );
 
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
