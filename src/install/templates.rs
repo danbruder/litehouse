@@ -222,12 +222,14 @@ set -e
 
 echo "Building litehouse-server container image locally..."
 
-# Create build context directory
+# Create build context directory with world-readable permissions
 BUILD_DIR=$(mktemp -d)
+chmod 755 "$BUILD_DIR"
 trap "rm -rf $BUILD_DIR" EXIT
 
 # Copy binary to build context
 cp /usr/local/bin/lh "$BUILD_DIR/lh"
+chmod 755 "$BUILD_DIR/lh"
 
 # Write Dockerfile
 cat > "$BUILD_DIR/Dockerfile" << 'DOCKERFILE'
@@ -242,6 +244,7 @@ USER litehouse
 EXPOSE 3030
 CMD ["lh", "serve"]
 DOCKERFILE
+chmod 644 "$BUILD_DIR/Dockerfile"
 
 # Run as litehouse user with proper environment
 cd /tmp && sudo -u litehouse bash -c "
