@@ -90,6 +90,28 @@ All core functionality implemented:
 
 NEXT: Phase 2 - Web UI & GitHub Webhooks
 
+## 1/19/2026 - Container Networking Fix
+
+**Issue:** After fresh install on litehouse.run (104.248.15.20), Caddy was running but connections were being reset. The litehouse-server container couldn't communicate with Caddy's admin API.
+
+**Root cause:** The litehouse-server container was trying to reach `localhost:2019` to configure Caddy, but in containerized environments `localhost` refers to the container itself, not the host. Since litehouse-server and caddy-container are in separate network namespaces, they couldn't communicate via localhost.
+
+**Fix:** Added two things to the litehouse-server container startup:
+1. `--add-host=host.containers.internal:host-gateway` - Allows resolving `host.containers.internal` to the host's IP
+2. `-e CADDY_API_URL=http://host.containers.internal:2019/load` - Tells litehouse-server to use the host gateway to reach Caddy's admin API
+
+**Debugging steps:**
+1. `podman ps -a` as root showed no containers - because they run under the `litehouse` user (rootless)
+2. `su - litehouse -c 'podman ps -a'` showed both containers running
+3. Logs showed: `Caddy config: Failed - error sending request for url (http://localhost:2019/load)`
+4. `curl http://localhost:2019/config/` from the host returned `null` (empty config)
+5. After fix, logs show: `Caddy configuration updated successfully (status: 200 OK)`
+
+**Key learnings:**
+- Always run podman commands as the `litehouse` user to see rootless containers
+- Container-to-container communication requires shared networks or host gateway
+- The `CADDY_API_URL` env var in `src/caddy.rs:707` allows overriding the default localhost URL
+
 IDEA: 
 - to make the install feedback better, could have a TUI with parallel streaming logs etc. Or maybe a text visualization happening for each thing / a diagram of what's happening / phases?
 - Or a ASCII based first person driver game where you see billboards and stuff of what's happening on the server.

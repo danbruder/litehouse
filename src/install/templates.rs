@@ -335,9 +335,11 @@ podman run -d \
   -v /opt/litehouse/config:/opt/litehouse/config \
   -v /opt/litehouse/data:/opt/litehouse/data \
   -v /run/user/{uid}/podman/podman.sock:/run/podman/podman.sock \
+  --add-host=host.containers.internal:host-gateway \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
   -e PODMAN_SOCK=/run/podman/podman.sock \
+  -e CADDY_API_URL=http://host.containers.internal:2019/load \
   -e RUST_LOG=info \
   localhost/litehouse:latest
 
