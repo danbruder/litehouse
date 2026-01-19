@@ -199,53 +199,64 @@ echo "UID:$LITEHOUSE_UID"
 "#
 }
 
-/// Script to wait for service to be active
-pub fn wait_for_service_script() -> &'static str {
-    r#"#!/bin/bash
-
-SERVICE_NAME="$1"
-MAX_WAIT=30
-WAITED=0
-
-echo "Waiting for $SERVICE_NAME to become active..."
-
-while [ $WAITED -lt $MAX_WAIT ]; do
-    if systemctl is-active --quiet $SERVICE_NAME; then
-        echo "$SERVICE_NAME is active"
-        exit 0
-    fi
-    sleep 1
-    WAITED=$((WAITED + 1))
-done
-
-echo "Timeout waiting for $SERVICE_NAME to become active"
-systemctl status $SERVICE_NAME || true
-exit 1
+/// Dockerfile template for building litehouse image locally
+pub fn local_dockerfile_template() -> &'static str {
+    r#"FROM alpine:latest
+RUN apk add --no-cache ca-certificates git
+RUN addgroup -g 1000 litehouse && adduser -D -u 1000 -G litehouse litehouse
+RUN mkdir -p /opt/litehouse/config /opt/litehouse/data && chown -R litehouse:litehouse /opt/litehouse
+COPY lh /usr/local/bin/lh
+RUN chmod +x /usr/local/bin/lh
+WORKDIR /opt/litehouse
+USER litehouse
+EXPOSE 3030
+CMD ["lh", "serve"]
 "#
 }
 
-/// Script to pull the litehouse server container image
-pub fn pull_container_script(litehouse_uid: &str) -> String {
+/// Script to build the litehouse server container image locally
+pub fn build_litehouse_image_script(litehouse_uid: &str) -> String {
     format!(
         r#"#!/bin/bash
 set -e
 
-echo "Pulling litehouse-server container image..."
+echo "Building litehouse-server container image locally..."
+
+# Create build context directory
+BUILD_DIR=$(mktemp -d)
+trap "rm -rf $BUILD_DIR" EXIT
+
+# Copy binary to build context
+cp /usr/local/bin/lh "$BUILD_DIR/lh"
+
+# Write Dockerfile
+cat > "$BUILD_DIR/Dockerfile" << 'DOCKERFILE'
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates git
+RUN addgroup -g 1000 litehouse && adduser -D -u 1000 -G litehouse litehouse
+RUN mkdir -p /opt/litehouse/config /opt/litehouse/data && chown -R litehouse:litehouse /opt/litehouse
+COPY lh /usr/local/bin/lh
+RUN chmod +x /usr/local/bin/lh
+WORKDIR /opt/litehouse
+USER litehouse
+EXPOSE 3030
+CMD ["lh", "serve"]
+DOCKERFILE
 
 # Run as litehouse user with proper environment
 cd /tmp && sudo -u litehouse bash -c "
-export XDG_RUNTIME_DIR=/run/user/{}
-export PODMAN_SOCK=/run/user/{}/podman/podman.sock
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
 
-# Pull the latest image
-podman pull ghcr.io/danbruder/litehouse:latest
+# Build the image
+podman build -t litehouse:latest $BUILD_DIR
 
-echo 'Image pulled successfully'
+echo 'Image built successfully'
 "
 
-echo "Container image pull completed"
+echo "Container image build completed"
 "#,
-        litehouse_uid, litehouse_uid
+        uid = litehouse_uid
     )
 }
 
@@ -295,6 +306,45 @@ echo "Litestream container image pull completed"
     )
 }
 
+/// Script to start litehouse-server container
+pub fn start_litehouse_container_script(litehouse_uid: &str) -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+echo "Starting litehouse-server container..."
+
+cd /tmp && sudo -u litehouse bash -c '
+export XDG_RUNTIME_DIR=/run/user/{uid}
+export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
+
+# Stop and remove any existing container
+podman stop --time 0 -i litehouse-server 2>/dev/null || true
+podman rm -f litehouse-server 2>/dev/null || true
+
+# Start litehouse-server container with restart policy
+podman run -d \
+  --name litehouse-server \
+  --restart=unless-stopped \
+  --replace \
+  --userns=keep-id \
+  -p 3030:3030 \
+  -v /opt/litehouse/config:/opt/litehouse/config \
+  -v /opt/litehouse/data:/opt/litehouse/data \
+  -v /run/user/{uid}/podman/podman.sock:/run/podman/podman.sock \
+  -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
+  -e LITEHOUSE_DIR=/opt/litehouse \
+  -e PODMAN_SOCK=/run/podman/podman.sock \
+  -e RUST_LOG=info \
+  localhost/litehouse:latest
+
+echo "litehouse-server container started"
+'
+"#,
+        uid = litehouse_uid
+    )
+}
+
 /// Script to start Caddy container
 pub fn start_caddy_container_script(litehouse_uid: &str) -> String {
     format!(
@@ -337,35 +387,20 @@ echo "Caddy container started"
     )
 }
 
-/// Script to start Litestream container
-pub fn start_litestream_container_script(litehouse_uid: &str) -> String {
+/// Script to enable podman-restart service
+pub fn enable_podman_restart_script(litehouse_uid: &str) -> String {
     format!(
         r#"#!/bin/bash
 set -e
 
-echo "Starting Litestream container..."
+echo "Enabling podman-restart.service..."
 
 cd /tmp && sudo -u litehouse bash -c '
 export XDG_RUNTIME_DIR=/run/user/{uid}
-export PODMAN_SOCK=/run/user/{uid}/podman/podman.sock
-
-# Stop and remove any existing litestream container
-podman stop -i litestream-container 2>/dev/null || true
-podman rm -i litestream-container 2>/dev/null || true
-
-# Start Litestream container
-podman run -d \
-  --name litestream-container \
-  --restart=unless-stopped \
-  --replace \
-  -v /opt/litehouse/data:/data \
-  -v /opt/litehouse/config:/config \
-  -v /opt/litehouse/data/litestream.yml:/etc/litestream.yml \
-  docker.io/litestream/litestream:latest \
-  replicate -config /etc/litestream.yml
-
-echo "Litestream container started"
+systemctl --user enable podman-restart.service
 '
+
+echo "podman-restart.service enabled"
 "#,
         uid = litehouse_uid
     )

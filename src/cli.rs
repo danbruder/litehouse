@@ -20,14 +20,15 @@ struct PodmanArgs {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a fresh server for litehouse deployment
-    Init {
-        /// SSH target (e.g., root@192.168.1.1)
-        ssh_target: String,
-
-        /// Base domain for wildcard routing (e.g., lh.danbruder.com)
+    /// Install litehouse on this server (run as root)
+    Install {
+        /// Base domain for wildcard routing (e.g., lh.example.com)
         #[arg(long)]
         domain: String,
+
+        /// Skip the final verification step
+        #[arg(long)]
+        skip_verify: bool,
     },
 
     /// Create a new app
@@ -236,8 +237,8 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { ssh_target, domain } => {
-            crate::commands::init::execute(&ssh_target, &domain).await
+        Commands::Install { domain, skip_verify } => {
+            crate::commands::install::execute(&domain, skip_verify).await
         }
         Commands::Serve => {
             let config = ServerConfig::load()?;
@@ -370,7 +371,7 @@ pub async fn run() -> Result<()> {
             GithubCmd::Repos { limit } => crate::commands::github::repos::execute(&api_client, limit).await,
             GithubCmd::Search { query } => crate::commands::github::search::execute(&api_client, &query).await,
         },
-        Commands::Init { .. } | Commands::Serve => unreachable!("Already handled above"),
+        Commands::Install { .. } | Commands::Serve => unreachable!("Already handled above"),
             }
         }
     }

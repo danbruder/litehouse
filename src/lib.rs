@@ -9,7 +9,7 @@ pub mod config;
 pub mod db;
 pub mod git;
 pub mod github;
-pub mod init;
+pub mod install;
 pub mod litestream;
 pub mod models;
 pub mod podman;
