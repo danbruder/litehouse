@@ -26,8 +26,8 @@ pub enum BuildError {
 type BuildResult<T> = Result<T, BuildError>;
 
 // Build an app
-#[instrument(skip(pool))]
-pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
+#[instrument(skip(pool, github_token))]
+pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, github_token: Option<&str>) -> BuildResult<()> {
     // Get app
     let app = db::app::get_by_name(pool, app_name)
         .await?
@@ -42,7 +42,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> BuildResult<()> {
 
     let build_dir = config::get_app_build_dir(&app.name)?;
 
-    let git_result = git::pull(&remote, &build_dir).await?;
+    let git_result = git::pull(&remote, &build_dir, github_token).await?;
 
     let tag = format!("{}:{}", app.name, &git_result.commit);
     let image_id = podman::build(&build_dir.to_str().unwrap(), &tag)

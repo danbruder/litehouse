@@ -23,17 +23,17 @@ pub enum BuildError {
 
 type BuildResult<T> = Result<T, BuildError>;
 
-// Build an app
-#[instrument(skip(pool))]
-pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, remote: &str) -> BuildResult<()> {
+// Add a remote to an app and clone the repository
+#[instrument(skip(pool, github_token))]
+pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, remote: &str, github_token: Option<&str>) -> BuildResult<()> {
     // Get app
     let app = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| BuildError::AppNotFound(app_name.to_string()))?;
 
-    // Clone the remote
+    // Clone the remote (with token if provided for private repos)
     let build_dir = config::get_app_build_dir(&app.name)?;
-    git::clone(remote, &build_dir).await?;
+    git::clone(remote, &build_dir, github_token).await?;
 
     let remote = Remote::new(&app.id, "github", remote, "main", ".");
     db::remote::save(pool, &remote).await?;

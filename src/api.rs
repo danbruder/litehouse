@@ -374,8 +374,8 @@ async fn create_app(
             }
         };
 
-        // Add the remote
-        if let Err(e) = remote::add::execute(&pool, &payload.name, &repo_info.clone_url).await {
+        // Add the remote (pass GitHub token for authentication)
+        if let Err(e) = remote::add::execute(&pool, &payload.name, &repo_info.clone_url, Some(&connection.access_token)).await {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("App created but failed to add remote: {}", e),
@@ -487,11 +487,19 @@ struct SetRemoteRequest {
 
 async fn add_remote(
     State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Path(name): Path<String>,
     Json(payload): Json<SetRemoteRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match remote::add::execute(&pool, &name, &payload.remote).await {
+
+    // Get GitHub token for the user (if connected)
+    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(Some(conn)) => Some(conn.access_token),
+        _ => None,
+    };
+
+    match remote::add::execute(&pool, &name, &payload.remote, github_token.as_deref()).await {
         Ok(_) => (
             StatusCode::OK,
             format!("Remote configured for app '{}'", name),
@@ -522,10 +530,18 @@ async fn remove_remote(
 
 async fn build_app(
     State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    match build::execute(&pool, &name).await {
+
+    // Get GitHub token for the user (if connected)
+    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+        Ok(Some(conn)) => Some(conn.access_token),
+        _ => None,
+    };
+
+    match build::execute(&pool, &name, github_token.as_deref()).await {
         Ok(_) => (StatusCode::OK, format!("App '{}' built", name)).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
