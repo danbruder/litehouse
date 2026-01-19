@@ -7,7 +7,6 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
-import Time
 
 
 -- PORTS
@@ -17,6 +16,12 @@ port saveToken : String -> Cmd msg
 
 
 port clearToken : () -> Cmd msg
+
+
+port startGitHubSSE : { token : String, deviceCode : String, interval : Int, expiresIn : Int } -> Cmd msg
+
+
+port gitHubSSEEvent : (Decode.Value -> msg) -> Sub msg
 
 
 
@@ -91,6 +96,41 @@ type alias DashboardState =
 type DashboardView
     = AppsListView
     | CreateAppView CreateAppState
+    | AppDetailView AppDetailState
+
+
+type alias AppDetailState =
+    { app : AppDetail
+    , logs : String
+    , logsLoading : Bool
+    , actionInProgress : Maybe AppAction
+    , error : Maybe String
+    }
+
+
+type alias AppDetail =
+    { id : String
+    , name : String
+    , state : String
+    , port_ : Maybe Int
+    , createdAt : String
+    , updatedAt : String
+    , remote : Maybe RemoteInfo
+    }
+
+
+type alias RemoteInfo =
+    { name : String
+    , url : String
+    , branch : String
+    }
+
+
+type AppAction
+    = Starting
+    | Stopping
+    | Building
+    | Deleting
 
 
 type alias CreateAppState =
@@ -205,7 +245,7 @@ subscriptions model =
                     case createState.step of
                         ConnectGitHub ghState ->
                             if ghState.polling then
-                                Time.every (toFloat ghState.interval * 1000) (\_ -> PollGitHubConnect)
+                                gitHubSSEEvent GotGitHubSSEEvent
 
                             else
                                 Sub.none
@@ -251,13 +291,29 @@ type Msg
     | SubmitAppName
     | StartGitHubConnect
     | GotDeviceFlowStart (Result Http.Error DeviceFlowStartResponse)
-    | PollGitHubConnect
-    | GotGitHubConnectPoll (Result Http.Error GitHubConnectResponse)
+    | GotGitHubSSEEvent Decode.Value
     | GotRepoList (Result Http.Error (List RepoInfo))
     | RepoSearchChanged String
     | ChooseRepo RepoInfo
     | SkipRepoSelection
     | GotAppCreated (Result Http.Error AppInfo)
+      -- App detail
+    | ViewAppDetail String
+    | GotAppDetail (Result Http.Error AppDetail)
+    | BackToApps
+    | RefreshAppDetail
+    | StartApp
+    | StopApp
+    | BuildApp
+    | DeleteApp
+    | ConfirmDeleteApp
+    | CancelDeleteApp
+    | GotAppStarted (Result Http.Error String)
+    | GotAppStopped (Result Http.Error String)
+    | GotAppBuilt (Result Http.Error String)
+    | GotAppDeleted (Result Http.Error String)
+    | FetchLogs
+    | GotLogs (Result Http.Error String)
 
 
 type alias ServerStatus =
@@ -293,9 +349,6 @@ type alias DeviceFlowStartResponse =
     }
 
 
-type alias GitHubConnectResponse =
-    { username : String
-    }
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -706,7 +759,12 @@ update msg model =
                                                             }
                                                 }
                                       }
-                                    , Cmd.none
+                                    , startGitHubSSE
+                                        { token = state.token
+                                        , deviceCode = response.deviceCode
+                                        , interval = response.interval
+                                        , expiresIn = response.expiresIn
+                                        }
                                     )
 
                                 Err err ->
@@ -728,58 +786,54 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        PollGitHubConnect ->
+        GotGitHubSSEEvent value ->
             case model.page of
                 Dashboard state ->
                     case state.view of
                         CreateAppView createState ->
-                            case createState.step of
-                                ConnectGitHub ghState ->
-                                    ( model, pollDeviceFlow state.token ghState.deviceCode ghState.interval ghState.expiresIn )
+                            case Decode.decodeValue sseEventDecoder value of
+                                Ok event ->
+                                    case event.eventType of
+                                        "success" ->
+                                            -- Parse the data as JSON to get username
+                                            case Decode.decodeString (Decode.field "username" Decode.string) event.data of
+                                                Ok username ->
+                                                    ( { model
+                                                        | page =
+                                                            Dashboard
+                                                                { state
+                                                                    | githubStatus = GitHubConnected username
+                                                                    , view =
+                                                                        CreateAppView
+                                                                            { createState
+                                                                                | step = SelectRepo [] ""
+                                                                                , error = Nothing
+                                                                            }
+                                                                }
+                                                      }
+                                                    , fetchRepos state.token
+                                                    )
 
-                                _ ->
-                                    ( model, Cmd.none )
+                                                Err _ ->
+                                                    -- Fallback: still a success, just no username parsed
+                                                    ( { model
+                                                        | page =
+                                                            Dashboard
+                                                                { state
+                                                                    | githubStatus = GitHubConnected ""
+                                                                    , view =
+                                                                        CreateAppView
+                                                                            { createState
+                                                                                | step = SelectRepo [] ""
+                                                                                , error = Nothing
+                                                                            }
+                                                                }
+                                                      }
+                                                    , fetchRepos state.token
+                                                    )
 
-                        _ ->
-                            ( model, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        GotGitHubConnectPoll result ->
-            case model.page of
-                Dashboard state ->
-                    case state.view of
-                        CreateAppView createState ->
-                            case result of
-                                Ok response ->
-                                    -- Successfully connected, update status and fetch repos
-                                    ( { model
-                                        | page =
-                                            Dashboard
-                                                { state
-                                                    | githubStatus = GitHubConnected response.username
-                                                    , view =
-                                                        CreateAppView
-                                                            { createState
-                                                                | step = SelectRepo [] ""
-                                                                , error = Nothing
-                                                            }
-                                                }
-                                      }
-                                    , fetchRepos state.token
-                                    )
-
-                                Err err ->
-                                    -- Check if it's a "pending" error (authorization_pending)
-                                    -- In that case, keep polling. Otherwise, show error
-                                    case err of
-                                        Http.BadStatus 202 ->
-                                            -- Still pending, keep polling
-                                            ( model, Cmd.none )
-
-                                        _ ->
-                                            -- Real error, stop polling
+                                        "error" ->
+                                            -- Stop polling and show error
                                             case createState.step of
                                                 ConnectGitHub ghState ->
                                                     ( { model
@@ -790,7 +844,7 @@ update msg model =
                                                                         CreateAppView
                                                                             { createState
                                                                                 | step = ConnectGitHub { ghState | polling = False }
-                                                                                , error = Just (httpErrorToString err)
+                                                                                , error = Just event.data
                                                                             }
                                                                 }
                                                       }
@@ -799,6 +853,18 @@ update msg model =
 
                                                 _ ->
                                                     ( model, Cmd.none )
+
+                                        "pending" ->
+                                            -- Still waiting, keep polling (subscription handles this)
+                                            ( model, Cmd.none )
+
+                                        _ ->
+                                            -- Unknown event type, ignore
+                                            ( model, Cmd.none )
+
+                                Err _ ->
+                                    -- Failed to decode event, ignore
+                                    ( model, Cmd.none )
 
                         _ ->
                             ( model, Cmd.none )
@@ -974,6 +1040,433 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
+        -- App detail messages
+        ViewAppDetail appName ->
+            case model.page of
+                Dashboard state ->
+                    ( model
+                    , fetchAppDetail state.token appName
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotAppDetail result ->
+            case model.page of
+                Dashboard state ->
+                    case result of
+                        Ok app ->
+                            let
+                                detailState =
+                                    { app = app
+                                    , logs = ""
+                                    , logsLoading = True
+                                    , actionInProgress = Nothing
+                                    , error = Nothing
+                                    }
+                            in
+                            ( { model | page = Dashboard { state | view = AppDetailView detailState } }
+                            , fetchAppLogs state.token app.name
+                            )
+
+                        Err err ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view = AppsListView
+                                        }
+                              }
+                            , Cmd.none
+                            )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        BackToApps ->
+            case model.page of
+                Dashboard state ->
+                    ( { model | page = Dashboard { state | view = AppsListView } }
+                    , fetchApps state.token
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        RefreshAppDetail ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( model
+                            , Cmd.batch
+                                [ fetchAppDetail state.token detailState.app.name
+                                , fetchAppLogs state.token detailState.app.name
+                                ]
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        StartApp ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState
+                                                        | actionInProgress = Just Starting
+                                                        , error = Nothing
+                                                    }
+                                        }
+                              }
+                            , startAppRequest state.token detailState.app.name
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        StopApp ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState
+                                                        | actionInProgress = Just Stopping
+                                                        , error = Nothing
+                                                    }
+                                        }
+                              }
+                            , stopAppRequest state.token detailState.app.name
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        BuildApp ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState
+                                                        | actionInProgress = Just Building
+                                                        , error = Nothing
+                                                    }
+                                        }
+                              }
+                            , buildAppRequest state.token detailState.app.name
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        DeleteApp ->
+            -- This just triggers confirmation, actual delete is ConfirmDeleteApp
+            ( model, Cmd.none )
+
+        ConfirmDeleteApp ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState
+                                                        | actionInProgress = Just Deleting
+                                                        , error = Nothing
+                                                    }
+                                        }
+                              }
+                            , deleteAppRequest state.token detailState.app.name
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        CancelDeleteApp ->
+            ( model, Cmd.none )
+
+        GotAppStarted result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState | actionInProgress = Nothing }
+                                                }
+                                      }
+                                    , fetchAppDetail state.token detailState.app.name
+                                    )
+
+                                Err err ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | actionInProgress = Nothing
+                                                                , error = Just (httpErrorToString err)
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotAppStopped result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState | actionInProgress = Nothing }
+                                                }
+                                      }
+                                    , fetchAppDetail state.token detailState.app.name
+                                    )
+
+                                Err err ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | actionInProgress = Nothing
+                                                                , error = Just (httpErrorToString err)
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotAppBuilt result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState | actionInProgress = Nothing }
+                                                }
+                                      }
+                                    , Cmd.batch
+                                        [ fetchAppDetail state.token detailState.app.name
+                                        , fetchAppLogs state.token detailState.app.name
+                                        ]
+                                    )
+
+                                Err err ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | actionInProgress = Nothing
+                                                                , error = Just (httpErrorToString err)
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotAppDeleted result ->
+            case model.page of
+                Dashboard state ->
+                    case result of
+                        Ok _ ->
+                            -- Remove app from list and go back to apps list
+                            case state.view of
+                                AppDetailView detailState ->
+                                    let
+                                        updatedApps =
+                                            List.filter (\a -> a.name /= detailState.app.name) state.apps
+                                    in
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view = AppsListView
+                                                    , apps = updatedApps
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                _ ->
+                                    ( { model | page = Dashboard { state | view = AppsListView } }
+                                    , Cmd.none
+                                    )
+
+                        Err err ->
+                            case state.view of
+                                AppDetailView detailState ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | actionInProgress = Nothing
+                                                                , error = Just (httpErrorToString err)
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                _ ->
+                                    ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        FetchLogs ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState | logsLoading = True }
+                                        }
+                              }
+                            , fetchAppLogs state.token detailState.app.name
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotLogs result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok logs ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | logs = logs
+                                                                , logsLoading = False
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                Err _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | logs = ""
+                                                                , logsLoading = False
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- HTTP
@@ -1071,26 +1564,6 @@ startDeviceFlow token =
         }
 
 
-pollDeviceFlow : String -> String -> Int -> Int -> Cmd Msg
-pollDeviceFlow token deviceCode interval expiresIn =
-    Http.request
-        { method = "POST"
-        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
-        , url = "/api/github/connect/poll"
-        , body =
-            Http.jsonBody
-                (Encode.object
-                    [ ( "device_code", Encode.string deviceCode )
-                    , ( "interval", Encode.int interval )
-                    , ( "expires_in", Encode.int expiresIn )
-                    ]
-                )
-        , expect = Http.expectJson GotGitHubConnectPoll githubConnectResponseDecoder
-        , timeout = Nothing
-        , tracker = Nothing
-        }
-
-
 fetchRepos : String -> Cmd Msg
 fetchRepos token =
     Http.request
@@ -1136,6 +1609,84 @@ createAppWithRepo token name repoFullName =
                     ]
                 )
         , expect = Http.expectJson GotAppCreated appInfoDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+fetchAppDetail : String -> String -> Cmd Msg
+fetchAppDetail token appName =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotAppDetail appDetailDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+startAppRequest : String -> String -> Cmd Msg
+startAppRequest token appName =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/start"
+        , body = Http.emptyBody
+        , expect = Http.expectString GotAppStarted
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+stopAppRequest : String -> String -> Cmd Msg
+stopAppRequest token appName =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/stop"
+        , body = Http.emptyBody
+        , expect = Http.expectString GotAppStopped
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+buildAppRequest : String -> String -> Cmd Msg
+buildAppRequest token appName =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/build"
+        , body = Http.emptyBody
+        , expect = Http.expectString GotAppBuilt
+        , timeout = Just 300000
+        , tracker = Nothing
+        }
+
+
+deleteAppRequest : String -> String -> Cmd Msg
+deleteAppRequest token appName =
+    Http.request
+        { method = "DELETE"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName
+        , body = Http.emptyBody
+        , expect = Http.expectString GotAppDeleted
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+fetchAppLogs : String -> String -> Cmd Msg
+fetchAppLogs token appName =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/logs?lines=100"
+        , body = Http.emptyBody
+        , expect = Http.expectString GotLogs
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -1213,10 +1764,17 @@ deviceFlowStartDecoder =
         (Decode.field "interval" Decode.int)
 
 
-githubConnectResponseDecoder : Decode.Decoder GitHubConnectResponse
-githubConnectResponseDecoder =
-    Decode.map GitHubConnectResponse
-        (Decode.field "username" Decode.string)
+type alias SSEEvent =
+    { eventType : String
+    , data : String
+    }
+
+
+sseEventDecoder : Decode.Decoder SSEEvent
+sseEventDecoder =
+    Decode.map2 SSEEvent
+        (Decode.field "type" Decode.string)
+        (Decode.field "data" Decode.string)
 
 
 reposListDecoder : Decode.Decoder (List RepoInfo)
@@ -1233,6 +1791,26 @@ repoInfoDecoder =
         (Decode.field "private" Decode.bool)
         (Decode.field "clone_url" Decode.string)
         (Decode.field "default_branch" Decode.string)
+
+
+appDetailDecoder : Decode.Decoder AppDetail
+appDetailDecoder =
+    Decode.map7 AppDetail
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "state" Decode.string)
+        (Decode.maybe (Decode.field "port" Decode.int))
+        (Decode.field "created_at" Decode.string)
+        (Decode.field "updated_at" Decode.string)
+        (Decode.maybe (Decode.field "remote" remoteInfoDecoder))
+
+
+remoteInfoDecoder : Decode.Decoder RemoteInfo
+remoteInfoDecoder =
+    Decode.map3 RemoteInfo
+        (Decode.field "name" Decode.string)
+        (Decode.field "url" Decode.string)
+        (Decode.field "branch" Decode.string)
 
 
 
@@ -1446,7 +2024,7 @@ viewDashboard state version =
     div [ class "dashboard" ]
         [ header [ class "dashboard-header" ]
             [ div [ class "header-brand" ]
-                [ h1 [] [ text "Litehouse" ]
+                [ h1 [] [ text "Litehouse farts" ]
                 ]
             , div [ class "header-user" ]
                 [ viewGitHubStatusBadge state.githubStatus
@@ -1461,6 +2039,9 @@ viewDashboard state version =
 
                 CreateAppView createState ->
                     viewCreateApp state createState
+
+                AppDetailView detailState ->
+                    viewAppDetail detailState
             ]
         , footer [ class "dashboard-footer" ]
             [ viewVersion version
@@ -1509,13 +2090,207 @@ viewAppsList state =
 
 viewAppCard : AppInfo -> Html Msg
 viewAppCard app =
-    div [ class "app-card" ]
+    div [ class "app-card", onClick (ViewAppDetail app.name) ]
         [ div [ class "app-card-header" ]
             [ h3 [ class "app-name" ] [ text app.name ]
             , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
             ]
         , div [ class "app-card-footer" ]
             [ span [ class "app-id" ] [ text ("ID: " ++ app.id) ]
+            ]
+        ]
+
+
+viewAppDetail : AppDetailState -> Html Msg
+viewAppDetail state =
+    let
+        app =
+            state.app
+
+        isRunning =
+            app.state == "running" || app.state == "starting"
+
+        hasRemote =
+            state.app.remote /= Nothing
+
+        actionDisabled =
+            state.actionInProgress /= Nothing
+    in
+    div [ class "app-detail" ]
+        [ -- Header with back button and actions
+          div [ class "app-detail-header" ]
+            [ div [ class "app-detail-title" ]
+                [ button [ class "btn-back", onClick BackToApps ] [ text "< Apps" ]
+                , h2 [] [ text app.name ]
+                , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
+                ]
+            , div [ class "app-detail-actions" ]
+                [ button
+                    [ class "btn-icon"
+                    , onClick RefreshAppDetail
+                    , disabled actionDisabled
+                    , title "Refresh"
+                    ]
+                    [ text "Refresh" ]
+                ]
+            ]
+
+        -- Error message
+        , viewError state.error
+
+        -- Action in progress indicator
+        , case state.actionInProgress of
+            Just action ->
+                div [ class "action-progress" ]
+                    [ div [ class "spinner spinner-small" ] []
+                    , span []
+                        [ text
+                            (case action of
+                                Starting ->
+                                    "Starting app..."
+
+                                Stopping ->
+                                    "Stopping app..."
+
+                                Building ->
+                                    "Building app (this may take a while)..."
+
+                                Deleting ->
+                                    "Deleting app..."
+                            )
+                        ]
+                    ]
+
+            Nothing ->
+                text ""
+
+        -- Main content sections
+        , div [ class "app-detail-content" ]
+            [ -- Info section
+              div [ class "app-detail-section" ]
+                [ h3 [] [ text "Information" ]
+                , div [ class "app-info-grid" ]
+                    [ div [ class "app-info-item" ]
+                        [ span [ class "app-info-label" ] [ text "ID" ]
+                        , span [ class "app-info-value monospace" ] [ text app.id ]
+                        ]
+                    , div [ class "app-info-item" ]
+                        [ span [ class "app-info-label" ] [ text "State" ]
+                        , span [ class "app-info-value" ]
+                            [ span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
+                            ]
+                        ]
+                    , div [ class "app-info-item" ]
+                        [ span [ class "app-info-label" ] [ text "Port" ]
+                        , span [ class "app-info-value" ]
+                            [ text
+                                (case app.port_ of
+                                    Just p ->
+                                        String.fromInt p
+
+                                    Nothing ->
+                                        "Not assigned"
+                                )
+                            ]
+                        ]
+                    , div [ class "app-info-item" ]
+                        [ span [ class "app-info-label" ] [ text "Created" ]
+                        , span [ class "app-info-value" ] [ text app.createdAt ]
+                        ]
+                    , div [ class "app-info-item" ]
+                        [ span [ class "app-info-label" ] [ text "Updated" ]
+                        , span [ class "app-info-value" ] [ text app.updatedAt ]
+                        ]
+                    ]
+                ]
+
+            -- Repository section
+            , div [ class "app-detail-section" ]
+                [ h3 [] [ text "Repository" ]
+                , case app.remote of
+                    Just remote ->
+                        div [ class "app-info-grid" ]
+                            [ div [ class "app-info-item" ]
+                                [ span [ class "app-info-label" ] [ text "URL" ]
+                                , span [ class "app-info-value monospace" ] [ text remote.url ]
+                                ]
+                            , div [ class "app-info-item" ]
+                                [ span [ class "app-info-label" ] [ text "Branch" ]
+                                , span [ class "app-info-value" ] [ text remote.branch ]
+                                ]
+                            ]
+
+                    Nothing ->
+                        p [ class "app-info-empty" ] [ text "No repository connected" ]
+                ]
+
+            -- Actions section
+            , div [ class "app-detail-section" ]
+                [ h3 [] [ text "Actions" ]
+                , div [ class "app-actions-grid" ]
+                    [ -- Start/Stop button
+                      if isRunning then
+                        button
+                            [ class "btn-action btn-stop"
+                            , onClick StopApp
+                            , disabled actionDisabled
+                            ]
+                            [ text "Stop" ]
+
+                      else
+                        button
+                            [ class "btn-action btn-start"
+                            , onClick StartApp
+                            , disabled actionDisabled
+                            ]
+                            [ text "Start" ]
+
+                    -- Build button (only if has remote)
+                    , if hasRemote then
+                        button
+                            [ class "btn-action btn-build"
+                            , onClick BuildApp
+                            , disabled actionDisabled
+                            ]
+                            [ text "Build" ]
+
+                      else
+                        text ""
+
+                    -- Delete button
+                    , button
+                        [ class "btn-action btn-delete"
+                        , onClick ConfirmDeleteApp
+                        , disabled actionDisabled
+                        ]
+                        [ text "Delete" ]
+                    ]
+                ]
+
+            -- Logs section
+            , div [ class "app-detail-section app-logs-section" ]
+                [ div [ class "section-header" ]
+                    [ h3 [] [ text "Logs" ]
+                    , button
+                        [ class "btn-secondary btn-small"
+                        , onClick FetchLogs
+                        , disabled state.logsLoading
+                        ]
+                        [ text "Refresh Logs" ]
+                    ]
+                , if state.logsLoading then
+                    div [ class "logs-loading" ]
+                        [ div [ class "spinner spinner-small" ] []
+                        , span [] [ text "Loading logs..." ]
+                        ]
+
+                  else if String.isEmpty state.logs then
+                    div [ class "logs-empty" ]
+                        [ text "No logs available" ]
+
+                  else
+                    pre [ class "logs-content" ] [ text state.logs ]
+                ]
             ]
         ]
 

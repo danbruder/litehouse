@@ -60,6 +60,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         // GitHub OAuth routes
         .route("/github/connect/start", post(github_connect_start))
         .route("/github/connect/poll", post(github_connect_poll))
+        .route("/github/connect/stream", get(github_connect_stream))
         .route("/github/connection", delete(github_disconnect))
         .route("/github/status", get(github_status))
         .route("/github/repos", get(github_list_repos))
@@ -109,23 +110,27 @@ async fn get_app(
 
     match db::app::get_by_name(&pool, &name).await {
         Ok(Some(app)) => {
-            let input = crate::models::BuildInput {
-                app_id: app.id.to_string(),
-                image_id: "hello".into(),
-                image_tag: "nginx:latest".into(),
-                git_commit: "heyo".into(),
+            // Try to get remote info for this app
+            let remote_info = match db::remote::get_by_app(&pool, &app.id).await {
+                Ok(remote) => Some(RemoteInfoResponse {
+                    name: remote.name,
+                    url: remote.remote,
+                    branch: remote.branch,
+                }),
+                Err(_) => None,
             };
 
-            let build = crate::models::Build::new(input);
-            db::build::save(&pool, &build).await.unwrap();
-
-            let app_info = AppInfo {
+            let app_detail = AppDetailResponse {
                 id: app.id.to_string(),
                 name: app.name,
                 state: app.state.to_string(),
+                port: app.port,
+                created_at: app.created_at.0.to_rfc3339(),
+                updated_at: app.updated_at.0.to_rfc3339(),
+                remote: remote_info,
             };
 
-            Json(app_info).into_response()
+            Json(app_detail).into_response()
         }
         Ok(None) => (
             axum::http::StatusCode::NOT_FOUND,
@@ -377,22 +382,30 @@ async fn create_app(
             )
                 .into_response();
         }
-
-        return (
-            StatusCode::CREATED,
-            format!(
-                "App '{}' created with remote {}",
-                payload.name, repo_info.clone_url
-            ),
-        )
-            .into_response();
     }
 
-    (
-        axum::http::StatusCode::CREATED,
-        format!("App '{}' created", payload.name),
-    )
-        .into_response()
+    // Fetch the newly created app to return its info
+    match db::app::get_by_name(&pool, &payload.name).await {
+        Ok(Some(app)) => (
+            StatusCode::CREATED,
+            Json(AppInfo {
+                id: app.id,
+                name: app.name,
+                state: app.state.to_string(),
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "App created but could not be retrieved",
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("App created but failed to retrieve: {}", e),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -400,6 +413,24 @@ struct AppInfo {
     id: String,
     name: String,
     state: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AppDetailResponse {
+    id: String,
+    name: String,
+    state: String,
+    port: Option<i64>,
+    created_at: String,
+    updated_at: String,
+    remote: Option<RemoteInfoResponse>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct RemoteInfoResponse {
+    name: String,
+    url: String,
+    branch: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -904,6 +935,109 @@ async fn github_connect_poll(
         email: gh_user.email,
     })
     .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct DeviceFlowStreamQuery {
+    device_code: String,
+    interval: Option<u64>,
+    expires_in: Option<u64>,
+}
+
+#[instrument(skip(state))]
+async fn github_connect_stream(
+    State(state): State<Arc<RwLock<AppState>>>,
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+    Query(query): Query<DeviceFlowStreamQuery>,
+) -> impl IntoResponse {
+    let (client_id, pool) = {
+        let state = state.read().await;
+        let client_id = match state.github_client_id.clone() {
+            Some(id) => id,
+            None => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "GitHub OAuth is not configured",
+                )
+                    .into_response();
+            }
+        };
+        (client_id, state.db_pool.clone())
+    };
+
+    let device_code = query.device_code;
+    let interval = query.interval.unwrap_or(5).max(5); // At least 5 seconds
+    let expires_in = query.expires_in.unwrap_or(900); // Default 15 minutes
+    let user_id = auth_user.user_id.clone();
+
+    // Create an async stream that polls GitHub
+    let stream = async_stream::stream! {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(expires_in);
+        let poll_interval = std::time::Duration::from_secs(interval);
+
+        loop {
+            if start.elapsed() > timeout {
+                yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization timed out"));
+                break;
+            }
+
+            // Poll GitHub
+            match github::poll_once(&client_id, &device_code).await {
+                Ok(github::PollResult::Pending) => {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().event("pending").data("Waiting for authorization..."));
+                }
+                Ok(github::PollResult::Success { access_token, scope }) => {
+                    // Get GitHub user info
+                    let gh_client = github::GitHubClient::new(&access_token);
+                    match gh_client.get_user().await {
+                        Ok(gh_user) => {
+                            // Save connection to database
+                            let connection = GitHubConnection::new(
+                                &user_id,
+                                gh_user.id,
+                                &gh_user.login,
+                                gh_user.email.clone(),
+                                &access_token,
+                                &scope,
+                            );
+
+                            if let Err(e) = db::github_connection::save(&pool, &connection).await {
+                                yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Failed to save connection: {}", e)));
+                            } else {
+                                // Send success with username as JSON
+                                let response = serde_json::json!({
+                                    "username": gh_user.login,
+                                    "email": gh_user.email
+                                });
+                                yield Ok::<_, std::convert::Infallible>(Event::default().event("success").data(response.to_string()));
+                            }
+                        }
+                        Err(e) => {
+                            yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Failed to get GitHub user: {}", e)));
+                        }
+                    }
+                    break;
+                }
+                Err(github::OAuthError::AuthorizationTimeout) => {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization timed out"));
+                    break;
+                }
+                Err(github::OAuthError::AccessDenied) => {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization was denied"));
+                    break;
+                }
+                Err(e) => {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Error: {}", e)));
+                    break;
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    };
+
+    Sse::new(stream).into_response()
 }
 
 #[instrument(skip(state))]

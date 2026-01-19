@@ -6,6 +6,7 @@ description = "A platform for deploying and running containerized applications"
 authors = ["Dan Bruder <danbruder@hey.com>"]
 
 [dependencies]
+async-stream = "0.3"
 clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "time", "macros"] }

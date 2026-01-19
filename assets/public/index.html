@@ -543,6 +543,244 @@
             margin-top: 16px;
             text-align: center;
         }
+
+        /* App Detail Page */
+        .app-detail {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+        }
+
+        .app-detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid #e5e5e5;
+        }
+
+        .app-detail-title {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .app-detail-title h2 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .btn-back {
+            background: none;
+            border: none;
+            color: #0066cc;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: background-color 0.2s;
+        }
+
+        .btn-back:hover {
+            background-color: #f0f7ff;
+        }
+
+        .btn-icon {
+            background: none;
+            border: 1px solid #ddd;
+            color: #666;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+
+        .btn-icon:hover:not(:disabled) {
+            background-color: #f5f5f5;
+            border-color: #ccc;
+        }
+
+        .btn-icon:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .app-detail-content {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        .app-detail-section {
+            padding: 20px;
+            background: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #e5e5e5;
+        }
+
+        .app-detail-section h3 {
+            margin: 0 0 16px 0;
+            font-size: 16px;
+            color: #333;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .section-header h3 {
+            margin: 0;
+        }
+
+        .app-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .app-info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .app-info-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 500;
+        }
+
+        .app-info-value {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .app-info-value.monospace {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        .app-info-empty {
+            color: #999;
+            font-style: italic;
+            margin: 0;
+        }
+
+        .action-progress {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: #fef3c7;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            color: #92400e;
+        }
+
+        .app-actions-grid {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .btn-action {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, opacity 0.2s;
+        }
+
+        .btn-action:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-start {
+            background-color: #22c55e;
+            color: white;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            background-color: #16a34a;
+        }
+
+        .btn-stop {
+            background-color: #f59e0b;
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            background-color: #d97706;
+        }
+
+        .btn-build {
+            background-color: #0066cc;
+            color: white;
+        }
+
+        .btn-build:hover:not(:disabled) {
+            background-color: #0052a3;
+        }
+
+        .btn-delete {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .btn-delete:hover:not(:disabled) {
+            background-color: #dc2626;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        /* Logs section */
+        .app-logs-section {
+            max-height: 500px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .logs-loading, .logs-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 40px;
+            color: #666;
+        }
+
+        .logs-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            overflow: auto;
+            max-height: 400px;
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Make app cards clickable */
+        .app-card {
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -572,6 +810,103 @@
         app.ports.clearToken.subscribe(function() {
             localStorage.removeItem(TOKEN_KEY);
         });
+
+        // Track current EventSource connection
+        var githubEventSource = null;
+
+        // Port: Start GitHub SSE connection
+        app.ports.startGitHubSSE.subscribe(function(config) {
+            // Close any existing connection
+            if (githubEventSource) {
+                githubEventSource.close();
+            }
+
+            // Build URL with query params
+            var url = '/api/github/connect/stream?device_code=' + encodeURIComponent(config.deviceCode) +
+                      '&interval=' + config.interval +
+                      '&expires_in=' + config.expiresIn;
+
+            // Create EventSource with authorization header via fetch
+            // Note: EventSource doesn't support custom headers, so we use a workaround
+            // by including auth in the URL or using cookies. For now, we'll rely on
+            // the session being authenticated via cookies or we need to use fetch-event-source.
+
+            // Simple workaround: Use a fetch-based SSE reader
+            fetchSSE(url, config.token);
+        });
+
+        function fetchSSE(url, token) {
+            fetch(url, {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'Accept': 'text/event-stream'
+                }
+            }).then(function(response) {
+                if (!response.ok) {
+                    app.ports.gitHubSSEEvent.send({
+                        type: 'error',
+                        data: 'Failed to connect: ' + response.status
+                    });
+                    return;
+                }
+
+                var reader = response.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = '';
+
+                function read() {
+                    reader.read().then(function(result) {
+                        if (result.done) {
+                            return;
+                        }
+
+                        buffer += decoder.decode(result.value, { stream: true });
+
+                        // Parse SSE events from buffer
+                        var lines = buffer.split('\n');
+                        buffer = lines.pop(); // Keep incomplete line in buffer
+
+                        var currentEvent = { type: 'message', data: '' };
+
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i];
+
+                            if (line.startsWith('event:')) {
+                                currentEvent.type = line.substring(6).trim();
+                            } else if (line.startsWith('data:')) {
+                                currentEvent.data = line.substring(5).trim();
+                            } else if (line === '') {
+                                // Empty line means end of event
+                                if (currentEvent.data) {
+                                    app.ports.gitHubSSEEvent.send(currentEvent);
+
+                                    // Stop reading on success or error
+                                    if (currentEvent.type === 'success' || currentEvent.type === 'error') {
+                                        return;
+                                    }
+                                }
+                                currentEvent = { type: 'message', data: '' };
+                            }
+                        }
+
+                        read(); // Continue reading
+                    }).catch(function(error) {
+                        app.ports.gitHubSSEEvent.send({
+                            type: 'error',
+                            data: 'Connection error: ' + error.message
+                        });
+                    });
+                }
+
+                read();
+            }).catch(function(error) {
+                app.ports.gitHubSSEEvent.send({
+                    type: 'error',
+                    data: 'Failed to start SSE: ' + error.message
+                });
+            });
+        }
     </script>
 </body>
 </html>

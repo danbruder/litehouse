@@ -46,6 +46,55 @@ pub async fn start_device_flow(client_id: &str) -> Result<DeviceAuthResponse, OA
     Ok(auth_response)
 }
 
+/// Result of a single poll attempt
+#[derive(Debug)]
+pub enum PollResult {
+    /// Authorization still pending
+    Pending,
+    /// Successfully got the access token and scopes
+    Success { access_token: String, scope: String },
+}
+
+/// Poll GitHub once for the access token (single attempt, non-blocking)
+pub async fn poll_once(
+    client_id: &str,
+    device_code: &str,
+) -> Result<PollResult, OAuthError> {
+    let client = Client::new();
+
+    let response = client
+        .post(TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("device_code", device_code),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+        ])
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        return Err(OAuthError::TokenRequestFailed(error_text));
+    }
+
+    let token_response: TokenResponse = response.json().await?;
+
+    match token_response {
+        TokenResponse::Success {
+            access_token,
+            scope,
+            ..
+        } => Ok(PollResult::Success { access_token, scope }),
+        TokenResponse::Pending { error, .. } => match error.as_str() {
+            "authorization_pending" | "slow_down" => Ok(PollResult::Pending),
+            "expired_token" => Err(OAuthError::AuthorizationTimeout),
+            "access_denied" => Err(OAuthError::AccessDenied),
+            _ => Err(OAuthError::TokenRequestFailed(error)),
+        },
+    }
+}
+
 /// Poll GitHub for the access token after user authorizes
 pub async fn poll_for_token(
     client_id: &str,
