@@ -1,6 +1,7 @@
 pub mod admin_spa;
 pub mod api;
 pub mod api_client;
+pub mod auth;
 pub mod caddy;
 pub mod cli;
 pub mod commands;

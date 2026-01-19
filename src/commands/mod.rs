@@ -1,4 +1,5 @@
 pub mod app_env;
+pub mod auth;
 pub mod build;
 pub mod create;
 pub mod delete;

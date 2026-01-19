@@ -18,6 +18,7 @@ use crate::db;
 pub struct AppState {
     pub db_pool: sqlx::Pool<sqlx::Sqlite>,
     pub docker: Docker,
+    pub jwt_secret: String,
 }
 
 /// Start the Litehouse server
@@ -42,10 +43,14 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         // Don't fail startup if Litestream sync fails
     }
 
+    // Get JWT secret from environment or use default (warning will be logged)
+    let jwt_secret = crate::auth::jwt::get_jwt_secret();
+
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
         db_pool: pool.clone(),
         docker: docker.clone(),
+        jwt_secret,
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else
