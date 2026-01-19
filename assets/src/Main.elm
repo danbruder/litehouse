@@ -1,12 +1,15 @@
 port module Main exposing (main)
 
 import Browser
+import Browser.Navigation as Nav
 import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Url
+import Url.Parser as Parser exposing ((</>), Parser, oneOf, s, string)
 
 
 -- PORTS
@@ -25,16 +28,61 @@ port gitHubSSEEvent : (Decode.Value -> msg) -> Sub msg
 
 
 
+-- ROUTING
+
+
+type Route
+    = LoginRoute
+    | SetupRoute
+    | DashboardRoute
+    | AppDetailRoute String
+
+
+routeParser : Parser (Route -> a) a
+routeParser =
+    oneOf
+        [ Parser.map LoginRoute Parser.top
+        , Parser.map LoginRoute (s "login")
+        , Parser.map SetupRoute (s "setup")
+        , Parser.map DashboardRoute (s "dashboard")
+        , Parser.map AppDetailRoute (s "apps" </> string)
+        ]
+
+
+fromUrl : Url.Url -> Maybe Route
+fromUrl url =
+    Parser.parse routeParser url
+
+
+routeToString : Route -> String
+routeToString route =
+    case route of
+        LoginRoute ->
+            "/login"
+
+        SetupRoute ->
+            "/setup"
+
+        DashboardRoute ->
+            "/dashboard"
+
+        AppDetailRoute appName ->
+            "/apps/" ++ appName
+
+
+
 -- MAIN
 
 
 main : Program Flags Model Msg
 main =
-    Browser.element
+    Browser.application
         { init = init
         , update = update
         , view = view
         , subscriptions = subscriptions
+        , onUrlChange = UrlChanged
+        , onUrlRequest = LinkClicked
         }
 
 
@@ -184,6 +232,8 @@ type alias RepoInfo =
 type alias Model =
     { page : Page
     , serverVersion : String
+    , navKey : Nav.Key
+    , currentRoute : Maybe Route
     }
 
 
@@ -216,18 +266,29 @@ emptyCreateAppState =
     }
 
 
-init : Flags -> ( Model, Cmd Msg )
-init flags =
+init : Flags -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init flags url navKey =
+    let
+        route =
+            fromUrl url
+
+        initialModel =
+            { page = Loading
+            , serverVersion = ""
+            , navKey = navKey
+            , currentRoute = route
+            }
+    in
     case flags.token of
         Just token ->
             -- We have a token, verify it
-            ( { page = Loading, serverVersion = "" }
+            ( initialModel
             , verifyToken token
             )
 
         Nothing ->
             -- No token, check server status
-            ( { page = Loading, serverVersion = "" }
+            ( initialModel
             , checkServerStatus
             )
 
@@ -265,7 +326,9 @@ subscriptions model =
 
 
 type Msg
-    = GotServerStatus (Result Http.Error ServerStatus)
+    = UrlChanged Url.Url
+    | LinkClicked Browser.UrlRequest
+    | GotServerStatus (Result Http.Error ServerStatus)
     | GotTokenVerification (Result Http.Error TokenVerificationResponse)
     | GotLoginResponse (Result Http.Error AuthResponse)
     | GotRegisterResponse (Result Http.Error AuthResponse)
@@ -354,6 +417,77 @@ type alias DeviceFlowStartResponse =
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
     case msg of
+        UrlChanged url ->
+            let
+                route =
+                    fromUrl url
+            in
+            case route of
+                Just LoginRoute ->
+                    ( { model
+                        | currentRoute = route
+                        , page = Login emptyLoginForm
+                      }
+                    , Cmd.none
+                    )
+
+                Just SetupRoute ->
+                    ( { model
+                        | currentRoute = route
+                        , page = Setup emptySetupForm
+                      }
+                    , Cmd.none
+                    )
+
+                Just DashboardRoute ->
+                    case model.page of
+                        Dashboard state ->
+                            -- Already on dashboard, just switch to apps list view
+                            ( { model
+                                | currentRoute = route
+                                , page = Dashboard { state | view = AppsListView }
+                              }
+                            , Cmd.none
+                            )
+
+                        _ ->
+                            -- Not on dashboard, stay on current page (need to be logged in first)
+                            ( { model | currentRoute = route }
+                            , Cmd.none
+                            )
+
+                Just (AppDetailRoute appName) ->
+                    case model.page of
+                        Dashboard state ->
+                            -- Fetch and show app detail
+                            ( { model | currentRoute = route }
+                            , fetchAppDetail state.token appName
+                            )
+
+                        _ ->
+                            -- Not on dashboard, stay on current page
+                            ( { model | currentRoute = route }
+                            , Cmd.none
+                            )
+
+                Nothing ->
+                    -- Unknown route, stay on current page
+                    ( { model | currentRoute = route }
+                    , Cmd.none
+                    )
+
+        LinkClicked urlRequest ->
+            case urlRequest of
+                Browser.Internal url ->
+                    ( model
+                    , Nav.pushUrl model.navKey (Url.toString url)
+                    )
+
+                Browser.External href ->
+                    ( model
+                    , Nav.load href
+                    )
+
         GotServerStatus result ->
             case result of
                 Ok status ->
@@ -362,7 +496,7 @@ update msg model =
                             | page = Login emptyLoginForm
                             , serverVersion = status.version
                           }
-                        , Cmd.none
+                        , Nav.pushUrl model.navKey "/login"
                         )
 
                     else
@@ -370,12 +504,12 @@ update msg model =
                             | page = Setup emptySetupForm
                             , serverVersion = status.version
                           }
-                        , Cmd.none
+                        , Nav.pushUrl model.navKey "/setup"
                         )
 
                 Err _ ->
                     ( { model | page = Login { emptyLoginForm | error = Just "Failed to connect to server" } }
-                    , Cmd.none
+                    , Nav.pushUrl model.navKey "/login"
                     )
 
         GotTokenVerification result ->
@@ -393,7 +527,8 @@ update msg model =
                     in
                     ( { model | page = Dashboard dashboardState }
                     , Cmd.batch
-                        [ fetchApps response.token
+                        [ Nav.pushUrl model.navKey "/dashboard"
+                        , fetchApps response.token
                         , fetchGitHubStatus response.token
                         ]
                     )
@@ -421,7 +556,8 @@ update msg model =
                             in
                             ( { model | page = Dashboard dashboardState }
                             , Cmd.batch
-                                [ saveToken response.accessToken
+                                [ Nav.pushUrl model.navKey "/dashboard"
+                                , saveToken response.accessToken
                                 , fetchApps response.accessToken
                                 , fetchGitHubStatus response.accessToken
                                 ]
@@ -452,7 +588,8 @@ update msg model =
                             in
                             ( { model | page = Dashboard dashboardState }
                             , Cmd.batch
-                                [ saveToken response.accessToken
+                                [ Nav.pushUrl model.navKey "/dashboard"
+                                , saveToken response.accessToken
                                 , fetchApps response.accessToken
                                 , fetchGitHubStatus response.accessToken
                                 ]
@@ -557,7 +694,10 @@ update msg model =
 
         Logout ->
             ( { model | page = Login emptyLoginForm }
-            , clearToken ()
+            , Cmd.batch
+                [ Nav.pushUrl model.navKey "/login"
+                , clearToken ()
+                ]
             )
 
         -- Dashboard messages
@@ -1045,7 +1185,10 @@ update msg model =
             case model.page of
                 Dashboard state ->
                     ( model
-                    , fetchAppDetail state.token appName
+                    , Cmd.batch
+                        [ Nav.pushUrl model.navKey ("/apps/" ++ appName)
+                        , fetchAppDetail state.token appName
+                        ]
                     )
 
                 _ ->
@@ -1087,7 +1230,10 @@ update msg model =
             case model.page of
                 Dashboard state ->
                     ( { model | page = Dashboard { state | view = AppsListView } }
-                    , fetchApps state.token
+                    , Cmd.batch
+                        [ Nav.pushUrl model.navKey "/dashboard"
+                        , fetchApps state.token
+                        ]
                     )
 
                 _ ->
@@ -1368,12 +1514,12 @@ update msg model =
                                                     , apps = updatedApps
                                                 }
                                       }
-                                    , Cmd.none
+                                    , Nav.pushUrl model.navKey "/dashboard"
                                     )
 
                                 _ ->
                                     ( { model | page = Dashboard { state | view = AppsListView } }
-                                    , Cmd.none
+                                    , Nav.pushUrl model.navKey "/dashboard"
                                     )
 
                         Err err ->
@@ -1848,20 +1994,48 @@ httpErrorToString error =
 -- VIEW
 
 
-view : Model -> Html Msg
+view : Model -> Browser.Document Msg
 view model =
-    case model.page of
+    { title = getPageTitle model.page
+    , body =
+        [ case model.page of
+            Loading ->
+                viewLoading
+
+            Setup form ->
+                viewSetup form model.serverVersion
+
+            Login form ->
+                viewLogin form model.serverVersion
+
+            Dashboard state ->
+                viewDashboard state model.serverVersion
+        ]
+    }
+
+
+getPageTitle : Page -> String
+getPageTitle page =
+    case page of
         Loading ->
-            viewLoading
+            "Loading - Litehouse"
 
-        Setup form ->
-            viewSetup form model.serverVersion
+        Setup _ ->
+            "Setup - Litehouse"
 
-        Login form ->
-            viewLogin form model.serverVersion
+        Login _ ->
+            "Login - Litehouse"
 
         Dashboard state ->
-            viewDashboard state model.serverVersion
+            case state.view of
+                AppsListView ->
+                    "Dashboard - Litehouse"
+
+                CreateAppView _ ->
+                    "Create App - Litehouse"
+
+                AppDetailView detailState ->
+                    detailState.app.name ++ " - Litehouse"
 
 
 viewLoading : Html Msg
@@ -2024,7 +2198,7 @@ viewDashboard state version =
     div [ class "dashboard" ]
         [ header [ class "dashboard-header" ]
             [ div [ class "header-brand" ]
-                [ h1 [] [ text "Litehouse farts" ]
+                [ a [ href "/dashboard", class "brand-link" ] [ h1 [] [ text "Litehouse" ] ]
                 ]
             , div [ class "header-user" ]
                 [ viewGitHubStatusBadge state.githubStatus
@@ -2090,7 +2264,7 @@ viewAppsList state =
 
 viewAppCard : AppInfo -> Html Msg
 viewAppCard app =
-    div [ class "app-card", onClick (ViewAppDetail app.name) ]
+    a [ class "app-card", href ("/apps/" ++ app.name) ]
         [ div [ class "app-card-header" ]
             [ h3 [ class "app-name" ] [ text app.name ]
             , span [ class ("app-state app-state-" ++ app.state) ] [ text app.state ]
