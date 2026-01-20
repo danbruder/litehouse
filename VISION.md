@@ -184,7 +184,7 @@ This command automatically:
 ## Development Roadmap
 
 ### Phase 1: Finish V2 Foundation ✅ (COMPLETE)
-- [x] Podman integration
+- [x] Docker integration
 - [x] Basic app lifecycle (create, build, start, stop)
 - [x] Git remote management
 - [x] Complete Caddy integration with HTTPS
@@ -420,10 +420,10 @@ CREATE TABLE webhooks (
 
 **Current (Keep):**
 - Rust + Axum (web framework) + SQLx (database)
-- Bollard (Docker/Podman API client)
+- Bollard (Docker/Docker API client)
 - Caddy (reverse proxy, automatic HTTPS)
 - SQLite (application database)
-- Podman (container runtime)
+- Docker (container runtime)
 
 **Add:**
 - **Web UI**: Htmx + Tailwind (server-rendered) OR SvelteKit/React (static)
@@ -541,8 +541,8 @@ Current name "litehouse" doesn't clearly convey the SQLite focus. Consider:
 1. **Multi-tenancy:** Should litehouse support multiple users/teams on one server?
    - Decision: Not initially. Single admin user. Revisit in Phase 5+.
 
-2. **Container runtime:** Podman vs Docker?
-   - Decision: Support both, detect which is installed. Prefer Podman (daemonless).
+2. **Container runtime:** Docker vs Docker?
+   - Decision: Support both, detect which is installed. Prefer Docker (daemonless).
 
 3. **Custom domains:** Free-form vs wildcard subdomain?
    - Decision: Start with wildcard subdomain (`*.yourdomain.com`), add custom later.

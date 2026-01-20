@@ -1,4 +1,4 @@
-use crate::podman;
+use crate::docker;
 use crate::reconciler::Reconciler;
 use anyhow::{Context, Result};
 use axum::Router;
@@ -27,10 +27,10 @@ pub struct AppState {
 pub async fn execute(config: ServerConfig) -> Result<()> {
     // Connect to database
     let pool = db::init_pool().await?;
-    let docker = podman::connect().await?;
+    let docker_conn = docker::connect().await?;
 
     // Create reconciler and run initial reconciliation
-    let reconciler = Reconciler::new(pool.clone(), docker.clone());
+    let reconciler = Reconciler::new(pool.clone(), docker_conn.clone());
     let report = reconciler.reconcile_all(&config).await;
     Reconciler::log_report(&report);
 
@@ -70,7 +70,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
         db_pool: pool.clone(),
-        docker: docker.clone(),
+        docker: docker_conn.clone(),
         jwt_secret,
         github_client_id,
     }));

@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh
 This will:
 1. Download the latest release binary
 2. Install it to `/usr/local/bin/lh`
-3. Set up Podman and Caddy containers
+3. Set up Docker and Caddy containers
 4. Configure wildcard subdomain routing
 
 ### Manual Installation
@@ -46,7 +46,7 @@ sudo lh install --domain lh.example.com
 ### Requirements
 
 - Linux (x86_64 or aarch64)
-- Podman
+- Docker
 - A domain with wildcard DNS configured (e.g., `*.lh.example.com` pointing to your server)
 
 ## Usage

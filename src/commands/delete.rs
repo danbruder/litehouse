@@ -13,8 +13,8 @@ pub enum DeleteError {
     AppNotBuilt(String),
     #[error("Database error: {0}")]
     DatabaseError(#[from] crate::db::DatabaseError),
-    #[error("Podman error: {0}")]
-    PodmanError(#[from] crate::podman::PodmanError),
+    #[error("Docker error: {0}")]
+    DockerError(#[from] crate::docker::DockerError),
 }
 
 type DeleteResult<T> = Result<T, DeleteError>;

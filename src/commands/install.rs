@@ -117,13 +117,13 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     }
     pb.inc(1); // Count the parallel phases as one step
 
-    // Phase 5: Podman Configuration (needs user to be set up)
-    pb.set_message("Configuring Podman (rootless mode, socket)...");
-    log_window.set_message("Starting Podman configuration...");
-    let litehouse_uid = match phase5_podman_configuration(Some(&log_window)) {
+    // Phase 5: Docker Configuration (needs user to be set up)
+    pb.set_message("Configuring Docker...");
+    log_window.set_message("Starting Docker configuration...");
+    let litehouse_uid = match phase5_docker_configuration(Some(&log_window)) {
         Ok(uid) => uid,
         Err(e) => {
-            pb.finish_with_message("❌ Podman configuration failed");
+            pb.finish_with_message("❌ Docker configuration failed");
             error!("Phase 5 failed: {}", e);
             return Err(e);
         }
@@ -213,10 +213,10 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     }
     pb.inc(1);
 
-    // Phase 10: Enable podman-restart Service
-    pb.set_message("Enabling podman-restart.service for boot restoration...");
-    if let Err(e) = phase10_enable_podman_restart(&litehouse_uid) {
-        pb.finish_with_message("❌ podman-restart.service setup failed");
+    // Phase 10: Docker restart configuration
+    pb.set_message("Configuring Docker restart policy...");
+    if let Err(e) = phase10_enable_docker_restart(&litehouse_uid) {
+        pb.finish_with_message("❌ Docker restart configuration failed");
         error!("Phase 10 failed: {}", e);
         return Err(e);
     }
@@ -252,11 +252,11 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     println!("     http://myapp.{}", domain);
     println!("\nTroubleshooting:");
     println!("  - View container logs:");
-    println!("    sudo -u litehouse podman logs -f litehouse-server");
+    println!("    docker logs -f litehouse-server");
     println!("  - Check container status:");
-    println!("    sudo -u litehouse podman ps -a");
+    println!("    docker ps -a");
     println!("  - Restart a container:");
-    println!("    sudo -u litehouse podman restart litehouse-server");
+    println!("    docker restart litehouse-server");
     println!("{}", "=".repeat(60));
 
     Ok(())

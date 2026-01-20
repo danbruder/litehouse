@@ -50,7 +50,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/env", post(set_env))
-        .route("/podman/version", get(get_podman_version))
+        .route("/docker/version", get(get_docker_version))
         .route("/apps/:name/remote", post(add_remote))
         .route("/apps/:name/remote", delete(remove_remote))
         .route("/apps/:name/build", post(build_app))
@@ -474,12 +474,9 @@ async fn set_env(
     }
 }
 
-async fn get_podman_version() -> impl IntoResponse {
-    // match crate::providers::podman::get_podman_version().await {
-    //     Ok(version) => (StatusCode::OK, version).into_response(),
-    //     Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    // }
-    "lol"
+async fn get_docker_version() -> impl IntoResponse {
+    // TODO: Implement proper Docker version check
+    "docker"
 }
 
 #[derive(Debug, Deserialize)]

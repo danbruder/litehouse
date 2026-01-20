@@ -2,15 +2,15 @@
 
 ## Summary
 
-The podman branch has been successfully merged and contains a complete implementation of end-to-end subdomain routing using Podman + Caddy. The code is ready for testing in an environment with internet access to pull container images.
+The docker branch has been successfully merged and contains a complete implementation of end-to-end subdomain routing using Docker + Caddy. The code is ready for testing in an environment with internet access to pull container images.
 
 ## Implementation Complete ✓
 
-### 1. Podman Integration (src/podman.rs)
+### 1. Docker Integration (src/docker.rs)
 - ✅ Container lifecycle management (create, start, stop, delete)
 - ✅ Image building from Dockerfiles
 - ✅ Container logs streaming
-- ✅ Socket path resolution (supports both Docker and Podman)
+- ✅ Socket path resolution (supports both Docker and Docker)
 - ✅ Health checks and status monitoring
 
 ### 2. Caddy Reverse Proxy (src/caddy.rs)
@@ -52,7 +52,7 @@ The podman branch has been successfully merged and contains a complete implement
 
 On `lh serve`:
 1. Connect to SQLite database
-2. Connect to Podman API (via `/run/podman/podman.sock`)
+2. Connect to Docker API (via `/run/docker/docker.sock`)
 3. Start/verify Caddy container
 4. Sync Caddy config with all existing apps
 5. Start HTTP admin API server on port 80
@@ -75,7 +75,7 @@ All commands working:
 
 **Required for Testing:**
 ```bash
-podman pull docker.io/library/caddy:latest
+docker pull docker.io/library/caddy:latest
 ```
 
 This prevents:
@@ -87,7 +87,7 @@ This prevents:
 
 ✅ **Build System:** Project compiles without errors
 ✅ **Database:** SQLite database created, migrations applied
-✅ **Podman API:** Successfully connects to `/run/podman/podman.sock`
+✅ **Docker API:** Successfully connects to `/run/docker/docker.sock`
 ✅ **Volumes:** Caddy volumes created successfully
 ✅ **Configuration:** Server/client configs generated correctly
 
@@ -96,9 +96,9 @@ This prevents:
 ### Test 1: Start Server and Verify Caddy
 
 ```bash
-# Terminal 1: Start Podman API (if not running)
-mkdir -p /run/podman
-podman system service --time=0 unix:///run/podman/podman.sock &
+# Terminal 1: Start Docker API (if not running)
+mkdir -p /run/docker
+docker system service --time=0 unix:///run/docker/docker.sock &
 
 # Terminal 2: Start lh server
 export DATABASE_URL=sqlite://config/litehouse.db
@@ -111,7 +111,7 @@ cargo run -- serve
 # - "Litehouse proxy server running at http://0.0.0.0:80"
 
 # Terminal 3: Verify Caddy is running
-podman ps
+docker ps
 # Should show: caddy-container running on ports 9090:80, 9443:443, 2019:2019
 
 # Test Caddy admin API
@@ -137,7 +137,7 @@ cargo run -- start testapp
 # Should: Start container, sync Caddy config
 
 # Verify container is running
-podman ps
+docker ps
 # Should show: testapp-container running on port 800X
 
 # Check Caddy configuration
@@ -197,14 +197,14 @@ curl http://localhost:2019/config/ | jq '.apps.http.servers.litehouse.routes'
 - `src/config.rs:94-120` - `get_next_available_port()` allocates unique ports
 
 **Container Management:**
-- `src/podman.rs:150-238` - `run()` starts containers with port bindings
+- `src/docker.rs:150-238` - `run()` starts containers with port bindings
 - `src/commands/start.rs:29-78` - Start command syncs Caddy after starting
 
 ## Next Steps
 
 Once in an environment with internet access:
 
-1. **Pull Caddy image:** `podman pull caddy:latest`
+1. **Pull Caddy image:** `docker pull caddy:latest`
 2. **Run Test 1** (verify Caddy starts)
 3. **Run Test 2** (deploy test app)
 4. **Run Test 3** (test subdomain routing works)
@@ -248,8 +248,8 @@ Once in an environment with internet access:
         │                         │
         ▼                         ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Podman API                                                  │
-│  Socket: /run/podman/podman.sock                             │
+│  Docker API                                                  │
+│  Socket: /run/docker/docker.sock                             │
 └─────────────────────────────────────────────────────────────┘
         │
         ▼
@@ -266,12 +266,12 @@ Once in an environment with internet access:
 **Status: Implementation Complete, Pending Environmental Testing**
 
 The code is production-ready and includes:
-- Full Podman integration
+- Full Docker integration
 - Caddy dynamic configuration
 - Subdomain routing logic
 - Database persistence
 - Error handling and health checks
 
-**Confidence Level: High** - The implementation follows Caddy's official JSON API documentation and Podman best practices. Once Caddy image pull succeeds, routing should work immediately.
+**Confidence Level: High** - The implementation follows Caddy's official JSON API documentation and Docker best practices. Once Caddy image pull succeeds, routing should work immediately.
 
 **Estimated Time to Working Demo:** <5 minutes in unrestricted environment

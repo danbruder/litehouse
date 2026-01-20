@@ -209,19 +209,19 @@ impl ApiClient {
         }
     }
 
-    pub async fn get_podman_version(&self) -> Result<()> {
+    pub async fn get_docker_version(&self) -> Result<()> {
         let response = self
             .client
-            .get(&format!("{}/podman/version", self.config.base_url))
+            .get(&format!("{}/docker/version", self.config.base_url))
             .send()
             .await?;
         if response.status().is_success() {
             let version = response.text().await?;
-            println!("Podman version: {}", version);
+            println!("Docker version: {}", version);
             Ok(())
         } else {
             let error = response.text().await?;
-            Err(anyhow!("Failed to get podman version: {}", error))
+            Err(anyhow!("Failed to get docker version: {}", error))
         }
     }
 

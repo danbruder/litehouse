@@ -12,5 +12,5 @@ pub mod github;
 pub mod install;
 pub mod litestream;
 pub mod models;
-pub mod podman;
+pub mod docker;
 pub mod reconciler;

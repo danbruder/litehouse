@@ -3,7 +3,7 @@ use std::pin::Pin;
 use tracing::instrument;
 
 use crate::db;
-use crate::podman;
+use crate::docker;
 
 /// View app logs
 #[instrument]
@@ -16,6 +16,6 @@ pub async fn execute(app_name: &str, lines: usize, follow: bool) ->  Result<Pin<
         .await?
         .ok_or_else(|| anyhow!("App '{}' not found", app_name))?;
 
-    // Get logs from podman container
-    podman::logs_stream(app_name, lines, follow).await
+    // Get logs from docker container
+    docker::logs_stream(app_name, lines, follow).await
 }

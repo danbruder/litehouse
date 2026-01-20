@@ -13,9 +13,9 @@ pub struct Cli {
 }
 
 #[derive(Args)]
-struct PodmanArgs {
+struct DockerArgs {
     #[command(subcommand)]
-    command: PodmanCmd,
+    command: DockerCmd,
 }
 
 #[derive(Subcommand)]
@@ -131,7 +131,7 @@ enum Commands {
         command: Option<ConfigCmd>,
     },
 
-    Podman(PodmanArgs),
+    Docker(DockerArgs),
 
     /// Seed the database for testing
     Seed,
@@ -153,8 +153,8 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum PodmanCmd {
-    /// Show podman version
+enum DockerCmd {
+    /// Show docker version
     Version,
     /// Run a test container
     Run,
@@ -358,9 +358,9 @@ pub async fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Podman(args) => match args.command {
-            PodmanCmd::Version => api_client.get_podman_version().await,
-            PodmanCmd::Run => crate::podman::run("yeet", "redis:latest").await,
+        Commands::Docker(args) => match args.command {
+            DockerCmd::Version => api_client.get_docker_version().await,
+            DockerCmd::Run => crate::docker::run("yeet", "redis:latest").await,
         },
 
         Commands::Seed => {

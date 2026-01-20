@@ -87,24 +87,24 @@ pub fn phase4_user_setup(log_window: Option<&ProgressBar>) -> Result<()> {
     Ok(())
 }
 
-/// Phase 5: Podman Configuration
+/// Phase 5: Docker Configuration
 #[instrument(skip(log_window))]
-pub fn phase5_podman_configuration(log_window: Option<&ProgressBar>) -> Result<String> {
-    info!("Phase 5: Podman Configuration");
+pub fn phase5_docker_configuration(log_window: Option<&ProgressBar>) -> Result<String> {
+    info!("Phase 5: Docker Configuration");
 
-    let script = templates::podman_setup_script();
+    let script = templates::docker_setup_script();
 
     // Write and execute the script
-    std::fs::write("/tmp/podman_setup.sh", script)?;
-    run_command("chmod +x /tmp/podman_setup.sh")?;
-    let output = run_command_with_log("/tmp/podman_setup.sh", log_window)?;
-    run_command("rm /tmp/podman_setup.sh")?;
+    std::fs::write("/tmp/docker_setup.sh", script)?;
+    run_command("chmod +x /tmp/docker_setup.sh")?;
+    let output = run_command_with_log("/tmp/docker_setup.sh", log_window)?;
+    run_command("rm /tmp/docker_setup.sh")?;
 
     // Extract UID from output
     let uid_line = output
         .lines()
         .find(|line| line.starts_with("UID:"))
-        .context("Failed to get litehouse user UID from podman setup output")?;
+        .context("Failed to get litehouse user UID from docker setup output")?;
 
     let uid = uid_line
         .strip_prefix("UID:")
@@ -227,17 +227,12 @@ pub fn phase9_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
     std::thread::sleep(std::time::Duration::from_secs(2));
 
     // Verify container is running
-    let ps_output = run_command(&format!(
-        "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman ps --filter name=litehouse-server --format {{{{.Status}}}}'",
-        litehouse_uid
-    ))?;
+    let ps_output = run_command("docker ps --filter name=litehouse-server --format '{{.Status}}'")?;
 
     if !ps_output.contains("Up") {
         // Container is not running - get the logs to understand why
-        let logs = run_command(&format!(
-            "cd /tmp && sudo -u litehouse bash -c 'export XDG_RUNTIME_DIR=/run/user/{}; podman logs litehouse-server 2>&1 | tail -50'",
-            litehouse_uid
-        )).unwrap_or_else(|_| "Could not retrieve container logs".to_string());
+        let logs = run_command("docker logs litehouse-server 2>&1 | tail -50")
+            .unwrap_or_else(|_| "Could not retrieve container logs".to_string());
 
         anyhow::bail!(
             "litehouse-server container is not running. Container logs:\n{}",
@@ -250,18 +245,15 @@ pub fn phase9_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
     Ok(())
 }
 
-/// Phase 10: Enable podman-restart Service
+/// Phase 10: Docker restart configuration (containers use --restart=unless-stopped)
 #[instrument]
-pub fn phase10_enable_podman_restart(litehouse_uid: &str) -> Result<()> {
-    info!("Phase 10: Enable podman-restart Service");
+pub fn phase10_enable_docker_restart(_litehouse_uid: &str) -> Result<()> {
+    info!("Phase 10: Docker restart configuration");
 
-    let script = templates::enable_podman_restart_script(litehouse_uid);
-    std::fs::write("/tmp/enable_restart.sh", &script)?;
-    run_command("chmod +x /tmp/enable_restart.sh")?;
-    run_command("/tmp/enable_restart.sh")?;
-    run_command("rm /tmp/enable_restart.sh")?;
+    // Docker containers with --restart=unless-stopped will automatically restart on boot
+    // No additional systemd service needed like with Podman
 
-    info!("podman-restart.service enabled - containers will restart on boot");
+    info!("Docker restart policy configured - containers will restart on boot");
     info!("Phase 10 completed successfully");
     Ok(())
 }

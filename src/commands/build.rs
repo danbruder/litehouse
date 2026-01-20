@@ -7,7 +7,7 @@ use crate::db;
 use crate::git;
 use crate::models::AppState;
 use crate::models::Build;
-use crate::podman;
+use crate::docker;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
@@ -94,7 +94,7 @@ async fn do_build(
     let log_path_str = log_path.to_string_lossy().to_string();
 
     let tag = format!("{}:{}", app.name, &git_result.commit);
-    let image_id = podman::build_with_log(&build_dir.to_str().unwrap(), &tag, Some(Path::new(&log_path)))
+    let image_id = docker::build_with_log(&build_dir.to_str().unwrap(), &tag, Some(Path::new(&log_path)))
         .await
         .map_err(|e| BuildError::AppNotConfigured(format!("Build failed: {}", e)))?;
 

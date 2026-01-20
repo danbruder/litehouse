@@ -10,7 +10,7 @@ use std::pin::Pin;
 use tracing::{info, instrument};
 
 #[derive(Debug, thiserror::Error)]
-pub enum PodmanError {
+pub enum DockerError {
     #[error("Dockerfile not found in directory: {0}")]
     DockerfileNotFound(String),
     #[error("Build error: {0}")]
@@ -23,7 +23,7 @@ pub enum PodmanError {
 
 pub async fn connect() -> Result<Docker> {
     let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
+        &resolve_docker_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -50,7 +50,7 @@ pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&P
                 .write(true)
                 .truncate(true)
                 .open(path)
-                .map_err(|e| PodmanError::BuildError(format!("Failed to open log file: {}", e)))?,
+                .map_err(|e| DockerError::BuildError(format!("Failed to open log file: {}", e)))?,
         )
     } else {
         None
@@ -70,7 +70,7 @@ pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&P
     if !dockerfile_path.exists() {
         let err_msg = format!("Dockerfile not found in directory: {}", directory);
         write_log(&format!("ERROR: {}", err_msg));
-        return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
+        return Err(DockerError::DockerfileNotFound(directory.to_string()).into());
     }
 
     write_log("Starting container image build with Bollard API...");
@@ -111,14 +111,14 @@ pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&P
             Err(e) => {
                 tracing::error!("Build stream error: {}", e);
                 write_log(&format!("ERROR: Build stream error: {}", e));
-                return Err(PodmanError::BuildStreamError(e.to_string()).into());
+                return Err(DockerError::BuildStreamError(e.to_string()).into());
             }
         }
     }
 
     if let Some(error) = last_error {
         write_log(&format!("Build failed: {}", error));
-        return Err(PodmanError::BuildError(error).into());
+        return Err(DockerError::BuildError(error).into());
     }
 
     write_log("Container image build completed successfully");
@@ -128,12 +128,12 @@ pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&P
     let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
         let err_msg = format!("Failed to inspect built image: {}", e);
         write_log(&format!("ERROR: {}", err_msg));
-        PodmanError::BuildError(err_msg)
+        DockerError::BuildError(err_msg)
     })?;
 
     let image_id = image_inspect
         .id
-        .ok_or_else(|| PodmanError::BuildError("Failed to get image ID from build result".to_string()))?;
+        .ok_or_else(|| DockerError::BuildError("Failed to get image ID from build result".to_string()))?;
 
     write_log(&format!("Built image ID: {}", image_id));
     info!("Built image ID: {}", image_id);
@@ -198,13 +198,13 @@ pub async fn run_with_port(
 ) -> Result<()> {
     // Validate input parameters
     if name.trim().is_empty() {
-        return Err(PodmanError::BuildError("App name cannot be empty".to_string()).into());
+        return Err(DockerError::BuildError("App name cannot be empty".to_string()).into());
     }
 
     info!("Running app: {} (host_port: {:?})", name, host_port);
 
     let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
+        &resolve_docker_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -371,7 +371,7 @@ pub async fn remove(tag: &str) -> Result<()> {
     info!("Removing container image with tag: {}", tag);
 
     let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
+        &resolve_docker_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -402,7 +402,7 @@ pub async fn logs_stream(
     info!("Getting logs stream for app: {}", app_name);
 
     let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
+        &resolve_docker_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -418,7 +418,7 @@ pub async fn logs_stream(
     let mut container_found = false;
     for container in all_containers {
         if let Some(names) = &container.names {
-            // Use contains() because Podman returns names with leading "/" (e.g., "/app-container")
+            // Use contains() because Docker returns names with leading "/" (e.g., "/app-container")
             if names.iter().any(|n| n.contains(&container_name)) {
                 container_found = true;
                 break;
@@ -427,7 +427,7 @@ pub async fn logs_stream(
     }
 
     if !container_found {
-        return Err(PodmanError::LogError(format!(
+        return Err(DockerError::LogError(format!(
             "Container '{}' not found for app '{}'",
             container_name, app_name
         ))
@@ -481,7 +481,7 @@ pub async fn stop(app: &App) -> Result<()> {
     info!("Stopping app: {}", app.name);
 
     let docker = Docker::connect_with_unix(
-        &resolve_podman_socket_path()?,
+        &resolve_docker_socket_path()?,
         120,
         bollard::API_DEFAULT_VERSION,
     )?;
@@ -537,41 +537,27 @@ pub async fn stop(app: &App) -> Result<()> {
     Ok(())
 }
 
-fn resolve_podman_socket_path() -> Result<String> {
-    // User-provided overrides via environment variables
-    // These are the preferred way to configure the socket path in containerized environments
-    if let Ok(sock) = std::env::var("PODMAN_SSH_SOCK") {
-        info!("Using PODMAN_SSH_SOCK: {}", sock);
-        return Ok(sock);
-    }
-    if let Ok(sock) = std::env::var("PODMAN_SOCK") {
-        info!("Using PODMAN_SOCK: {}", sock);
-        return Ok(sock);
-    }
-    if let Ok(ch) = std::env::var("CONTAINER_HOST") {
-        if let Some(path) = ch.strip_prefix("unix://") {
-            info!("Using CONTAINER_HOST: {}", path);
+fn resolve_docker_socket_path() -> Result<String> {
+    // User-provided override via environment variable
+    if let Ok(sock) = std::env::var("DOCKER_HOST") {
+        if let Some(path) = sock.strip_prefix("unix://") {
+            info!("Using DOCKER_HOST: {}", path);
             return Ok(path.to_string());
         }
+        info!("Using DOCKER_HOST: {}", sock);
+        return Ok(sock);
     }
 
-    // Check well-known socket paths
-    let well_known_paths = [
-        "/run/podman/podman.sock",
-        "/var/run/podman/podman.sock",
-        "/var/run/docker.sock",
-    ];
-
-    for path in &well_known_paths {
-        if std::path::Path::new(path).exists() {
-            info!("Found socket at well-known path: {}", path);
-            return Ok(path.to_string());
-        }
+    // Standard Docker socket path
+    let docker_sock = "/var/run/docker.sock";
+    if std::path::Path::new(docker_sock).exists() {
+        info!("Using Docker socket: {}", docker_sock);
+        return Ok(docker_sock.to_string());
     }
 
-    // Fallback to the most common default
-    info!("Using default socket path: /run/podman/podman.sock");
-    Ok("/run/podman/podman.sock".to_string())
+    // Fallback to default
+    info!("Using default Docker socket path: {}", docker_sock);
+    Ok(docker_sock.to_string())
 }
 
 #[cfg(test)]
@@ -579,9 +565,9 @@ mod test_helpers {
     use anyhow::Result;
     use std::process::Command;
 
-    /// Check if a container exists and was started by calling podman ps -a
+    /// Check if a container exists and was started by calling docker ps -a
     pub fn is_container_started(container_name: &str) -> Result<bool> {
-        let output = Command::new("podman")
+        let output = Command::new("docker")
             .args([
                 "ps",
                 "-a", // Show all containers, including stopped ones
@@ -603,7 +589,7 @@ mod test_helpers {
     /// Clean up a test container by stopping and removing it
     pub fn cleanup_container(container_name: &str) -> Result<()> {
         // Stop the container
-        let stop_result = podman_stop(container_name);
+        let stop_result = docker_stop(container_name);
 
         if let Err(e) = stop_result {
             println!(
@@ -613,7 +599,7 @@ mod test_helpers {
         }
 
         // Remove the container
-        let remove_result = podman_rm(container_name);
+        let remove_result = docker_rm(container_name);
 
         if let Err(e) = remove_result {
             println!(
@@ -625,9 +611,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Stop a container using podman
-    pub fn podman_stop(container_name: &str) -> Result<()> {
-        let output = Command::new("podman")
+    /// Stop a container using docker
+    pub fn docker_stop(container_name: &str) -> Result<()> {
+        let output = Command::new("docker")
             .args(["stop", container_name])
             .output()?;
 
@@ -641,9 +627,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Remove a container using podman
-    pub fn podman_rm(container_name: &str) -> Result<()> {
-        let output = Command::new("podman")
+    /// Remove a container using docker
+    pub fn docker_rm(container_name: &str) -> Result<()> {
+        let output = Command::new("docker")
             .args(["rm", container_name])
             .output()?;
 
@@ -657,9 +643,9 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Get container state using podman ps
+    /// Get container state using docker ps
     pub fn get_container_state(container_name: &str) -> Result<String> {
-        let output = Command::new("podman")
+        let output = Command::new("docker")
             .args([
                 "ps",
                 "-a",

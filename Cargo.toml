@@ -53,4 +53,3 @@ path = "src/main.rs"
 [features]
 default = []
 vendored-openssl = []
-podman-integration = []

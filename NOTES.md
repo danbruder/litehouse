@@ -1,21 +1,21 @@
 # V2
 
 For V2, I'd like to do a number of things: 
-- Use production proxy like Caddy AND use podman or docker. Basically don't do stuff on my own lol. 
+- Use production proxy like Caddy AND use docker or docker. Basically don't do stuff on my own lol. 
 - They would be abstracted into orchestrator and proxy layers. I'm so concerned with abstracting out. I should not be. 
 - I need to use Sqlite thing of stuff. 
 - Build from github webhooks. 
 
 What would need to change here? 
 - Need a build step from webhook of github
-- Start needs to run podman instead of directly, so does docker
+- Start needs to run docker instead of directly, so does docker
 
-When do I need caching and when do I not? For start, stop, restart, status, etc it is probably better to go right to podman to get the latest version. For things like reporting dashboard and history, I could listen to events.
+When do I need caching and when do I not? For start, stop, restart, status, etc it is probably better to go right to docker to get the latest version. For things like reporting dashboard and history, I could listen to events.
 
 Flow: 
 1. New Code
 2. New Docker image
-3. New deployment of podman container 
+3. New deployment of docker container 
 4. New proxy config 
 
 
@@ -25,16 +25,16 @@ Some commands are driven and some reactive
 3. Start, stop, restart - act on something that exists (run state). Replicate state to the database (I don't own this stuff)
 4. Logs, status - reactive to something that exists (telemetry)
 
-For phase 2, I want to use podman to start a container. I want to make sure an sqlite database is mounted and part of the litestream config, and then I want to update the caddyfile for the reverse proxy.
+For phase 2, I want to use docker to start a container. I want to make sure an sqlite database is mounted and part of the litestream config, and then I want to update the caddyfile for the reverse proxy.
 
-Say an image exists, when I say start, it would check to see if it is currently running (need podman here - do for now?) use app name for container name.
-if it is not running, then start the container. I can subscribe to state changes to reflect from podman.
+Say an image exists, when I say start, it would check to see if it is currently running (need docker here - do for now?) use app name for container name.
+if it is not running, then start the container. I can subscribe to state changes to reflect from docker.
 
 Can I complete item 2?  Can I complete item 1? 
 
-I want to store the run state so that I can report on it in the UI. For checking if it is _really_ running, I call out to podman.
+I want to store the run state so that I can report on it in the UI. For checking if it is _really_ running, I call out to docker.
 
-Which things does podman own the data for? start, stop, restart. In effect, I'm asking another system to do something and it will tell me what it has done.
+Which things does docker own the data for? start, stop, restart. In effect, I'm asking another system to do something and it will tell me what it has done.
 
 Let's focus on item 3 - start stop restart
 
@@ -42,7 +42,7 @@ Let's focus on item 3 - start stop restart
 
 ## 10/5/2025
 
-I'm in the middle of the podman refactor - pulling out my home grown system and what not in order to remove the "static binary" use case as I bet it will not hit much adoption - in fact - I should go after self hosted Vercel / NextJS as a first target since that's what LLMs are shilling these days. 
+I'm in the middle of the docker refactor - pulling out my home grown system and what not in order to remove the "static binary" use case as I bet it will not hit much adoption - in fact - I should go after self hosted Vercel / NextJS as a first target since that's what LLMs are shilling these days. 
 
 Let's make that use case REALLY good. So What? 
 
@@ -77,7 +77,7 @@ Developer happiness
 ## Phase 1 Status: COMPLETE ✓
 
 All core functionality implemented:
-- ✅ Podman integration
+- ✅ Docker integration
 - ✅ Caddy reverse proxy with dynamic config
 - ✅ App lifecycle (create, build, start, stop, delete)
 - ✅ Git remote management
@@ -101,14 +101,14 @@ NEXT: Phase 2 - Web UI & GitHub Webhooks
 2. `-e CADDY_API_URL=http://host.containers.internal:2019/load` - Tells litehouse-server to use the host gateway to reach Caddy's admin API
 
 **Debugging steps:**
-1. `podman ps -a` as root showed no containers - because they run under the `litehouse` user (rootless)
-2. `su - litehouse -c 'podman ps -a'` showed both containers running
+1. `docker ps -a` as root showed no containers - because they run under the `litehouse` user (rootless)
+2. `su - litehouse -c 'docker ps -a'` showed both containers running
 3. Logs showed: `Caddy config: Failed - error sending request for url (http://localhost:2019/load)`
 4. `curl http://localhost:2019/config/` from the host returned `null` (empty config)
 5. After fix, logs show: `Caddy configuration updated successfully (status: 200 OK)`
 
 **Key learnings:**
-- Always run podman commands as the `litehouse` user to see rootless containers
+- Always run docker commands as the `litehouse` user to see rootless containers
 - Container-to-container communication requires shared networks or host gateway
 - The `CADDY_API_URL` env var in `src/caddy.rs:707` allows overriding the default localhost URL
 

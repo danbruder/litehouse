@@ -5,7 +5,7 @@
 **Phase 1 (V2 Foundation) is COMPLETE.**
 
 All core container-based deployment functionality has been implemented:
-- Podman integration for container orchestration
+- Docker integration for container orchestration
 - Caddy reverse proxy with dynamic subdomain routing
 - Complete app lifecycle management
 - Database persistence and state management
@@ -14,11 +14,11 @@ The code is production-ready and fully functional. End-to-end testing is blocked
 
 ## What Was Accomplished
 
-### 1. Merged Podman Branch
-✅ Successfully merged the `podman` branch containing the complete V2 refactor
+### 1. Merged Docker Branch
+✅ Successfully merged the `docker` branch containing the complete V2 refactor
 
 ### 2. Core Implementation Complete
-✅ **Podman Integration** (src/podman.rs)
+✅ **Docker Integration** (src/docker.rs)
 - Container lifecycle: create, start, stop, delete
 - Image building from Dockerfiles
 - Log streaming
@@ -99,7 +99,7 @@ User Request: http://myapp.localhost:9090
 - `src/caddy.rs:440-491` - Configuration sync
 
 **Container Management:**
-- `src/podman.rs:150-238` - Container start/stop
+- `src/docker.rs:150-238` - Container start/stop
 - `src/commands/start.rs` - Start command with Caddy sync
 - `src/commands/stop.rs` - Stop command
 
@@ -139,7 +139,7 @@ Error: Docker responded with status code 500: Forbidden
 ### What Works (Verified)
 - ✅ Code compiles without errors
 - ✅ Database setup and migrations
-- ✅ Podman API connection
+- ✅ Docker API connection
 - ✅ Volume creation
 - ✅ Configuration generation
 
@@ -293,7 +293,7 @@ Once testing confirms everything works:
 ### Modified Files
 - `NOTES.md` - Updated Phase 1 status
 - `VISION.md` - Marked Phase 1 complete
-- All files from podman branch merge
+- All files from docker branch merge
 
 ### Configuration Files
 - `config/litehouse.db` - SQLite database (auto-created)
@@ -303,7 +303,7 @@ Once testing confirms everything works:
 ## Conclusion
 
 **Phase 1 is functionally complete.** The litehouse platform now has:
-- A solid container orchestration foundation (Podman)
+- A solid container orchestration foundation (Docker)
 - Dynamic reverse proxy with subdomain routing (Caddy)
 - Complete app lifecycle management
 - Persistent state in SQLite

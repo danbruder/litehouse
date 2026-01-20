@@ -6,7 +6,7 @@ use crate::caddy;
 use crate::config;
 use crate::db;
 use crate::models::AppState;
-use crate::podman;
+use crate::docker;
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum StartError {
@@ -75,9 +75,9 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
 
     tracing::info!("Mounting app data directory: {} -> /app/data", data_dir.display());
 
-    // Start the app with podman
+    // Start the app with docker
     tracing::info!("Running {} for {} on port {:?}", &app.name, &build.image_tag, app.port);
-    podman::run_with_port(&app.name, &build.image_tag, app.port, env_vars, volume_binds)
+    docker::run_with_port(&app.name, &build.image_tag, app.port, env_vars, volume_binds)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 

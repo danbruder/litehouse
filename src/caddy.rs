@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use tracing::{error, info, instrument};
 
 #[derive(Debug, thiserror::Error)]
-pub enum PodmanError {
+pub enum DockerError {
     #[error("Dockerfile not found in directory: {0}")]
     DockerfileNotFound(String),
     #[error("Build error: {0}")]
@@ -480,7 +480,7 @@ async fn create_and_start_container(
                 format!("{}:/config", caddy_config_volume),
             ]),
             // Enable access to host network for proxying to apps and litehouse API
-            extra_hosts: Some(vec!["host.containers.internal:host-gateway".to_string()]),
+            extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             ..Default::default()
         }),
         ..Default::default()
@@ -629,7 +629,7 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream {
-                    dial: "host.containers.internal:3030".to_string(),
+                    dial: "host.docker.internal:3030".to_string(),
                 }],
             }],
         };
@@ -653,9 +653,9 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
                 }
             };
 
-            // Caddy runs in a container, so it needs host.containers.internal to reach
+            // Caddy runs in a container, so it needs host.docker.internal to reach
             // apps running on the host (both local dev and production)
-            let upstream = format!("host.containers.internal:{}", port);
+            let upstream = format!("host.docker.internal:{}", port);
 
             let route = Route {
                 match_rules: vec![HostMatcher { host: vec![host] }],

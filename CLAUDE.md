@@ -4,12 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**litehouse** is a platform for deploying and running containerized applications, transitioning from a static binary deployment system to a container-based platform using Podman and Caddy. The goal is to create a self-hosted platform similar to Vercel, with focus on Next.js applications.
+**litehouse** is a platform for deploying and running containerized applications, transitioning from a static binary deployment system to a container-based platform using Docker and Caddy. The goal is to create a self-hosted platform similar to Vercel, with focus on Next.js applications.
 
 The system consists of:
 - **CLI client** - Local tool for managing apps (create, start, stop, build, logs, etc.)
 - **Server** - HTTP server with admin API and reverse proxy
-- **Podman integration** - Container orchestration via Bollard (Docker/Podman API)
+- **Docker integration** - Container orchestration via Bollard (Docker/Docker API)
 - **Caddy integration** - Dynamic reverse proxy configuration
 - **SQLite database** - App state, builds, remotes, and environment variables
 
@@ -22,7 +22,7 @@ cargo build
 # Run the server (starts HTTP API and reverse proxy)
 cargo run -- serve
 
-# Run tests (includes comprehensive Podman integration tests)
+# Run tests (includes comprehensive Docker integration tests)
 cargo test
 
 # Run specific test
@@ -45,7 +45,7 @@ The project is **mid-refactor** from a static binary deployment model to a conta
 - Create/delete apps
 - Set environment variables
 - Add/remove Git remotes
-- Build apps from Git repos (creates Docker images via Podman)
+- Build apps from Git repos (creates Docker images via Docker)
 - Start/stop containers
 - View container logs
 - Caddy reverse proxy management
@@ -77,18 +77,18 @@ SQLite database with tables:
 
 See `migrations/20250403_initial.sql` for full schema.
 
-#### 3. Container Management (Podman)
+#### 3. Container Management (Docker)
 
-**Module:** `src/podman.rs`
+**Module:** `src/docker.rs`
 
-Uses Bollard to communicate with Podman via Unix socket. Key functions:
-- `build(directory, tag)` - Builds Docker image from Dockerfile using `podman build` CLI
+Uses Bollard to communicate with Docker via Unix socket. Key functions:
+- `build(directory, tag)` - Builds Docker image from Dockerfile using `docker build` CLI
 - `run(name, image_tag)` - Creates and starts a container (idempotent, skips if already running)
 - `stop(app)` - Stops a running container
 - `logs_stream(app_name, lines, follow)` - Streams container logs
-- `connect()` - Establishes Docker API connection via `resolve_podman_socket_path()`
+- `connect()` - Establishes Docker API connection via `resolve_docker_socket_path()`
 
-**Socket resolution:** Checks `PODMAN_SSH_SOCK`, `PODMAN_SOCK`, `CONTAINER_HOST` env vars, then queries `podman system connection ls` for default connection. On macOS with Podman Machine, uses `podman machine inspect` to find the forwarded socket.
+**Socket resolution:** Checks `DOCKER_SSH_SOCK`, `DOCKER_SOCK`, `CONTAINER_HOST` env vars, then queries `docker system connection ls` for default connection. On macOS with Docker Machine, uses `docker machine inspect` to find the forwarded socket.
 
 **Naming convention:** Container name = `{app-name}-container`
 
@@ -109,7 +109,7 @@ Manages a Caddy container for reverse proxying to app containers:
 
 #### 5. Build Process
 
-**Flow:** App with remote → `git pull` → `podman build` → Store build record → Start container
+**Flow:** App with remote → `git pull` → `docker build` → Store build record → Start container
 
 **Module:** `src/commands/build.rs`
 
@@ -142,7 +142,7 @@ Each command module corresponds to a CLI subcommand:
 
 **App states:** `created`, `building`, `running`, `stopped`, `error`
 
-**State tracking:** Currently stored in database but source of truth is the actual Podman container state. The system queries Podman directly for current status rather than relying on cached state.
+**State tracking:** Currently stored in database but source of truth is the actual Docker container state. The system queries Docker directly for current status rather than relying on cached state.
 
 **Port assignment:** Apps are assigned a port (stored in `app.port`). The Caddy proxy routes subdomain traffic to `0.0.0.0:{port}`.
 
@@ -151,22 +151,22 @@ Each command module corresponds to a CLI subcommand:
 **Creating and deploying an app:**
 1. `lh create myapp` → Creates DB record
 2. `lh remote myapp add https://github.com/user/repo` → Stores Git remote
-3. `lh build myapp` → Clones repo, runs `podman build`, stores build record
+3. `lh build myapp` → Clones repo, runs `docker build`, stores build record
 4. `lh start myapp` → Starts container from built image, syncs Caddy config
 5. App accessible at `myapp.localhost:9090` (local) or `myapp.s.danbruder.com` (production)
 
 **Server startup:**
-1. Server starts → Connects to SQLite and Podman
+1. Server starts → Connects to SQLite and Docker
 2. Ensures Caddy container is running
 3. Syncs Caddy config with all apps that have ports
 4. Starts HTTP server with admin API and reverse proxy routes
 
 ## Important Patterns & Decisions
 
-### Podman vs Docker
-- Uses Bollard (Docker API client) to communicate with Podman
-- Some operations use direct `podman` CLI (e.g., `build`) due to API limitations
-- Socket path resolution is critical on macOS with Podman Machine
+### Docker vs Docker
+- Uses Bollard (Docker API client) to communicate with Docker
+- Some operations use direct `docker` CLI (e.g., `build`) due to API limitations
+- Socket path resolution is critical on macOS with Docker Machine
 
 ### Container Identity
 - Container names follow pattern: `{app-name}-container`
@@ -175,7 +175,7 @@ Each command module corresponds to a CLI subcommand:
 
 ### Error Handling
 - Most functions return `Result<T>` with `anyhow::Error`
-- Custom error types: `PodmanError`, `GitError`
+- Custom error types: `DockerError`, `GitError`
 - Extensive use of `#[instrument]` for tracing
 
 ### Database Access
@@ -184,10 +184,10 @@ Each command module corresponds to a CLI subcommand:
 - Models in `src/models/` define domain types
 
 ### Testing
-- Extensive integration tests in `src/podman.rs` (`#[cfg(test)] mod tests`)
-- Tests create real containers using Podman
+- Extensive integration tests in `src/docker.rs` (`#[cfg(test)] mod tests`)
+- Tests create real containers using Docker
 - Test helpers for container cleanup and state verification
-- Tests assume Podman is installed and running
+- Tests assume Docker is installed and running
 
 ## Configuration
 
@@ -198,7 +198,7 @@ Each command module corresponds to a CLI subcommand:
 - Host and ports for proxy, Caddy HTTP/HTTPS
 
 **Environment variables:**
-- `PODMAN_SSH_SOCK`, `PODMAN_SOCK`, `CONTAINER_HOST` - Override socket path
+- `DOCKER_SSH_SOCK`, `DOCKER_SOCK`, `CONTAINER_HOST` - Override socket path
 - `LITEHOUSE_LOCAL_DEV` or `RUST_LOG` - Enable local dev mode
 - `DATABASE_URL` - SQLite database path (default: `~/.local/share/litehouse/litehouse.db`)
 
@@ -208,13 +208,13 @@ From NOTES.md:
 - Restart command not implemented (see `src/cli.rs:153`)
 - Deploy endpoint receives binary but doesn't process it (`src/api.rs:243`)
 - Caddy integration needs testing with actual subdomain routing
-- State synchronization between DB, Podman, and in-memory is not unified
+- State synchronization between DB, Docker, and in-memory is not unified
 - No monitoring, backup, or litestream integration yet
 - GitHub webhook support planned but not implemented
 
 ## Development Context
 
-**Branch:** `podman` (refactoring branch, not merged to main yet)
+**Branch:** `docker` (refactoring branch, not merged to main yet)
 
 **Target use case:** Self-hosted Next.js apps with subdomain routing, similar to Vercel's deployment model
 
