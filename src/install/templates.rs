@@ -257,19 +257,26 @@ echo "Starting litehouse-server container..."
 docker stop litehouse-server 2>/dev/null || true
 docker rm litehouse-server 2>/dev/null || true
 
+# Create the litehouse network if it doesn't exist
+docker network create litehouse-network 2>/dev/null || true
+
+# Get Docker socket group ID for permissions
+DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+
 # Start litehouse-server container with restart policy
 docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
+  --network litehouse-network \
   -p 3030:3030 \
   -v /opt/litehouse/config:/opt/litehouse/config \
   -v /opt/litehouse/data:/opt/litehouse/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  --add-host=host.docker.internal:host-gateway \
+  --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
   -e DOCKER_HOST=unix:///var/run/docker.sock \
-  -e CADDY_API_URL=http://host.docker.internal:2019/load \
+  -e CADDY_API_URL=http://caddy-container:2019/load \
   -e RUST_LOG=info \
   litehouse:latest
 
@@ -292,10 +299,14 @@ docker rm caddy-container 2>/dev/null || true
 docker volume create caddy_data 2>/dev/null || true
 docker volume create caddy_config 2>/dev/null || true
 
-# Start Caddy container
+# Create the litehouse network if it doesn't exist
+docker network create litehouse-network 2>/dev/null || true
+
+# Start Caddy container on the litehouse network
 docker run -d \
   --name caddy-container \
   --restart=unless-stopped \
+  --network litehouse-network \
   -p 80:80 \
   -p 443:443 \
   -p 2019:2019 \

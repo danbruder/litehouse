@@ -84,6 +84,10 @@ pub async fn start(docker: &Docker, config: &ServerConfig) -> Result<()> {
     let image_name = "caddy";
     let caddy_data_volume = "caddy_data";
     let caddy_config_volume = "caddy_config";
+    let network_name = "litehouse-network";
+
+    // Step 0: Ensure the litehouse network exists
+    ensure_network_exists(docker, network_name).await?;
 
     // Step 1: Ensure volumes exist
     ensure_volumes_exist(docker, caddy_data_volume, caddy_config_volume).await?;
@@ -187,6 +191,30 @@ enum ContainerState {
     Error { id: String },
     Restarting { id: String },
     Exited { id: String },
+}
+
+async fn ensure_network_exists(docker: &Docker, network_name: &str) -> Result<()> {
+    info!("Ensuring Docker network {} exists", network_name);
+
+    let networks = docker.list_networks::<String>(None).await?;
+    let network_exists = networks
+        .iter()
+        .any(|n| n.name.as_deref() == Some(network_name));
+
+    if !network_exists {
+        info!("Creating network: {}", network_name);
+        docker
+            .create_network(bollard::network::CreateNetworkOptions {
+                name: network_name,
+                driver: "bridge",
+                ..Default::default()
+            })
+            .await?;
+    } else {
+        info!("Network {} already exists", network_name);
+    }
+
+    Ok(())
 }
 
 async fn ensure_volumes_exist(
@@ -479,7 +507,9 @@ async fn create_and_start_container(
                 format!("{}:/data", caddy_data_volume),
                 format!("{}:/config", caddy_config_volume),
             ]),
-            // Enable access to host network for proxying to apps and litehouse API
+            // Connect to the litehouse network for inter-container communication
+            network_mode: Some("litehouse-network".to_string()),
+            // Keep extra_hosts as fallback for legacy setups
             extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             ..Default::default()
         }),
@@ -624,12 +654,14 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
     };
 
     if let Some(host) = admin_host {
+        // Use container name for Docker network routing (works on Linux servers)
+        // The litehouse-server container and caddy-container are on the same Docker network
         let admin_route = Route {
             match_rules: vec![HostMatcher { host: vec![host] }],
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream {
-                    dial: "host.docker.internal:3030".to_string(),
+                    dial: "litehouse-server:3030".to_string(),
                 }],
             }],
         };
@@ -653,9 +685,9 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
                 }
             };
 
-            // Caddy runs in a container, so it needs host.docker.internal to reach
-            // apps running on the host (both local dev and production)
-            let upstream = format!("host.docker.internal:{}", port);
+            // Use container name for Docker network routing (works on Linux servers)
+            // Apps run in containers named {app-name}-container on the same Docker network
+            let upstream = format!("{}-container:{}", app.name, port);
 
             let route = Route {
                 match_rules: vec![HostMatcher { host: vec![host] }],

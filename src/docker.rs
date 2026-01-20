@@ -321,6 +321,9 @@ pub async fn run_with_port(
             maximum_retry_count: None,
         });
 
+        // Connect to the litehouse network for inter-container communication
+        config.network_mode = Some("litehouse-network".to_string());
+
         Some(config)
     };
 
