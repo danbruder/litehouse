@@ -54,6 +54,8 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/remote", post(add_remote))
         .route("/apps/:name/remote", delete(remove_remote))
         .route("/apps/:name/build", post(build_app))
+        .route("/apps/:name/builds", get(list_builds))
+        .route("/apps/:name/builds/:build_id/logs", get(get_build_logs))
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
@@ -542,12 +544,219 @@ async fn build_app(
     };
 
     match build::execute(&pool, &name, github_token.as_deref()).await {
-        Ok(_) => (StatusCode::OK, format!("App '{}' built", name)).into_response(),
+        Ok(build_record) => Json(serde_json::json!({
+            "message": format!("App '{}' built", name),
+            "build_id": build_record.id
+        })).into_response(),
+        Err(build::BuildError::AlreadyBuilding(_)) => (
+            StatusCode::CONFLICT,
+            format!("App '{}' is already building", name),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to build app: {}", e),
         )
             .into_response(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct BuildInfo {
+    id: String,
+    app_id: String,
+    image_tag: String,
+    git_commit: String,
+    created_at: String,
+}
+
+#[instrument(skip(state))]
+async fn list_builds(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    // Get app to verify it exists and get ID
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get app: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    match db::build::get_all_by_app(&pool, &app.id).await {
+        Ok(builds) => {
+            let build_infos: Vec<BuildInfo> = builds
+                .into_iter()
+                .map(|b| BuildInfo {
+                    id: b.id,
+                    app_id: b.app_id,
+                    image_tag: b.image_tag,
+                    git_commit: b.git_commit,
+                    created_at: b.created_at.0.to_rfc3339(),
+                })
+                .collect();
+            Json(build_infos).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to list builds: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildLogsParams {
+    name: String,
+    build_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct BuildLogsQuery {
+    follow: Option<bool>,
+}
+
+#[instrument(skip(state))]
+async fn get_build_logs(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(params): Path<BuildLogsParams>,
+    Query(query): Query<BuildLogsQuery>,
+) -> impl IntoResponse {
+    use tokio::fs::File;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let pool = state.read().await.db_pool.clone();
+    let follow = query.follow.unwrap_or(false);
+
+    // Get app to verify it exists and get ID
+    let app = match db::app::get_by_name(&pool, &params.name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", params.name)).into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get app: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Get the build
+    let build = match db::build::get_by_id(&pool, &params.build_id).await {
+        Ok(Some(build)) => build,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("Build '{}' not found", params.build_id),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get build: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Verify build belongs to the app
+    if build.app_id != app.id {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("Build '{}' not found for app '{}'", params.build_id, params.name),
+        )
+            .into_response();
+    }
+
+    // Get log path
+    let log_path = match build.log_path {
+        Some(path) => path,
+        None => {
+            return (StatusCode::NOT_FOUND, "Build logs not available").into_response();
+        }
+    };
+
+    // Check if file exists
+    if !std::path::Path::new(&log_path).exists() {
+        return (StatusCode::NOT_FOUND, "Build log file not found").into_response();
+    }
+
+    if follow {
+        // Stream logs using SSE
+        let stream = async_stream::stream! {
+            let file = match File::open(&log_path).await {
+                Ok(f) => f,
+                Err(e) => {
+                    yield Ok::<_, std::convert::Infallible>(
+                        Event::default().event("error").data(format!("Failed to open log file: {}", e))
+                    );
+                    return;
+                }
+            };
+
+            let reader = BufReader::new(file);
+            let mut lines = reader.lines();
+
+            // Read existing lines
+            while let Ok(Some(line)) = lines.next_line().await {
+                yield Ok::<_, std::convert::Infallible>(Event::default().data(line));
+            }
+
+            // Continue watching for new lines
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+            let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+
+            loop {
+                interval.tick().await;
+
+                // Check if file has grown
+                let current_size = match std::fs::metadata(&log_path) {
+                    Ok(m) => m.len(),
+                    Err(_) => break,
+                };
+
+                if current_size > last_size {
+                    // Re-open and seek to read new content
+                    let file = match File::open(&log_path).await {
+                        Ok(f) => f,
+                        Err(_) => break,
+                    };
+                    let reader = BufReader::new(file);
+                    let mut lines = reader.lines();
+
+                    // Read new lines and send them
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        yield Ok::<_, std::convert::Infallible>(Event::default().data(line));
+                    }
+
+                    last_size = current_size;
+                }
+            }
+        };
+
+        Sse::new(stream).into_response()
+    } else {
+        // Return all logs as plain text
+        match tokio::fs::read_to_string(&log_path).await {
+            Ok(content) => (StatusCode::OK, content).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read log file: {}", e),
+            )
+                .into_response(),
+        }
     }
 }
 

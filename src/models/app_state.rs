@@ -4,6 +4,7 @@ use sqlx::{Decode, Encode, Sqlite, Type};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppState {
     Created,
+    Building,
     Starting,
     Running,
     Stopping,
@@ -48,6 +49,7 @@ impl std::fmt::Display for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AppState::Created => write!(f, "created"),
+            AppState::Building => write!(f, "building"),
             AppState::Starting => write!(f, "starting"),
             AppState::Running => write!(f, "running"),
             AppState::Stopping => write!(f, "stopping"),
@@ -61,6 +63,7 @@ impl std::fmt::Display for AppState {
 pub fn app_state_to_string(state: &AppState) -> String {
     match state {
         AppState::Created => "created".into(),
+        AppState::Building => "building".into(),
         AppState::Starting => "starting".into(),
         AppState::Running => "running".into(),
         AppState::Stopping => "stopping".into(),
@@ -73,6 +76,7 @@ pub fn app_state_to_string(state: &AppState) -> String {
 pub fn parse_app_state(state_str: &str) -> AppState {
     match state_str {
         "created" => AppState::Created,
+        "building" => AppState::Building,
         "starting" => AppState::Starting,
         "running" => AppState::Running,
         "stopping" => AppState::Stopping,

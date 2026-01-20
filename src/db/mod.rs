@@ -95,6 +95,7 @@ pub async fn seed() {
         image_id: "1234".to_string(),
         image_tag: "caddy".to_string(),
         git_commit: "hey".to_string(),
+        log_path: None,
     };
 
     let build = Build::new(input);

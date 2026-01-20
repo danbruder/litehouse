@@ -157,6 +157,23 @@ pub fn get_app_build_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
     Ok(build_dir)
 }
 
+/// Get the build logs directory for an app
+pub fn get_app_build_logs_dir(app_name: &str) -> Result<PathBuf, ConfigError> {
+    let logs_dir = get_app_dir(app_name)?.join("build_logs");
+    if !logs_dir.exists() {
+        fs::create_dir_all(&logs_dir).map_err(|_| {
+            ConfigError::IoError("Failed to create app build logs directory".to_string())
+        })?;
+    }
+    Ok(logs_dir)
+}
+
+/// Get the path for a specific build log file
+pub fn get_build_log_path(app_name: &str, build_id: &str) -> Result<PathBuf, ConfigError> {
+    let logs_dir = get_app_build_logs_dir(app_name)?;
+    Ok(logs_dir.join(format!("{}.log", build_id)))
+}
+
 /// Get the app binary path
 #[instrument]
 pub fn get_app_binary_path(app_name: &str) -> Result<PathBuf, ConfigError> {

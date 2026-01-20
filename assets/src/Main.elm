@@ -2,8 +2,8 @@ port module Main exposing (main)
 
 import Browser
 import Browser.Navigation as Nav
-import Html exposing (Html, a, aside, button, div, footer, h1, h2, h3, header, input, label, main_, nav, p, pre, span, text)
-import Html.Attributes exposing (class, disabled, for, href, id, placeholder, required, target, title, type_, value)
+import Html exposing (Html, a, aside, button, div, footer, h1, h2, h3, header, input, label, main_, nav, option, p, pre, select, span, text)
+import Html.Attributes exposing (class, disabled, for, href, id, placeholder, required, selected, target, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
@@ -159,6 +159,11 @@ type alias AppDetailState =
     { app : AppDetail
     , logs : String
     , logsLoading : Bool
+    , logsView : LogsView
+    , builds : List BuildInfo
+    , selectedBuildId : Maybe String
+    , buildLogs : String
+    , buildLogsLoading : Bool
     , actionInProgress : Maybe AppAction
     , error : Maybe String
     }
@@ -187,6 +192,20 @@ type AppAction
     | Stopping
     | Building
     | Deleting
+
+
+type LogsView
+    = RuntimeLogs
+    | BuildLogs
+
+
+type alias BuildInfo =
+    { id : String
+    , appId : String
+    , imageTag : String
+    , gitCommit : String
+    , createdAt : String
+    }
 
 
 type alias CreateAppState =
@@ -385,6 +404,11 @@ type Msg
     | GotAppDeleted (Result Http.Error String)
     | FetchLogs
     | GotLogs (Result Http.Error String)
+      -- Build logs
+    | SwitchLogsView LogsView
+    | GotBuilds (Result Http.Error (List BuildInfo))
+    | SelectBuild String
+    | GotBuildLogs (Result Http.Error String)
 
 
 type alias ServerStatus =
@@ -1211,16 +1235,37 @@ update msg model =
                     case result of
                         Ok app ->
                             let
+                                -- Default to build logs for created/building apps, runtime logs otherwise
+                                initialLogsView =
+                                    if app.state == "created" || app.state == "building" then
+                                        BuildLogs
+
+                                    else
+                                        RuntimeLogs
+
                                 detailState =
                                     { app = app
                                     , logs = ""
-                                    , logsLoading = True
+                                    , logsLoading = initialLogsView == RuntimeLogs
+                                    , logsView = initialLogsView
+                                    , builds = []
+                                    , selectedBuildId = Nothing
+                                    , buildLogs = ""
+                                    , buildLogsLoading = False
                                     , actionInProgress = Nothing
                                     , error = Nothing
                                     }
+
+                                -- Fetch runtime logs only if that's the initial view
+                                logsCmd =
+                                    if initialLogsView == RuntimeLogs then
+                                        fetchAppLogs state.token app.name
+
+                                    else
+                                        Cmd.none
                             in
                             ( { model | page = Dashboard { state | view = AppDetailView detailState } }
-                            , fetchAppLogs state.token app.name
+                            , Cmd.batch [ logsCmd, fetchBuilds state.token app.name ]
                             )
 
                         Err err ->
@@ -1334,6 +1379,8 @@ update msg model =
                                                     { detailState
                                                         | actionInProgress = Just Building
                                                         , error = Nothing
+                                                        , logsView = BuildLogs
+                                                        , buildLogs = ""
                                                     }
                                         }
                               }
@@ -1479,7 +1526,7 @@ update msg model =
                                       }
                                     , Cmd.batch
                                         [ fetchAppDetail state.token detailState.app.name
-                                        , fetchAppLogs state.token detailState.app.name
+                                        , fetchBuilds state.token detailState.app.name
                                         ]
                                     )
 
@@ -1496,7 +1543,7 @@ update msg model =
                                                             }
                                                 }
                                       }
-                                    , Cmd.none
+                                    , fetchBuilds state.token detailState.app.name
                                     )
 
                         _ ->
@@ -1612,6 +1659,188 @@ update msg model =
                                                             { detailState
                                                                 | logs = ""
                                                                 , logsLoading = False
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SwitchLogsView newView ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            let
+                                cmd =
+                                    case newView of
+                                        RuntimeLogs ->
+                                            if String.isEmpty detailState.logs then
+                                                fetchAppLogs state.token detailState.app.name
+
+                                            else
+                                                Cmd.none
+
+                                        BuildLogs ->
+                                            case detailState.selectedBuildId of
+                                                Just buildId ->
+                                                    if String.isEmpty detailState.buildLogs then
+                                                        fetchBuildLogs state.token detailState.app.name buildId
+
+                                                    else
+                                                        Cmd.none
+
+                                                Nothing ->
+                                                    Cmd.none
+
+                                updatedState =
+                                    { detailState
+                                        | logsView = newView
+                                        , logsLoading =
+                                            newView == RuntimeLogs && String.isEmpty detailState.logs
+                                        , buildLogsLoading =
+                                            newView == BuildLogs && String.isEmpty detailState.buildLogs && detailState.selectedBuildId /= Nothing
+                                    }
+                            in
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state | view = AppDetailView updatedState }
+                              }
+                            , cmd
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotBuilds result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok builds ->
+                                    let
+                                        -- Auto-select the most recent build (first in list)
+                                        latestBuildId =
+                                            List.head builds |> Maybe.map .id
+
+                                        -- If we're in build logs view, fetch logs for latest build
+                                        ( buildLogsLoading, cmd ) =
+                                            case ( detailState.logsView, latestBuildId ) of
+                                                ( BuildLogs, Just buildId ) ->
+                                                    ( True
+                                                    , fetchBuildLogs state.token detailState.app.name buildId
+                                                    )
+
+                                                _ ->
+                                                    ( False, Cmd.none )
+                                    in
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | builds = builds
+                                                                , selectedBuildId = latestBuildId
+                                                                , buildLogsLoading = buildLogsLoading
+                                                            }
+                                                }
+                                      }
+                                    , cmd
+                                    )
+
+                                Err _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | builds = []
+                                                                , selectedBuildId = Nothing
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SelectBuild buildId ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( { model
+                                | page =
+                                    Dashboard
+                                        { state
+                                            | view =
+                                                AppDetailView
+                                                    { detailState
+                                                        | selectedBuildId = Just buildId
+                                                        , buildLogs = ""
+                                                        , buildLogsLoading = True
+                                                    }
+                                        }
+                              }
+                            , fetchBuildLogs state.token detailState.app.name buildId
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        GotBuildLogs result ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case result of
+                                Ok logs ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | buildLogs = logs
+                                                                , buildLogsLoading = False
+                                                            }
+                                                }
+                                      }
+                                    , Cmd.none
+                                    )
+
+                                Err _ ->
+                                    ( { model
+                                        | page =
+                                            Dashboard
+                                                { state
+                                                    | view =
+                                                        AppDetailView
+                                                            { detailState
+                                                                | buildLogs = ""
+                                                                , buildLogsLoading = False
                                                             }
                                                 }
                                       }
@@ -1849,6 +2078,32 @@ fetchAppLogs token appName =
         }
 
 
+fetchBuilds : String -> String -> Cmd Msg
+fetchBuilds token appName =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/builds"
+        , body = Http.emptyBody
+        , expect = Http.expectJson GotBuilds (Decode.list buildInfoDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+fetchBuildLogs : String -> String -> String -> Cmd Msg
+fetchBuildLogs token appName buildId =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/builds/" ++ buildId ++ "/logs"
+        , body = Http.emptyBody
+        , expect = Http.expectString GotBuildLogs
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 
 -- DECODERS
 
@@ -1858,6 +2113,16 @@ serverStatusDecoder =
     Decode.map2 ServerStatus
         (Decode.field "initialized" Decode.bool)
         (Decode.field "version" Decode.string)
+
+
+buildInfoDecoder : Decode.Decoder BuildInfo
+buildInfoDecoder =
+    Decode.map5 BuildInfo
+        (Decode.field "id" Decode.string)
+        (Decode.field "app_id" Decode.string)
+        (Decode.field "image_tag" Decode.string)
+        (Decode.field "git_commit" Decode.string)
+        (Decode.field "created_at" Decode.string)
 
 
 userInfoDecoder : Decode.Decoder UserInfo
@@ -2539,28 +2804,123 @@ viewAppDetail state =
         , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
             [ div [ class "flex justify-between items-center mb-4" ]
                 [ h3 [ class "text-base font-semibold text-litehouse-text" ] [ text "Logs" ]
-                , button
-                    [ class "px-3 py-1.5 text-sm border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors disabled:opacity-50"
-                    , onClick FetchLogs
-                    , disabled state.logsLoading
+                , div [ class "flex items-center gap-2" ]
+                    [ -- Tab buttons
+                      div [ class "flex rounded-lg border border-litehouse-border overflow-hidden" ]
+                        [ button
+                            [ class
+                                (if state.logsView == BuildLogs then
+                                    "px-3 py-1.5 text-sm bg-litehouse-amber text-white"
+
+                                 else
+                                    "px-3 py-1.5 text-sm text-litehouse-muted hover:bg-litehouse-bg"
+                                )
+                            , onClick (SwitchLogsView BuildLogs)
+                            ]
+                            [ text "Build" ]
+                        , button
+                            [ class
+                                (if state.logsView == RuntimeLogs then
+                                    "px-3 py-1.5 text-sm bg-litehouse-amber text-white"
+
+                                 else
+                                    "px-3 py-1.5 text-sm text-litehouse-muted hover:bg-litehouse-bg"
+                                )
+                            , onClick (SwitchLogsView RuntimeLogs)
+                            ]
+                            [ text "App" ]
+                        ]
+
+                    -- Refresh button (only for runtime logs)
+                    , if state.logsView == RuntimeLogs then
+                        button
+                            [ class "px-3 py-1.5 text-sm border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors disabled:opacity-50"
+                            , onClick FetchLogs
+                            , disabled state.logsLoading
+                            ]
+                            [ text "Refresh" ]
+
+                      else
+                        text ""
                     ]
-                    [ text "Refresh Logs" ]
                 ]
-            , if state.logsLoading then
+
+            -- Build selector (only shown when viewing build logs)
+            , if state.logsView == BuildLogs && not (List.isEmpty state.builds) then
+                div [ class "mb-4" ]
+                    [ select
+                        [ class "w-full px-3 py-2 bg-litehouse-bg border border-litehouse-border rounded-xl text-litehouse-text text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber"
+                        , onInput SelectBuild
+                        ]
+                        (List.map
+                            (\build ->
+                                option
+                                    [ value build.id
+                                    , selected (state.selectedBuildId == Just build.id)
+                                    ]
+                                    [ text (String.left 8 build.gitCommit ++ " - " ++ build.imageTag ++ " (" ++ formatBuildDate build.createdAt ++ ")") ]
+                            )
+                            state.builds
+                        )
+                    ]
+
+              else
+                text ""
+
+            -- Log content
+            , viewLogsContent state
+            ]
+        ]
+
+
+viewLogsContent : AppDetailState -> Html Msg
+viewLogsContent state =
+    case state.logsView of
+        RuntimeLogs ->
+            if state.logsLoading then
                 div [ class "flex items-center justify-center gap-3 py-10 text-litehouse-muted" ]
                     [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
                     , span [] [ text "Loading logs..." ]
                     ]
 
-              else if String.isEmpty state.logs then
+            else if String.isEmpty state.logs then
                 div [ class "py-10 text-center text-litehouse-muted" ]
-                    [ text "No logs available" ]
+                    [ text "No runtime logs available" ]
 
-              else
+            else
                 pre [ class "bg-gray-900 text-gray-300 font-mono text-xs p-4 rounded-xl overflow-auto max-h-96 whitespace-pre-wrap break-all" ]
                     [ text state.logs ]
-            ]
-        ]
+
+        BuildLogs ->
+            if state.actionInProgress == Just Building then
+                div [ class "flex items-center justify-center gap-3 py-10 text-litehouse-muted" ]
+                    [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
+                    , span [] [ text "Building..." ]
+                    ]
+
+            else if state.buildLogsLoading then
+                div [ class "flex items-center justify-center gap-3 py-10 text-litehouse-muted" ]
+                    [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
+                    , span [] [ text "Loading build logs..." ]
+                    ]
+
+            else if List.isEmpty state.builds then
+                div [ class "py-10 text-center text-litehouse-muted" ]
+                    [ text "No builds yet. Click Build to create your first build." ]
+
+            else if String.isEmpty state.buildLogs then
+                div [ class "py-10 text-center text-litehouse-muted" ]
+                    [ text "No logs available for this build" ]
+
+            else
+                pre [ class "bg-gray-900 text-gray-300 font-mono text-xs p-4 rounded-xl overflow-auto max-h-96 whitespace-pre-wrap break-all" ]
+                    [ text state.buildLogs ]
+
+
+formatBuildDate : String -> String
+formatBuildDate isoDate =
+    -- Simple formatting: just take the date part (first 10 characters)
+    String.left 10 isoDate
 
 
 viewCreateApp : DashboardState -> CreateAppState -> Html Msg

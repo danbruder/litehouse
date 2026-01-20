@@ -32,13 +32,48 @@ pub async fn connect() -> Result<Docker> {
 
 #[instrument]
 pub async fn build(directory: &str, tag: &str) -> Result<String> {
+    build_with_log(directory, tag, None).await
+}
+
+#[instrument(skip(log_file_path))]
+pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&Path>) -> Result<String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
     info!("Building app in: {}", directory);
+
+    // Open log file if path provided
+    let mut log_file = if let Some(path) = log_file_path {
+        Some(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .map_err(|e| PodmanError::BuildError(format!("Failed to open log file: {}", e)))?,
+        )
+    } else {
+        None
+    };
+
+    // Helper to write to log file
+    let mut write_log = |msg: &str| {
+        if let Some(ref mut file) = log_file {
+            let _ = writeln!(file, "{}", msg);
+            let _ = file.flush();
+        }
+    };
+
+    write_log(&format!("Building app in: {}", directory));
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
+        let err_msg = format!("Dockerfile not found in directory: {}", directory);
+        write_log(&format!("ERROR: {}", err_msg));
         return Err(PodmanError::DockerfileNotFound(directory.to_string()).into());
     }
 
+    write_log("Starting container image build with Bollard API...");
     info!("Starting container image build with Bollard API...");
 
     // Create a tar archive of the build context
@@ -64,35 +99,43 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
                     let msg = stream.trim();
                     if !msg.is_empty() {
                         info!("Build: {}", msg);
+                        write_log(msg);
                     }
                 }
                 if let Some(error) = output.error {
                     tracing::error!("Build error: {}", error);
+                    write_log(&format!("ERROR: {}", error));
                     last_error = Some(error);
                 }
             }
             Err(e) => {
                 tracing::error!("Build stream error: {}", e);
+                write_log(&format!("ERROR: Build stream error: {}", e));
                 return Err(PodmanError::BuildStreamError(e.to_string()).into());
             }
         }
     }
 
     if let Some(error) = last_error {
+        write_log(&format!("Build failed: {}", error));
         return Err(PodmanError::BuildError(error).into());
     }
 
+    write_log("Container image build completed successfully");
     info!("Container image build completed successfully");
 
     // Get the image ID by inspecting the built image using Bollard API
     let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
-        PodmanError::BuildError(format!("Failed to inspect built image: {}", e))
+        let err_msg = format!("Failed to inspect built image: {}", e);
+        write_log(&format!("ERROR: {}", err_msg));
+        PodmanError::BuildError(err_msg)
     })?;
 
     let image_id = image_inspect
         .id
         .ok_or_else(|| PodmanError::BuildError("Failed to get image ID from build result".to_string()))?;
 
+    write_log(&format!("Built image ID: {}", image_id));
     info!("Built image ID: {}", image_id);
     Ok(image_id)
 }
