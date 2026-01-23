@@ -106,6 +106,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await

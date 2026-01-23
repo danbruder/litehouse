@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
 use crate::api_client::ApiClient;
 use crate::commands::server;
