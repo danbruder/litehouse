@@ -1,4 +1,5 @@
 use crate::caddy;
+use crate::config;
 use crate::db;
 use crate::docker;
 use anyhow::Result;
@@ -52,6 +53,19 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
 
     // Delete app
     db::app::delete_by_app_id(&pool, &app.id).await?;
+
+    // Clean up app directory (includes build directory, build logs, and data)
+    if let Ok(app_dir) = config::get_app_dir(app_name) {
+        if app_dir.exists() {
+            tracing::info!("Deleting app directory: {}", app_dir.display());
+            if let Err(e) = std::fs::remove_dir_all(&app_dir) {
+                tracing::warn!("Failed to delete app directory '{}': {}", app_dir.display(), e);
+                // Don't fail the delete operation if directory cleanup fails
+            } else {
+                tracing::info!("Successfully deleted app directory: {}", app_dir.display());
+            }
+        }
+    }
 
     println!("Successfully stopped app '{}'", app_name);
 
