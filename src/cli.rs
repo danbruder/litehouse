@@ -12,12 +12,6 @@ pub struct Cli {
     command: Commands,
 }
 
-#[derive(Args)]
-struct DockerArgs {
-    #[command(subcommand)]
-    command: DockerCmd,
-}
-
 #[derive(Subcommand)]
 enum Commands {
     /// Install litehouse on this server (run as root)
@@ -131,8 +125,6 @@ enum Commands {
         command: Option<ConfigCmd>,
     },
 
-    Docker(DockerArgs),
-
     /// Seed the database for testing
     Seed,
 
@@ -150,14 +142,6 @@ enum Commands {
         #[command(subcommand)]
         command: GithubCmd,
     },
-}
-
-#[derive(Subcommand)]
-enum DockerCmd {
-    /// Show docker version
-    Version,
-    /// Run a test container
-    Run,
 }
 
 #[derive(Subcommand)]
@@ -244,9 +228,10 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Install { domain, skip_verify } => {
-            crate::commands::install::execute(&domain, skip_verify).await
-        }
+        Commands::Install {
+            domain,
+            skip_verify,
+        } => crate::commands::install::execute(&domain, skip_verify).await,
         Commands::Upgrade { version } => {
             crate::commands::upgrade::execute(version.as_deref()).await
         }
@@ -260,128 +245,138 @@ pub async fn run() -> Result<()> {
             let api_client = ApiClient::new(config);
 
             match cli.command {
-        Commands::Create { app_name, from_github } => {
-            match (app_name, from_github) {
-                (Some(name), Some(repo)) => {
-                    // Create app with explicit name from GitHub repo
-                    api_client.create_app_from_github(&name, &repo).await?;
-                    println!("Run 'lh build {}' to build and deploy", name);
-                    Ok(())
-                }
-                (None, Some(repo)) => {
-                    // Derive app name from repo name
-                    let name = repo.split('/').last().unwrap_or(&repo);
-                    api_client.create_app_from_github(name, &repo).await?;
-                    println!("Run 'lh build {}' to build and deploy", name);
-                    Ok(())
-                }
-                (Some(name), None) => {
-                    // Standard app creation
-                    api_client.create_app(&name).await
-                }
-                (None, None) => {
-                    anyhow::bail!("Either app_name or --from-github must be provided");
-                }
-            }
-        }
-        Commands::Start { app_name } => api_client.start_app(&app_name).await,
-        Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
-        Commands::Restart { app_name } => {
-            println!("Restarting not implemented for app: {}", app_name);
-            Ok(())
-        }
-        Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
-        Commands::Deploy {
-            app_name,
-            binary_path,
-        } => api_client.deploy_app(&app_name, &binary_path).await,
-        Commands::Env {
-            app_name,
-            key,
-            value,
-            delete,
-        } => api_client.set_env(&app_name, &key, &value, delete).await,
-        Commands::Status { app_name } => api_client.get_status(app_name.as_deref()).await,
-        Commands::Logs {
-            app_name,
-            lines,
-            follow,
-        } => {
-            match api_client.get_logs(&app_name, lines, follow).await? {
-                crate::api_client::LogStream::Full(logs) => println!("{}", logs),
-                crate::api_client::LogStream::Lines(mut stream) => {
-                    use futures_util::StreamExt;
-                    while let Some(line) = stream.next().await {
-                        match line {
-                            Ok(l) => print!("{}", l),
-                            Err(e) => eprintln!("Error: {}", e),
+                Commands::Create {
+                    app_name,
+                    from_github,
+                } => {
+                    match (app_name, from_github) {
+                        (Some(name), Some(repo)) => {
+                            // Create app with explicit name from GitHub repo
+                            api_client.create_app_from_github(&name, &repo).await?;
+                            println!("Run 'lh build {}' to build and deploy", name);
+                            Ok(())
+                        }
+                        (None, Some(repo)) => {
+                            // Derive app name from repo name
+                            let name = repo.split('/').last().unwrap_or(&repo);
+                            api_client.create_app_from_github(name, &repo).await?;
+                            println!("Run 'lh build {}' to build and deploy", name);
+                            Ok(())
+                        }
+                        (Some(name), None) => {
+                            // Standard app creation
+                            api_client.create_app(&name).await
+                        }
+                        (None, None) => {
+                            anyhow::bail!("Either app_name or --from-github must be provided");
                         }
                     }
                 }
-            }
-            Ok(())
-        }
-        Commands::Config { command } => {
-            match command {
-                Some(ConfigCmd::S3 { command }) => match command {
-                    S3Cmd::Set {
-                        access_key_id,
-                        secret_access_key,
-                        bucket,
-                        region,
-                        endpoint,
-                        path_prefix,
-                    } => {
-                        api_client
-                            .set_s3_config(
-                                &access_key_id,
-                                &secret_access_key,
-                                &bucket,
-                                &region,
-                                endpoint.as_deref(),
-                                path_prefix.as_deref(),
-                            )
-                            .await
+                Commands::Start { app_name } => api_client.start_app(&app_name).await,
+                Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
+                Commands::Restart { app_name } => {
+                    println!("Restarting not implemented for app: {}", app_name);
+                    Ok(())
+                }
+                Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
+                Commands::Deploy {
+                    app_name,
+                    binary_path,
+                } => api_client.deploy_app(&app_name, &binary_path).await,
+                Commands::Env {
+                    app_name,
+                    key,
+                    value,
+                    delete,
+                } => api_client.set_env(&app_name, &key, &value, delete).await,
+                Commands::Status { app_name } => api_client.get_status(app_name.as_deref()).await,
+                Commands::Logs {
+                    app_name,
+                    lines,
+                    follow,
+                } => {
+                    match api_client.get_logs(&app_name, lines, follow).await? {
+                        crate::api_client::LogStream::Full(logs) => println!("{}", logs),
+                        crate::api_client::LogStream::Lines(mut stream) => {
+                            use futures_util::StreamExt;
+                            while let Some(line) = stream.next().await {
+                                match line {
+                                    Ok(l) => print!("{}", l),
+                                    Err(e) => eprintln!("Error: {}", e),
+                                }
+                            }
+                        }
                     }
-                    S3Cmd::Get => api_client.get_s3_config().await,
-                    S3Cmd::Delete => api_client.delete_s3_config().await,
-                },
-                None => {
-                    // Default behavior: show client config
-                    let client_config = ClientConfig::load()?;
-                    let client_config_path = ClientConfig::get_config_path()?;
+                    Ok(())
+                }
+                Commands::Config { command } => {
+                    match command {
+                        Some(ConfigCmd::S3 { command }) => match command {
+                            S3Cmd::Set {
+                                access_key_id,
+                                secret_access_key,
+                                bucket,
+                                region,
+                                endpoint,
+                                path_prefix,
+                            } => {
+                                api_client
+                                    .set_s3_config(
+                                        &access_key_id,
+                                        &secret_access_key,
+                                        &bucket,
+                                        &region,
+                                        endpoint.as_deref(),
+                                        path_prefix.as_deref(),
+                                    )
+                                    .await
+                            }
+                            S3Cmd::Get => api_client.get_s3_config().await,
+                            S3Cmd::Delete => api_client.delete_s3_config().await,
+                        },
+                        None => {
+                            // Default behavior: show client config
+                            let client_config = ClientConfig::load()?;
+                            let client_config_path = ClientConfig::get_config_path()?;
 
-                    println!("Client config: {}", client_config_path.display());
-                    println!("{}", toml::to_string(&client_config)?);
+                            println!("Client config: {}", client_config_path.display());
+                            println!("{}", toml::to_string(&client_config)?);
+
+                            Ok(())
+                        }
+                    }
+                }
+                Commands::Seed => {
+                    println!("Seeding the database...");
+                    crate::db::seed().await;
 
                     Ok(())
                 }
-            }
-        }
-        Commands::Docker(args) => match args.command {
-            DockerCmd::Version => api_client.get_docker_version().await,
-            DockerCmd::Run => crate::docker::run("yeet", "redis:latest").await,
-        },
-
-        Commands::Seed => {
-            println!("Seeding the database...");
-            crate::db::seed().await;
-
-            Ok(())
-        }
-        Commands::Remote { app_name, command } => match command {
-            RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
-            RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
-        },
-        Commands::Build { app_name } => api_client.build(&app_name).await,
-        Commands::Github { command } => match command {
-            GithubCmd::Connect => crate::commands::github::connect::execute(&api_client).await,
-            GithubCmd::Disconnect => crate::commands::github::disconnect::execute(&api_client).await,
-            GithubCmd::Status => crate::commands::github::status::execute(&api_client).await,
-            GithubCmd::Repos { limit } => crate::commands::github::repos::execute(&api_client, limit).await,
-            GithubCmd::Search { query } => crate::commands::github::search::execute(&api_client, &query).await,
-        },
-        Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => unreachable!("Already handled above"),
+                Commands::Remote { app_name, command } => match command {
+                    RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
+                    RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
+                },
+                Commands::Build { app_name } => api_client.build(&app_name).await,
+                Commands::Github { command } => match command {
+                    GithubCmd::Connect => {
+                        crate::commands::github::connect::execute(&api_client).await
+                    }
+                    GithubCmd::Disconnect => {
+                        crate::commands::github::disconnect::execute(&api_client).await
+                    }
+                    GithubCmd::Status => {
+                        crate::commands::github::status::execute(&api_client).await
+                    }
+                    GithubCmd::Repos { limit } => {
+                        crate::commands::github::repos::execute(&api_client, limit).await
+                    }
+                    GithubCmd::Search { query } => {
+                        crate::commands::github::search::execute(&api_client, &query).await
+                    }
+                },
+                Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => {
+                    unreachable!("Already handled above")
+                }
             }
         }
     }

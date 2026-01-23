@@ -1,13 +1,14 @@
 use crate::models::{App, EnvVar};
-use anyhow::Result;
-use bollard::image::BuildImageOptions;
 use bollard::Docker;
-use flate2::write::GzEncoder;
+use bollard::image::BuildImageOptions;
 use flate2::Compression;
-use futures_util::{stream::unfold, StreamExt};
+use flate2::write::GzEncoder;
+use futures_util::{StreamExt, stream::unfold};
 use std::path::Path;
 use std::pin::Pin;
 use tracing::{info, instrument};
+
+type Result<T> = std::result::Result<T, DockerError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DockerError {
@@ -19,6 +20,12 @@ pub enum DockerError {
     BuildStreamError(String),
     #[error("Log error: {0}")]
     LogError(String),
+    #[error("Bollard error: {0}")]
+    BollardError(#[from] bollard::errors::Error),
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("Path strip prefix error: {0}")]
+    StripPrefixError(#[from] std::path::StripPrefixError),
 }
 
 pub async fn connect() -> Result<Docker> {
@@ -36,7 +43,11 @@ pub async fn build(directory: &str, tag: &str) -> Result<String> {
 }
 
 #[instrument(skip(log_file_path))]
-pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&Path>) -> Result<String> {
+pub async fn build_with_log(
+    directory: &str,
+    tag: &str,
+    log_file_path: Option<&Path>,
+) -> Result<String> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -131,9 +142,9 @@ pub async fn build_with_log(directory: &str, tag: &str, log_file_path: Option<&P
         DockerError::BuildError(err_msg)
     })?;
 
-    let image_id = image_inspect
-        .id
-        .ok_or_else(|| DockerError::BuildError("Failed to get image ID from build result".to_string()))?;
+    let image_id = image_inspect.id.ok_or_else(|| {
+        DockerError::BuildError("Failed to get image ID from build result".to_string())
+    })?;
 
     write_log(&format!("Built image ID: {}", image_id));
     info!("Built image ID: {}", image_id);
@@ -162,10 +173,7 @@ fn create_build_context_tar(directory: &str) -> Result<Vec<u8>> {
             }
 
             // Skip .git directory
-            if relative_path
-                .components()
-                .any(|c| c.as_os_str() == ".git")
-            {
+            if relative_path.components().any(|c| c.as_os_str() == ".git") {
                 continue;
             }
 
@@ -302,7 +310,10 @@ pub async fn run_with_port(
                 }]),
             );
 
-            info!("Binding container port {} to host port {}", container_port, port);
+            info!(
+                "Binding container port {} to host port {}",
+                container_port, port
+            );
             config.port_bindings = Some(port_bindings);
         }
 
@@ -335,11 +346,14 @@ pub async fn run_with_port(
             env_vars
                 .iter()
                 .map(|ev| format!("{}={}", ev.key, ev.value))
-                .collect()
+                .collect(),
         )
     };
 
-    info!("Container environment: {} variables", env.as_ref().map(|e| e.len()).unwrap_or(0));
+    info!(
+        "Container environment: {} variables",
+        env.as_ref().map(|e| e.len()).unwrap_or(0)
+    );
 
     let container_config = bollard::container::Config {
         image: Some(image_tag.to_string()),
@@ -401,7 +415,7 @@ pub async fn logs_stream(
     app_name: &str,
     lines: usize,
     follow: bool,
-) -> Result<Pin<Box<dyn futures_util::Stream<Item = Result<String, anyhow::Error>> + Send>>> {
+) -> Result<Pin<Box<dyn futures_util::Stream<Item = Result<String>> + Send>>> {
     info!("Getting logs stream for app: {}", app_name);
 
     let docker = Docker::connect_with_unix(
@@ -433,8 +447,7 @@ pub async fn logs_stream(
         return Err(DockerError::LogError(format!(
             "Container '{}' not found for app '{}'",
             container_name, app_name
-        ))
-        .into());
+        )));
     }
 
     // Create a stream that owns all the necessary data
@@ -464,7 +477,7 @@ pub async fn logs_stream(
                         },
                         Err(e) => {
                             return Some((
-                                Err(anyhow::anyhow!(e)),
+                                Err(DockerError::BollardError(e)),
                                 (docker, container_name, follow),
                             ));
                         }

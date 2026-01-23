@@ -1,8 +1,10 @@
+use crate::caddy;
+use crate::db;
+use crate::docker;
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
 use tracing::instrument;
 
-use crate::db;
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteError {
     #[error("App not found: {0}")]
@@ -22,6 +24,9 @@ type DeleteResult<T> = Result<T, DeleteError>;
 /// Delete an app
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
+    // Connect to Docker
+    let docker_conn = docker::connect().await?;
+
     // Get app
     let app = db::app::get_by_name(pool, app_name)
         .await?
@@ -32,9 +37,31 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         return Err(DeleteError::AppRunning(app_name.to_string()));
     }
 
+    docker::stop(&app).await?;
+
+    let build = db::build::get_latest_by_app(pool, &app.id).await?;
+    if let Some(build) = build {
+        docker::remove(&build.image_tag).await?;
+    }
+
     // Delete environment variables
     tracing::info!("Deleting environment variables for app {}", app.id);
     db::env_var::delete_by_app(pool, &app.id).await?;
 
-    todo!("Teardown");
+    // Delete app
+    db::app::delete_by_app_id(&pool, &app.id).await?;
+
+    println!("Successfully stopped app '{}'", app_name);
+
+    // Sync Caddy configuration
+    if let Err(e) = caddy::sync_configuration(&docker_conn, &pool).await {
+        tracing::warn!(
+            "Failed to sync Caddy configuration after stopping app '{}': {}",
+            app_name,
+            e
+        );
+        // Don't fail the stop operation if Caddy sync fails
+    }
+
+    Ok(())
 }
