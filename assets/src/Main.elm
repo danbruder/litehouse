@@ -18,7 +18,16 @@ import Url.Parser as Parser exposing ((</>), Parser, oneOf, s, string)
 port saveToken : String -> Cmd msg
 
 
+port saveRefreshToken : String -> Cmd msg
+
+
 port clearToken : () -> Cmd msg
+
+
+port getRefreshToken : () -> Cmd msg
+
+
+port refreshTokenReceived : (Maybe String -> msg) -> Sub msg
 
 
 port startGitHubSSE : { token : String, deviceCode : String, interval : Int, expiresIn : Int } -> Cmd msg
@@ -145,6 +154,7 @@ type alias DashboardState =
     , appsLoading : Bool
     , githubStatus : GitHubStatus
     , token : String
+    , refreshToken : String
     , activeSidebarItem : SidebarItem
     }
 
@@ -261,6 +271,7 @@ type alias Model =
     , serverVersion : String
     , navKey : Nav.Key
     , currentRoute : Maybe Route
+    , pendingVerification : Maybe TokenVerificationResponse
     }
 
 
@@ -304,6 +315,7 @@ init flags url navKey =
             , serverVersion = ""
             , navKey = navKey
             , currentRoute = route
+            , pendingVerification = Nothing
             }
     in
     case flags.token of
@@ -326,26 +338,29 @@ init flags url navKey =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    case model.page of
-        Dashboard state ->
-            case state.view of
-                CreateAppView createState ->
-                    case createState.step of
-                        ConnectGitHub ghState ->
-                            if ghState.polling then
-                                gitHubSSEEvent GotGitHubSSEEvent
+    Sub.batch
+        [ refreshTokenReceived RefreshTokenReceived
+        , case model.page of
+            Dashboard state ->
+                case state.view of
+                    CreateAppView createState ->
+                        case createState.step of
+                            ConnectGitHub ghState ->
+                                if ghState.polling then
+                                    gitHubSSEEvent GotGitHubSSEEvent
 
-                            else
+                                else
+                                    Sub.none
+
+                            _ ->
                                 Sub.none
 
-                        _ ->
-                            Sub.none
+                    _ ->
+                        Sub.none
 
-                _ ->
-                    Sub.none
-
-        _ ->
-            Sub.none
+            _ ->
+                Sub.none
+        ]
 
 
 
@@ -359,6 +374,8 @@ type Msg
     | GotTokenVerification (Result Http.Error TokenVerificationResponse)
     | GotLoginResponse (Result Http.Error AuthResponse)
     | GotRegisterResponse (Result Http.Error AuthResponse)
+    | RefreshTokenReceived (Maybe String)
+    | GotTokenRefresh (Result Http.Error TokenPair)
       -- Setup form
     | SetupEmailChanged String
     | SetupPasswordChanged String
@@ -419,6 +436,7 @@ type alias ServerStatus =
 
 type alias AuthResponse =
     { accessToken : String
+    , refreshToken : String
     , user : UserInfo
     }
 
@@ -547,29 +565,115 @@ update msg model =
         GotTokenVerification result ->
             case result of
                 Ok response ->
-                    let
-                        dashboardState =
-                            { user = response.user
-                            , view = AppsListView
-                            , apps = []
-                            , appsLoading = True
-                            , githubStatus = GitHubUnknown
-                            , token = response.token
-                            , activeSidebarItem = MyApps
-                            }
-                    in
-                    ( { model | page = Dashboard dashboardState }
-                    , Cmd.batch
-                        [ Nav.pushUrl model.navKey "/dashboard"
-                        , fetchApps response.token
-                        , fetchGitHubStatus response.token
-                        ]
+                    -- Token is valid, store verification and get refresh token from localStorage
+                    ( { model | page = Loading, pendingVerification = Just response }
+                    , getRefreshToken ()
                     )
 
                 Err _ ->
-                    -- Token invalid, clear it and check status
-                    ( { model | page = Loading }
-                    , Cmd.batch [ clearToken (), checkServerStatus ]
+                    -- Token invalid, try to refresh if we have a refresh token
+                    ( { model | page = Loading, pendingVerification = Nothing }
+                    , getRefreshToken ()
+                    )
+
+        RefreshTokenReceived maybeRefreshToken ->
+            case maybeRefreshToken of
+                Just refreshToken ->
+                    case model.pendingVerification of
+                        Just verification ->
+                            -- We have both verification and refresh token, set up dashboard
+                            let
+                                dashboardState =
+                                    { user = verification.user
+                                    , view = AppsListView
+                                    , apps = []
+                                    , appsLoading = True
+                                    , githubStatus = GitHubUnknown
+                                    , token = verification.token
+                                    , refreshToken = refreshToken
+                                    , activeSidebarItem = MyApps
+                                    }
+                            in
+                            ( { model | page = Dashboard dashboardState, pendingVerification = Nothing }
+                            , Cmd.batch
+                                [ Nav.pushUrl model.navKey "/dashboard"
+                                , saveRefreshToken refreshToken
+                                , fetchApps verification.token
+                                , fetchGitHubStatus verification.token
+                                ]
+                            )
+
+                        Nothing ->
+                            -- No pending verification, try to refresh access token
+                            case model.page of
+                                Loading ->
+                                    ( model
+                                    , refreshAccessToken refreshToken
+                                    )
+
+                                Dashboard dashboardState ->
+                                    -- Update dashboard with refresh token
+                                    ( { model | page = Dashboard { dashboardState | refreshToken = refreshToken } }
+                                    , Cmd.none
+                                    )
+
+                                _ ->
+                                    ( model, Cmd.none )
+
+                Nothing ->
+                    -- No refresh token
+                    case model.pendingVerification of
+                        Just _ ->
+                            -- We had verification but no refresh token, clear and check status
+                            ( { model | page = Loading, pendingVerification = Nothing }
+                            , Cmd.batch [ clearToken (), checkServerStatus ]
+                            )
+
+                        Nothing ->
+                            -- No refresh token and no verification, clear and check status
+                            ( { model | page = Loading }
+                            , Cmd.batch [ clearToken (), checkServerStatus ]
+                            )
+
+        GotTokenRefresh result ->
+            case result of
+                Ok tokenPair ->
+                    case model.page of
+                        Loading ->
+                            -- We got new tokens, verify the access token
+                            ( model
+                            , Cmd.batch
+                                [ saveToken tokenPair.accessToken
+                                , saveRefreshToken tokenPair.refreshToken
+                                , verifyToken tokenPair.accessToken
+                                ]
+                            )
+
+                        Dashboard dashboardState ->
+                            -- Update tokens in dashboard
+                            ( { model
+                                | page = Dashboard
+                                    { dashboardState
+                                        | token = tokenPair.accessToken
+                                        , refreshToken = tokenPair.refreshToken
+                                    }
+                              }
+                            , Cmd.batch
+                                [ saveToken tokenPair.accessToken
+                                , saveRefreshToken tokenPair.refreshToken
+                                ]
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                Err _ ->
+                    -- Refresh failed, clear tokens and redirect to login
+                    ( { model | page = Login emptyLoginForm }
+                    , Cmd.batch
+                        [ Nav.pushUrl model.navKey "/login"
+                        , clearToken ()
+                        ]
                     )
 
         GotLoginResponse result ->
@@ -585,6 +689,7 @@ update msg model =
                                     , appsLoading = True
                                     , githubStatus = GitHubUnknown
                                     , token = response.accessToken
+                                    , refreshToken = response.refreshToken
                                     , activeSidebarItem = MyApps
                                     }
                             in
@@ -592,6 +697,7 @@ update msg model =
                             , Cmd.batch
                                 [ Nav.pushUrl model.navKey "/dashboard"
                                 , saveToken response.accessToken
+                                , saveRefreshToken response.refreshToken
                                 , fetchApps response.accessToken
                                 , fetchGitHubStatus response.accessToken
                                 ]
@@ -618,6 +724,7 @@ update msg model =
                                     , appsLoading = True
                                     , githubStatus = GitHubUnknown
                                     , token = response.accessToken
+                                    , refreshToken = response.refreshToken
                                     , activeSidebarItem = MyApps
                                     }
                             in
@@ -625,6 +732,7 @@ update msg model =
                             , Cmd.batch
                                 [ Nav.pushUrl model.navKey "/dashboard"
                                 , saveToken response.accessToken
+                                , saveRefreshToken response.refreshToken
                                 , fetchApps response.accessToken
                                 , fetchGitHubStatus response.accessToken
                                 ]
@@ -1879,6 +1987,20 @@ verifyToken token =
         }
 
 
+refreshAccessToken : String -> Cmd Msg
+refreshAccessToken refreshToken =
+    Http.post
+        { url = "/api/auth/refresh"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "refresh_token", Encode.string refreshToken )
+                    ]
+                )
+        , expect = Http.expectJson GotTokenRefresh tokenPairDecoder
+        }
+
+
 submitLogin : LoginForm -> Cmd Msg
 submitLogin form =
     Http.post
@@ -2144,9 +2266,23 @@ tokenVerificationDecoder token =
 
 authResponseDecoder : Decode.Decoder AuthResponse
 authResponseDecoder =
-    Decode.map2 AuthResponse
+    Decode.map3 AuthResponse
         (Decode.at [ "tokens", "access_token" ] Decode.string)
+        (Decode.at [ "tokens", "refresh_token" ] Decode.string)
         (Decode.field "user" userDecoder)
+
+
+type alias TokenPair =
+    { accessToken : String
+    , refreshToken : String
+    }
+
+
+tokenPairDecoder : Decode.Decoder TokenPair
+tokenPairDecoder =
+    Decode.map2 TokenPair
+        (Decode.field "access_token" Decode.string)
+        (Decode.field "refresh_token" Decode.string)
 
 
 userDecoder : Decode.Decoder UserInfo

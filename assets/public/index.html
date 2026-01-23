@@ -10,11 +10,13 @@
     <div id="elm"></div>
     <script src="/app.js?v=2"></script>
     <script>
-        // Token storage key
+        // Token storage keys
         var TOKEN_KEY = 'litehouse_token';
+        var REFRESH_TOKEN_KEY = 'litehouse_refresh_token';
 
-        // Get stored token
+        // Get stored tokens
         var storedToken = localStorage.getItem(TOKEN_KEY);
+        var storedRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
 
         // Initialize Elm app with flags
         var app = Elm.Main.init({
@@ -29,9 +31,21 @@
             localStorage.setItem(TOKEN_KEY, token);
         });
 
-        // Port: Clear token from localStorage
+        // Port: Save refresh token to localStorage
+        app.ports.saveRefreshToken.subscribe(function(refreshToken) {
+            localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+        });
+
+        // Port: Get refresh token from localStorage
+        app.ports.getRefreshToken.subscribe(function() {
+            var refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+            app.ports.refreshTokenReceived.send(refreshToken);
+        });
+
+        // Port: Clear tokens from localStorage
         app.ports.clearToken.subscribe(function() {
             localStorage.removeItem(TOKEN_KEY);
+            localStorage.removeItem(REFRESH_TOKEN_KEY);
         });
 
         // Track current EventSource connection
