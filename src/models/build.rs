@@ -5,6 +5,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BuildStatus {
+    Idle,
     Building,
     Success,
     Failed,

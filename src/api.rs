@@ -15,10 +15,10 @@ use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
 use axum::{
-    Json, Router,
     extract::{Multipart, Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post},
+    Json, Router,
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -336,23 +336,24 @@ async fn create_app(
     // If from_github is provided, add it as a remote
     if let Some(repo) = payload.from_github {
         // Get the GitHub connection for the user
-        let connection = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
-            Ok(Some(conn)) => conn,
-            Ok(None) => {
-                return (
-                    StatusCode::PRECONDITION_REQUIRED,
-                    "GitHub account not connected. Connect GitHub first.",
-                )
-                    .into_response();
-            }
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to get GitHub connection: {}", e),
-                )
-                    .into_response();
-            }
-        };
+        let connection =
+            match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+                Ok(Some(conn)) => conn,
+                Ok(None) => {
+                    return (
+                        StatusCode::PRECONDITION_REQUIRED,
+                        "GitHub account not connected. Connect GitHub first.",
+                    )
+                        .into_response();
+                }
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to get GitHub connection: {}", e),
+                    )
+                        .into_response();
+                }
+            };
 
         // Verify access to the repository
         let gh_client = github::GitHubClient::new(&connection.access_token);
@@ -377,7 +378,14 @@ async fn create_app(
         };
 
         // Add the remote (pass GitHub token for authentication)
-        if let Err(e) = remote::add::execute(&pool, &payload.name, &repo_info.clone_url, Some(&connection.access_token)).await {
+        if let Err(e) = remote::add::execute(
+            &pool,
+            &payload.name,
+            &repo_info.clone_url,
+            Some(&connection.access_token),
+        )
+        .await
+        {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("App created but failed to add remote: {}", e),
@@ -493,7 +501,8 @@ async fn add_remote(
     let pool = state.read().await.db_pool.clone();
 
     // Get GitHub token for the user (if connected)
-    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await
+    {
         Ok(Some(conn)) => Some(conn.access_token),
         _ => None,
     };
@@ -535,7 +544,8 @@ async fn build_app(
     let pool = state.read().await.db_pool.clone();
 
     // Get GitHub token for the user (if connected)
-    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await {
+    let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await
+    {
         Ok(Some(conn)) => Some(conn.access_token),
         _ => None,
     };
@@ -544,7 +554,8 @@ async fn build_app(
         Ok(build_record) => Json(serde_json::json!({
             "message": format!("App '{}' built", name),
             "build_id": build_record.id
-        })).into_response(),
+        }))
+        .into_response(),
         Err(build::BuildError::AlreadyBuilding(_)) => (
             StatusCode::CONFLICT,
             format!("App '{}' is already building", name),
@@ -640,7 +651,11 @@ async fn get_build_logs(
     let app = match db::app::get_by_name(&pool, &params.name).await {
         Ok(Some(app)) => app,
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, format!("App '{}' not found", params.name)).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                format!("App '{}' not found", params.name),
+            )
+                .into_response();
         }
         Err(e) => {
             return (
@@ -674,7 +689,10 @@ async fn get_build_logs(
     if build.app_id != app.id {
         return (
             StatusCode::NOT_FOUND,
-            format!("Build '{}' not found for app '{}'", params.build_id, params.name),
+            format!(
+                "Build '{}' not found for app '{}'",
+                params.build_id, params.name
+            ),
         )
             .into_response();
     }
@@ -732,6 +750,12 @@ async fn get_build_logs(
                     // Check if build is complete
                     if let Ok(Some(build)) = db::build::get_by_id(&pool, &build_id).await {
                         match build.status {
+                            crate::models::build::BuildStatus::Idle => {
+                                yield Ok::<_, std::convert::Infallible>(
+                                    Event::default().event("done").data("idle")
+                                );
+                                break;
+                            }
                             crate::models::build::BuildStatus::Success => {
                                 yield Ok::<_, std::convert::Infallible>(
                                     Event::default().event("done").data("success")
@@ -902,9 +926,7 @@ struct AuthStatusResponse {
 }
 
 #[instrument(skip(state))]
-async fn auth_status_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> impl IntoResponse {
+async fn auth_status_handler(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
 
     match crate::db::user::count(&pool).await {
@@ -965,7 +987,14 @@ async fn login_handler(
     let pool = state.read().await.db_pool.clone();
     let jwt_secret = state.read().await.jwt_secret.clone();
 
-    match crate::commands::auth::login::execute(&pool, &payload.email, &payload.password, &jwt_secret).await {
+    match crate::commands::auth::login::execute(
+        &pool,
+        &payload.email,
+        &payload.password,
+        &jwt_secret,
+    )
+    .await
+    {
         Ok(response) => Json(response).into_response(),
         Err(e) => match e {
             crate::commands::auth::login::LoginError::InvalidCredentials => {
@@ -1005,7 +1034,8 @@ async fn refresh_token_handler(
     let pool = state.read().await.db_pool.clone();
     let jwt_secret = state.read().await.jwt_secret.clone();
 
-    match crate::commands::auth::refresh::execute(&pool, &payload.refresh_token, &jwt_secret).await {
+    match crate::commands::auth::refresh::execute(&pool, &payload.refresh_token, &jwt_secret).await
+    {
         Ok(tokens) => Json(tokens).into_response(),
         Err(e) => match e {
             crate::commands::auth::refresh::RefreshError::InvalidToken
@@ -1064,9 +1094,7 @@ struct DeviceFlowStartResponse {
 }
 
 #[instrument(skip(state))]
-async fn github_connect_start(
-    State(state): State<Arc<RwLock<AppState>>>,
-) -> impl IntoResponse {
+async fn github_connect_start(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let client_id = match state.read().await.github_client_id.clone() {
         Some(id) => id,
         None => {
