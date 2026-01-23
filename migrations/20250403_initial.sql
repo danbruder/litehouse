@@ -16,9 +16,11 @@ CREATE INDEX IF NOT EXISTS idx_app_name ON app(name);
 CREATE TABLE IF NOT EXISTS build (
     id TEXT PRIMARY KEY NOT NULL,
     app_id TEXT NOT NULL,
-    image_id TEXT NOT NULL,
-    image_tag TEXT NOT NULL,
-    git_commit TEXT NOT NULL,
+    image_id TEXT NULL,
+    image_tag TEXT NULL,
+    git_commit TEXT NULL,
+    log_path TEXT NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
 
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL

@@ -13,6 +13,7 @@ pub enum BuildStatus {
 impl std::fmt::Display for BuildStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            BuildStatus::Idle => write!(f, "idle"),
             BuildStatus::Building => write!(f, "building"),
             BuildStatus::Success => write!(f, "success"),
             BuildStatus::Failed => write!(f, "failed"),
@@ -25,6 +26,7 @@ impl std::str::FromStr for BuildStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "idle" => Ok(BuildStatus::Idle),
             "building" => Ok(BuildStatus::Building),
             "success" => Ok(BuildStatus::Success),
             "failed" => Ok(BuildStatus::Failed),
