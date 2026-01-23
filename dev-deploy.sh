@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SERVER="${LITEHOUSE_SERVER:-server}"
+SERVER="${SERVER:-root@104.248.15.20}"
 
 echo "==> Building static binary..."
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
