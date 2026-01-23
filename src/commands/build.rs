@@ -195,3 +195,91 @@ async fn cleanup_old_builds(pool: &Pool<Sqlite>, app_id: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::models::{App, Remote};
+    use tempfile::TempDir;
+
+    /// Helper to set up test directories for config module
+    fn setup_test_dirs() -> (TempDir, TempDir) {
+        let data_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        crate::config::set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+        (data_dir, config_dir)
+    }
+
+    #[tokio::test]
+    async fn test_build_app_not_found() {
+        let pool = get_test_pool().await;
+
+        let result = execute(&pool, "nonexistent-app", None).await;
+
+        assert!(matches!(result, Err(BuildError::AppNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn test_build_already_building() {
+        let pool = get_test_pool().await;
+
+        // Create app in Building state
+        let mut app = App::new("test-building-app", 8000).unwrap();
+        app.state = AppState::Building;
+        db::app::save(&pool, &app).await.unwrap();
+
+        let result = execute(&pool, "test-building-app", None).await;
+
+        assert!(matches!(result, Err(BuildError::AlreadyBuilding(_))));
+    }
+
+    #[tokio::test]
+    async fn test_build_no_remote_configured() {
+        let pool = get_test_pool().await;
+
+        // Create app without remote
+        let app = App::new("test-no-remote-app", 8001).unwrap();
+        db::app::save(&pool, &app).await.unwrap();
+
+        let result = execute(&pool, "test-no-remote-app", None).await;
+
+        assert!(matches!(result, Err(BuildError::AppNotConfigured(_))));
+    }
+
+    #[tokio::test]
+    async fn test_build_starts_and_creates_build_record() {
+        let pool = get_test_pool().await;
+        let (_data_dir, _config_dir) = setup_test_dirs();
+
+        // Create app
+        let app = App::new("test-build-app", 8002).unwrap();
+        db::app::save(&pool, &app).await.unwrap();
+
+        // Create remote - use a fake git repo path
+        let remote = Remote::new(
+            &app.id,
+            "origin",
+            "https://github.com/test/repo.git",
+            "main",
+            "/tmp/test-build-dir",
+        );
+        db::remote::save(&pool, &remote).await.unwrap();
+
+        // Execute build - this should start the build and return immediately
+        let result = execute(&pool, "test-build-app", None).await;
+
+        // Build should start successfully (returns a build record)
+        assert!(result.is_ok(), "Build should start: {:?}", result.err());
+        let build = result.unwrap();
+
+        // Verify build record was created
+        assert!(!build.id.is_empty());
+        assert_eq!(build.app_id, app.id);
+        assert!(build.log_path.is_some());
+
+        // Verify app state changed to Building
+        let updated_app = db::app::get_by_name(&pool, "test-build-app").await.unwrap().unwrap();
+        assert_eq!(updated_app.state, AppState::Building);
+    }
+}
