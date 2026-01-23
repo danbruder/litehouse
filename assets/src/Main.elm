@@ -586,9 +586,27 @@ containsClearToken effect =
 -}
 updateSharedFromEffect : Shared.Model -> Effect.Effect msg -> Shared.Model
 updateSharedFromEffect shared effect =
-    -- For now, no updates needed here
-    -- GitHub status updates happen through dashboard messages
-    shared
+    case effect of
+        Effect.UpdateGitHubStatus status ->
+            let
+                sharedStatus =
+                    case status of
+                        Effect.GitHubUnknown ->
+                            Shared.GitHubUnknown
+
+                        Effect.GitHubNotConnected ->
+                            Shared.GitHubNotConnected
+
+                        Effect.GitHubConnected username ->
+                            Shared.GitHubConnected username
+            in
+            Shared.update (Shared.SetGitHubStatus sharedStatus) shared
+
+        Effect.Batch effects ->
+            List.foldl (\eff acc -> updateSharedFromEffect acc eff) shared effects
+
+        _ ->
+            shared
 
 
 
@@ -687,6 +705,10 @@ performEffect navKey effect =
 
         Effect.CreateAppWithRepo token name repo toMsg ->
             createAppWithRepoHttp token name repo toMsg
+
+        Effect.UpdateGitHubStatus _ ->
+            -- Handled by updateSharedFromEffect, no Cmd needed
+            Cmd.none
 
 
 

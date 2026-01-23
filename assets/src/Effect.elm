@@ -18,6 +18,7 @@ module Effect exposing
     , GitHubStatusResponse
     , DeviceFlowStartResponse
     , RepoInfo
+    , GitHubStatus(..)
     )
 
 {-| The Effect pattern allows us to return a custom type from update functions
@@ -78,6 +79,8 @@ type Effect msg
     | FetchRepos String (Result String (List RepoInfo) -> msg)
     | CreateApp String String (Result String AppInfo -> msg)
     | CreateAppWithRepo String String String (Result String AppInfo -> msg)
+      -- Shared state updates
+    | UpdateGitHubStatus GitHubStatus
 
 
 -- HELPER TYPES (mirrored from Main.elm for now)
@@ -189,6 +192,12 @@ type alias RepoInfo =
     }
 
 
+type GitHubStatus
+    = GitHubUnknown
+    | GitHubNotConnected
+    | GitHubConnected String
+
+
 -- CONSTRUCTORS
 
 
@@ -297,3 +306,6 @@ map fn effect =
 
         CreateAppWithRepo token name repo toMsg ->
             CreateAppWithRepo token name repo (toMsg >> fn)
+
+        UpdateGitHubStatus status ->
+            UpdateGitHubStatus status

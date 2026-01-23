@@ -197,29 +197,54 @@ update shared msg model =
                     )
 
         GotGitHubStatus result ->
-            case result of
-                Ok response ->
-                    let
-                        status =
-                            if response.connected then
-                                case response.username of
-                                    Just username ->
-                                        Shared.GitHubConnected username
+            case ( result, model.view, shared.token ) of
+                ( Ok response, CreateAppView createState, Just token ) ->
+                    if response.connected then
+                        let
+                            username =
+                                Maybe.withDefault "" response.username
 
-                                    Nothing ->
-                                        Shared.GitHubConnected ""
+                            status =
+                                Effect.GitHubConnected username
+                        in
+                        ( { model
+                            | view = CreateAppView { createState | step = SelectRepo [] "", error = Nothing }
+                          }
+                        , Effect.batch
+                            [ Effect.UpdateGitHubStatus status
+                            , Effect.FetchRepos token GotRepoList
+                            ]
+                        )
 
-                            else
-                                Shared.GitHubNotConnected
-                    in
-                    ( model
+                    else
+                        ( { model
+                            | view =
+                                CreateAppView
+                                    { createState
+                                        | step =
+                                            ConnectGitHub
+                                                { userCode = ""
+                                                , verificationUri = ""
+                                                , deviceCode = ""
+                                                , expiresIn = 0
+                                                , interval = 0
+                                                , polling = False
+                                                }
+                                        , error = Nothing
+                                    }
+                          }
+                        , Effect.UpdateGitHubStatus Effect.GitHubNotConnected
+                        )
+
+                ( Err _, CreateAppView createState, _ ) ->
+                    ( { model
+                        | view = CreateAppView { createState | step = EnterName, error = Just "Failed to check GitHub connection" }
+                      }
                     , Effect.none
                     )
 
-                Err _ ->
-                    ( model
-                    , Effect.none
-                    )
+                _ ->
+                    ( model, Effect.none )
 
         ShowCreateApp ->
             ( { model | view = CreateAppView emptyCreateAppState }
