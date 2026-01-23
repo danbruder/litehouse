@@ -30,6 +30,10 @@ enum Commands {
         /// Specific version to upgrade to (default: latest)
         #[arg(long)]
         version: Option<String>,
+
+        /// Path to a local binary to use instead of downloading
+        #[arg(long)]
+        from_path: Option<String>,
     },
 
     /// Create a new app
@@ -232,8 +236,8 @@ pub async fn run() -> Result<()> {
             domain,
             skip_verify,
         } => crate::commands::install::execute(&domain, skip_verify).await,
-        Commands::Upgrade { version } => {
-            crate::commands::upgrade::execute(version.as_deref()).await
+        Commands::Upgrade { version, from_path } => {
+            crate::commands::upgrade::execute(version.as_deref(), from_path.as_deref()).await
         }
         Commands::Serve => {
             let config = ServerConfig::load()?;

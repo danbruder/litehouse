@@ -121,7 +121,7 @@ fn cleanup_temp_dir(binary_path: &str) -> Result<()> {
 }
 
 #[instrument]
-pub async fn execute(version: Option<&str>) -> Result<()> {
+pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<()> {
     info!("Starting litehouse upgrade");
 
     // Check if running as root
@@ -133,7 +133,7 @@ pub async fn execute(version: Option<&str>) -> Result<()> {
     let multi = MultiProgress::new();
 
     // Create progress bar for phases
-    let total_phases = 4;
+    let total_phases = if from_path.is_some() { 3 } else { 4 };
     let pb = multi.add(ProgressBar::new(total_phases));
     pb.set_style(
         ProgressStyle::default_bar()
@@ -157,13 +157,26 @@ pub async fn execute(version: Option<&str>) -> Result<()> {
     info!("Current version: {}", current_version.trim());
     println!("Current version: {}", current_version.trim());
 
-    // Phase 1: Download new binary
-    pb.set_message("Downloading new binary...");
-    let binary_path = match download_binary(version, Some(&log_window)) {
-        Ok(path) => path,
-        Err(e) => {
-            pb.finish_with_message("❌ Download failed");
-            return Err(e);
+    // Phase 1: Get binary (either from local path or download)
+    let binary_path = if let Some(path) = from_path {
+        pb.set_message("Using local binary...");
+        log_window.set_message(format!("Using binary from: {}", path));
+
+        // Verify the file exists
+        if !std::path::Path::new(path).exists() {
+            pb.finish_with_message("❌ Binary not found");
+            anyhow::bail!("Binary not found at path: {}", path);
+        }
+
+        path.to_string()
+    } else {
+        pb.set_message("Downloading new binary...");
+        match download_binary(version, Some(&log_window)) {
+            Ok(path) => path,
+            Err(e) => {
+                pb.finish_with_message("❌ Download failed");
+                return Err(e);
+            }
         }
     };
     pb.inc(1);
@@ -172,7 +185,9 @@ pub async fn execute(version: Option<&str>) -> Result<()> {
     pb.set_message("Installing new binary...");
     if let Err(e) = install_binary(&binary_path, Some(&log_window)) {
         pb.finish_with_message("❌ Installation failed");
-        cleanup_temp_dir(&binary_path).ok();
+        if from_path.is_none() {
+            cleanup_temp_dir(&binary_path).ok();
+        }
         return Err(e);
     }
     pb.inc(1);
@@ -182,8 +197,10 @@ pub async fn execute(version: Option<&str>) -> Result<()> {
         .unwrap_or_else(|_| "unknown".to_string());
     info!("New version: {}", new_version.trim());
 
-    // Cleanup temp directory
-    cleanup_temp_dir(&binary_path).ok();
+    // Cleanup temp directory (only if we downloaded)
+    if from_path.is_none() {
+        cleanup_temp_dir(&binary_path).ok();
+    }
 
     // Phase 3: Rebuild docker image
     pb.set_message("Rebuilding litehouse container image...");
