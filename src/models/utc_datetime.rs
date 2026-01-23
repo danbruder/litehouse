@@ -7,7 +7,13 @@ pub struct UtcDateTime(pub DateTime<Utc>);
 
 impl Type<Sqlite> for UtcDateTime {
     fn type_info() -> <Sqlite as sqlx::Database>::TypeInfo {
-        <NaiveDateTime as Type<Sqlite>>::type_info()
+        // SQLite stores datetimes as TEXT, so we declare TEXT as our type
+        <String as Type<Sqlite>>::type_info()
+    }
+
+    fn compatible(ty: &<Sqlite as sqlx::Database>::TypeInfo) -> bool {
+        // Accept both TEXT and DATETIME types for flexibility
+        <String as Type<Sqlite>>::compatible(ty) || <NaiveDateTime as Type<Sqlite>>::compatible(ty)
     }
 }
 
@@ -15,7 +21,12 @@ impl<'r> Decode<'r, Sqlite> for UtcDateTime {
     fn decode(
         value: <Sqlite as sqlx::database::HasValueRef<'r>>::ValueRef,
     ) -> Result<Self, sqlx::error::BoxDynError> {
-        let naive = <NaiveDateTime as Decode<Sqlite>>::decode(value)?;
+        // Decode as string and parse - handles TEXT storage in SQLite
+        let s = <String as Decode<Sqlite>>::decode(value)?;
+        let naive = NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+            .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S"))
+            .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f"))
+            .or_else(|_| NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f"))?;
         Ok(UtcDateTime(naive.and_utc()))
     }
 }
@@ -25,8 +36,9 @@ impl<'q> Encode<'q, Sqlite> for UtcDateTime {
         &self,
         buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
     ) -> sqlx::encode::IsNull {
-        let naive = self.0.naive_utc();
-        <NaiveDateTime as Encode<Sqlite>>::encode_by_ref(&naive, buf)
+        // Encode as TEXT in ISO format for SQLite compatibility
+        let s = self.0.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
+        <String as Encode<Sqlite>>::encode_by_ref(&s, buf)
     }
 }
 
