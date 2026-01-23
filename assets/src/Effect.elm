@@ -50,6 +50,12 @@ type Effect msg
         , interval : Int
         , expiresIn : Int
         }
+    | StartBuildLogsSSE
+        { token : String
+        , appName : String
+        , buildId : String
+        }
+    | StopBuildLogsSSE
       -- HTTP Requests - Auth
     | CheckServerStatus (Result String ServerStatus -> msg)
     | VerifyToken String (Result String TokenVerificationResponse -> msg)
@@ -228,6 +234,12 @@ map fn effect =
 
         StartGitHubSSE config ->
             StartGitHubSSE config
+
+        StartBuildLogsSSE config ->
+            StartBuildLogsSSE config
+
+        StopBuildLogsSSE ->
+            StopBuildLogsSSE
 
         CheckServerStatus toMsg ->
             CheckServerStatus (toMsg >> fn)

@@ -693,6 +693,9 @@ async fn get_build_logs(
     }
 
     if follow {
+        // Clone values for the async stream
+        let build_id = params.build_id.clone();
+
         // Stream logs using SSE
         let stream = async_stream::stream! {
             let file = match File::open(&log_path).await {
@@ -716,9 +719,37 @@ async fn get_build_logs(
             // Continue watching for new lines
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
             let mut last_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+            let mut status_check_counter = 0;
 
             loop {
                 interval.tick().await;
+                status_check_counter += 1;
+
+                // Check build status every 2 seconds (4 ticks at 500ms)
+                if status_check_counter >= 4 {
+                    status_check_counter = 0;
+
+                    // Check if build is complete
+                    if let Ok(Some(build)) = db::build::get_by_id(&pool, &build_id).await {
+                        match build.status {
+                            crate::models::build::BuildStatus::Success => {
+                                yield Ok::<_, std::convert::Infallible>(
+                                    Event::default().event("done").data("success")
+                                );
+                                break;
+                            }
+                            crate::models::build::BuildStatus::Failed => {
+                                yield Ok::<_, std::convert::Infallible>(
+                                    Event::default().event("done").data("failed")
+                                );
+                                break;
+                            }
+                            crate::models::build::BuildStatus::Building => {
+                                // Still building, continue
+                            }
+                        }
+                    }
+                }
 
                 // Check if file has grown
                 let current_size = match std::fs::metadata(&log_path) {

@@ -69,6 +69,8 @@ type alias AppDetailState =
     , buildLogsLoading : Bool
     , actionInProgress : Maybe AppAction
     , error : Maybe String
+    , streamingBuildId : Maybe String
+    , buildLogsStreaming : Bool
     }
 
 
@@ -167,6 +169,8 @@ type Msg
     | GotBuilds (Result String (List Effect.BuildInfo))
     | SelectBuild String
     | GotBuildLogs (Result String String)
+      -- Build logs streaming
+    | GotBuildLogsSSEEvent Decode.Value
 
 
 update : Shared.Model -> Msg -> Model -> ( Model, Effect Msg )
@@ -521,6 +525,20 @@ update shared msg model =
         GotAppDetail result ->
             case result of
                 Ok app ->
+                    -- Preserve streaming state if we're already on this app's detail view
+                    let
+                        ( streamingBuildId, buildLogsStreaming, buildLogs ) =
+                            case model.view of
+                                AppDetailView detailState ->
+                                    if detailState.app.name == app.name then
+                                        ( detailState.streamingBuildId, detailState.buildLogsStreaming, detailState.buildLogs )
+
+                                    else
+                                        ( Nothing, False, "" )
+
+                                _ ->
+                                    ( Nothing, False, "" )
+                    in
                     ( { model
                         | view =
                             AppDetailView
@@ -530,10 +548,12 @@ update shared msg model =
                                 , logsView = RuntimeLogs
                                 , builds = []
                                 , selectedBuildId = Nothing
-                                , buildLogs = ""
+                                , buildLogs = buildLogs
                                 , buildLogsLoading = False
                                 , actionInProgress = Nothing
                                 , error = Nothing
+                                , streamingBuildId = streamingBuildId
+                                , buildLogsStreaming = buildLogsStreaming
                                 }
                       }
                     , Effect.none
@@ -544,8 +564,22 @@ update shared msg model =
                     ( model, Effect.none )
 
         BackToApps ->
+            -- Stop any streaming when navigating away
+            let
+                stopStreamEffect =
+                    case model.view of
+                        AppDetailView detailState ->
+                            if detailState.buildLogsStreaming then
+                                Effect.StopBuildLogsSSE
+
+                            else
+                                Effect.none
+
+                        _ ->
+                            Effect.none
+            in
             ( { model | view = AppsListView }
-            , Effect.PushUrl "/dashboard"
+            , Effect.batch [ stopStreamEffect, Effect.PushUrl "/dashboard" ]
             )
 
         RefreshAppDetail ->
@@ -680,15 +714,40 @@ update shared msg model =
             case ( model.view, shared.token ) of
                 ( AppDetailView detailState, Just token ) ->
                     case result of
-                        Ok _ ->
-                            ( { model
-                                | view = AppDetailView { detailState | actionInProgress = Nothing }
-                              }
-                            , Effect.batch
-                                [ Effect.FetchAppDetail token detailState.app.name GotAppDetail
-                                , Effect.FetchBuilds token detailState.app.name GotBuilds
-                                ]
-                            )
+                        Ok responseJson ->
+                            -- Parse build_id from JSON response: {"message": "...", "build_id": "..."}
+                            case Decode.decodeString (Decode.field "build_id" Decode.string) responseJson of
+                                Ok buildId ->
+                                    -- Start streaming build logs
+                                    ( { model
+                                        | view =
+                                            AppDetailView
+                                                { detailState
+                                                    | actionInProgress = Just Building
+                                                    , logsView = BuildLogs
+                                                    , buildLogs = ""
+                                                    , streamingBuildId = Just buildId
+                                                    , buildLogsStreaming = True
+                                                    , selectedBuildId = Just buildId
+                                                }
+                                      }
+                                    , Effect.StartBuildLogsSSE
+                                        { token = token
+                                        , appName = detailState.app.name
+                                        , buildId = buildId
+                                        }
+                                    )
+
+                                Err _ ->
+                                    -- Couldn't parse build_id, fall back to old behavior
+                                    ( { model
+                                        | view = AppDetailView { detailState | actionInProgress = Nothing }
+                                      }
+                                    , Effect.batch
+                                        [ Effect.FetchAppDetail token detailState.app.name GotAppDetail
+                                        , Effect.FetchBuilds token detailState.app.name GotBuilds
+                                        ]
+                                    )
 
                         Err err ->
                             ( { model
@@ -877,6 +936,74 @@ update shared msg model =
                               }
                             , Effect.none
                             )
+
+                _ ->
+                    ( model, Effect.none )
+
+        GotBuildLogsSSEEvent value ->
+            case ( model.view, shared.token ) of
+                ( AppDetailView detailState, Just token ) ->
+                    case Decode.decodeValue sseEventDecoder value of
+                        Ok event ->
+                            case event.eventType of
+                                "message" ->
+                                    -- Append log line
+                                    let
+                                        newLogs =
+                                            if String.isEmpty detailState.buildLogs then
+                                                event.data
+
+                                            else
+                                                detailState.buildLogs ++ "\n" ++ event.data
+                                    in
+                                    ( { model
+                                        | view =
+                                            AppDetailView
+                                                { detailState | buildLogs = newLogs }
+                                      }
+                                    , Effect.none
+                                    )
+
+                                "done" ->
+                                    -- Build completed, stop streaming and refresh
+                                    ( { model
+                                        | view =
+                                            AppDetailView
+                                                { detailState
+                                                    | actionInProgress = Nothing
+                                                    , buildLogsStreaming = False
+                                                    , streamingBuildId = Nothing
+                                                }
+                                      }
+                                    , Effect.batch
+                                        [ Effect.StopBuildLogsSSE
+                                        , Effect.FetchAppDetail token detailState.app.name GotAppDetail
+                                        , Effect.FetchBuilds token detailState.app.name GotBuilds
+                                        ]
+                                    )
+
+                                "error" ->
+                                    -- Error occurred, stop streaming
+                                    ( { model
+                                        | view =
+                                            AppDetailView
+                                                { detailState
+                                                    | actionInProgress = Nothing
+                                                    , buildLogsStreaming = False
+                                                    , streamingBuildId = Nothing
+                                                    , error = Just ("Build error: " ++ event.data)
+                                                }
+                                      }
+                                    , Effect.StopBuildLogsSSE
+                                    )
+
+                                _ ->
+                                    -- Unknown event type, ignore
+                                    ( model, Effect.none )
+
+                        Err _ ->
+                            -- Failed to decode event, ignore
+                            ( model, Effect.none )
 
                 _ ->
                     ( model, Effect.none )
@@ -1332,10 +1459,22 @@ viewLogsContent state =
                     [ text state.logs ]
 
         BuildLogs ->
-            if state.actionInProgress == Just Building then
-                div [ class "flex items-center justify-center gap-3 py-10 text-litehouse-muted" ]
-                    [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
-                    , span [] [ text "Building..." ]
+            if state.buildLogsStreaming then
+                -- Show streaming build logs with indicator
+                div []
+                    [ div [ class "flex items-center gap-2 mb-2 text-litehouse-warning" ]
+                        [ div [ class "w-4 h-4 border-2 border-litehouse-warning/30 border-t-litehouse-warning rounded-full animate-spin-slow" ] []
+                        , span [ class "text-sm font-medium" ] [ text "Building..." ]
+                        ]
+                    , pre [ class "bg-gray-900 text-gray-300 font-mono text-xs p-4 rounded-xl overflow-auto max-h-96 whitespace-pre-wrap break-all", id "build-logs-stream" ]
+                        [ text
+                            (if String.isEmpty state.buildLogs then
+                                "Waiting for build output..."
+
+                             else
+                                state.buildLogs
+                            )
+                        ]
                     ]
 
             else if state.buildLogsLoading then
@@ -1344,7 +1483,7 @@ viewLogsContent state =
                     , span [] [ text "Loading build logs..." ]
                     ]
 
-            else if List.isEmpty state.builds then
+            else if List.isEmpty state.builds && state.streamingBuildId == Nothing then
                 div [ class "py-10 text-center text-litehouse-muted" ]
                     [ text "No builds yet. Click Build to create your first build." ]
 

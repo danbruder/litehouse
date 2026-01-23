@@ -43,6 +43,15 @@ port startGitHubSSE : { token : String, deviceCode : String, interval : Int, exp
 port gitHubSSEEvent : (Decode.Value -> msg) -> Sub msg
 
 
+port startBuildLogsSSE : { token : String, appName : String, buildId : String } -> Cmd msg
+
+
+port stopBuildLogsSSE : () -> Cmd msg
+
+
+port buildLogsSSEEvent : (Decode.Value -> msg) -> Sub msg
+
+
 
 -- MAIN
 
@@ -135,6 +144,7 @@ type Msg
     | RefreshTokenReceived (Maybe String)
     | GotTokenRefresh (Result Http.Error TokenPair)
     | GitHubSSEEvent Decode.Value
+    | BuildLogsSSEEvent Decode.Value
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -433,6 +443,21 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
+        BuildLogsSSEEvent value ->
+            -- Forward to Dashboard
+            case model.page of
+                Dashboard pageModel ->
+                    let
+                        ( newPageModel, effect ) =
+                            Page.Dashboard.update model.shared (Page.Dashboard.GotBuildLogsSSEEvent value) pageModel
+                    in
+                    ( { model | page = Dashboard newPageModel }
+                    , performEffect model.shared.navKey (Effect.map DashboardMsg effect)
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- HANDLE PAGE EFFECTS
@@ -599,6 +624,12 @@ performEffect navKey effect =
 
         Effect.StartGitHubSSE config ->
             startGitHubSSE config
+
+        Effect.StartBuildLogsSSE config ->
+            startBuildLogsSSE config
+
+        Effect.StopBuildLogsSSE ->
+            stopBuildLogsSSE ()
 
         Effect.CheckServerStatus toMsg ->
             checkServerStatusHttp
@@ -1168,4 +1199,5 @@ subscriptions model =
     Sub.batch
         [ refreshTokenReceived RefreshTokenReceived
         , gitHubSSEEvent GitHubSSEEvent
+        , buildLogsSSEEvent BuildLogsSSEEvent
         ]
