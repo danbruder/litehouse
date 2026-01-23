@@ -1,7 +1,6 @@
 use crate::config;
-use anyhow::Result;
 use sqlx::{Pool, Sqlite};
-use tracing::{info, instrument};
+use tracing::{info, instrument, error};
 
 use crate::db;
 use crate::git;
@@ -27,7 +26,8 @@ pub enum BuildError {
 
 type BuildResult<T> = Result<T, BuildError>;
 
-// Build an app
+/// Start an async build for an app. Returns immediately with a Build record that has status=building.
+/// The actual build runs in a background task.
 #[instrument(skip(pool, github_token))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, github_token: Option<&str>) -> BuildResult<Build> {
     // Get app
@@ -40,43 +40,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str, github_token: Option<&
         return Err(BuildError::AlreadyBuilding(app_name.to_string()));
     }
 
-    // Save original state to restore on failure
-    let original_state = app.state;
-
-    // Set state to Building
-    app.state = AppState::Building;
-    db::app::save(pool, &app).await?;
-
-    // Run the build, capturing result to handle state transitions
-    let build_result = do_build(pool, &app, github_token).await;
-
-    // Restore state based on result
-    match &build_result {
-        Ok(_) => {
-            // Keep the state as it was (or set to stopped if it was created)
-            app.state = if original_state == AppState::Created {
-                AppState::Stopped
-            } else {
-                original_state
-            };
-        }
-        Err(_) => {
-            app.state = AppState::Failed;
-        }
-    }
-    db::app::save(pool, &app).await?;
-
-    build_result
-}
-
-// Internal build logic
-async fn do_build(
-    pool: &Pool<Sqlite>,
-    app: &crate::models::App,
-    github_token: Option<&str>,
-) -> BuildResult<Build> {
-    use std::path::Path;
-
+    // Verify remote is configured before we start
     let remote = db::remote::get_by_app(pool, &app.id).await.map_err(|_| {
         BuildError::AppNotConfigured(format!(
             "Remote configuration for app '{}' not found",
@@ -84,39 +48,114 @@ async fn do_build(
         ))
     })?;
 
-    let build_dir = config::get_app_build_dir(&app.name)?;
+    // Save original state to restore on failure
+    let original_state = app.state.clone();
 
-    let git_result = git::pull(&remote, &build_dir, github_token).await?;
+    // Set state to Building
+    app.state = AppState::Building;
+    db::app::save(pool, &app).await?;
 
-    // Generate build ID upfront so we can create the log file
-    let build_id = uuid::Uuid::new_v4().to_string();
-    let log_path = config::get_build_log_path(&app.name, &build_id)?;
+    // Create build record upfront with status=building
+    let log_path = config::get_build_log_path(&app.name, &uuid::Uuid::new_v4().to_string())?;
     let log_path_str = log_path.to_string_lossy().to_string();
+    let build = Build::new_building(app.id.clone(), log_path_str);
+    db::build::save(pool, &build).await?;
 
-    let tag = format!("{}:{}", app.name, &git_result.commit);
-    let image_id = docker::build_with_log(&build_dir.to_str().unwrap(), &tag, Some(Path::new(&log_path)))
-        .await
-        .map_err(|e| BuildError::AppNotConfigured(format!("Build failed: {}", e)))?;
+    // Spawn background task to do the actual build
+    let pool_clone = pool.clone();
+    let build_id = build.id.clone();
+    let app_id = app.id.clone();
+    let app_name_clone = app.name.clone();
+    let github_token_owned = github_token.map(|s| s.to_string());
+
+    tokio::spawn(async move {
+        let result = do_build(
+            &pool_clone,
+            &build_id,
+            &app_id,
+            &app_name_clone,
+            &remote,
+            github_token_owned.as_deref(),
+        ).await;
+
+        // Update app state based on result
+        if let Ok(Some(mut app)) = db::app::get_by_id(&pool_clone, &app_id).await {
+            match result {
+                Ok(_) => {
+                    app.state = if original_state == AppState::Created {
+                        AppState::Stopped
+                    } else {
+                        original_state
+                    };
+                }
+                Err(ref e) => {
+                    error!("Build failed for app '{}': {}", app_name_clone, e);
+                    app.state = AppState::Failed;
+                }
+            }
+            if let Err(e) = db::app::save(&pool_clone, &app).await {
+                error!("Failed to update app state after build: {}", e);
+            }
+        }
+
+        // Cleanup old builds
+        cleanup_old_builds(&pool_clone, &app_id).await;
+    });
+
+    Ok(build)
+}
+
+/// Internal build logic - runs in background task
+async fn do_build(
+    pool: &Pool<Sqlite>,
+    build_id: &str,
+    _app_id: &str,
+    app_name: &str,
+    remote: &crate::models::Remote,
+    github_token: Option<&str>,
+) -> BuildResult<()> {
+    use std::path::Path;
+
+    // Get the build record to get log path
+    let mut build = db::build::get_by_id(pool, build_id)
+        .await?
+        .ok_or_else(|| BuildError::AppNotConfigured("Build record not found".to_string()))?;
+
+    let log_path = build.log_path.clone()
+        .ok_or_else(|| BuildError::AppNotConfigured("Build log path not set".to_string()))?;
+
+    let build_dir = config::get_app_build_dir(app_name)?;
+
+    // Pull the git repo
+    let git_result = match git::pull(remote, &build_dir, github_token).await {
+        Ok(result) => result,
+        Err(e) => {
+            // Mark build as failed
+            build.mark_failed();
+            let _ = db::build::save(pool, &build).await;
+            return Err(BuildError::GitError(e));
+        }
+    };
+
+    // Build the Docker image
+    let tag = format!("{}:{}", app_name, &git_result.commit);
+    let image_id = match docker::build_with_log(build_dir.to_str().unwrap(), &tag, Some(Path::new(&log_path))).await {
+        Ok(id) => id,
+        Err(e) => {
+            // Mark build as failed
+            build.mark_failed();
+            let _ = db::build::save(pool, &build).await;
+            return Err(BuildError::AppNotConfigured(format!("Build failed: {}", e)));
+        }
+    };
 
     info!("Built image with tag: {} and ID: {}", tag, image_id);
 
-    let now = crate::models::now();
-    let build = Build {
-        id: build_id,
-        app_id: app.id.clone(),
-        image_id,
-        image_tag: tag,
-        git_commit: git_result.commit,
-        log_path: Some(log_path_str),
-        created_at: now.clone(),
-        updated_at: now,
-    };
+    // Mark build as successful
+    build.mark_success(image_id, tag, git_result.commit);
     db::build::save(pool, &build).await?;
 
-    // Cleanup old builds (keep last 30)
-    cleanup_old_builds(pool, &app.id).await;
-
-    Ok(build)
+    Ok(())
 }
 
 /// Cleanup old builds, keeping only the most recent MAX_BUILDS_TO_KEEP builds

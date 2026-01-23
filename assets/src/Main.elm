@@ -8,6 +8,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Time
 import Url
 import Url.Parser as Parser exposing ((</>), Parser, oneOf, s, string)
 
@@ -212,8 +213,9 @@ type LogsView
 type alias BuildInfo =
     { id : String
     , appId : String
-    , imageTag : String
-    , gitCommit : String
+    , imageTag : Maybe String
+    , gitCommit : Maybe String
+    , status : String
     , createdAt : String
     }
 
@@ -355,6 +357,17 @@ subscriptions model =
                             _ ->
                                 Sub.none
 
+                    AppDetailView detailState ->
+                        -- Poll for build logs and status while building
+                        if detailState.actionInProgress == Just Building then
+                            Sub.batch
+                                [ Time.every 1000 (\_ -> PollBuildLogs)
+                                , Time.every 2000 (\_ -> PollBuildStatus)
+                                ]
+
+                        else
+                            Sub.none
+
                     _ ->
                         Sub.none
 
@@ -417,7 +430,7 @@ type Msg
     | CancelDeleteApp
     | GotAppStarted (Result Http.Error String)
     | GotAppStopped (Result Http.Error String)
-    | GotAppBuilt (Result Http.Error String)
+    | GotAppBuilt (Result Http.Error BuildStartResponse)
     | GotAppDeleted (Result Http.Error String)
     | FetchLogs
     | GotLogs (Result Http.Error String)
@@ -426,6 +439,14 @@ type Msg
     | GotBuilds (Result Http.Error (List BuildInfo))
     | SelectBuild String
     | GotBuildLogs (Result Http.Error String)
+    | PollBuildLogs
+    | PollBuildStatus
+
+
+type alias BuildStartResponse =
+    { message : String
+    , buildId : String
+    }
 
 
 type alias ServerStatus =
@@ -1622,20 +1643,22 @@ update msg model =
                     case state.view of
                         AppDetailView detailState ->
                             case result of
-                                Ok _ ->
+                                Ok response ->
+                                    -- Build started - select the new build and start polling logs
                                     ( { model
                                         | page =
                                             Dashboard
                                                 { state
                                                     | view =
                                                         AppDetailView
-                                                            { detailState | actionInProgress = Nothing }
+                                                            { detailState
+                                                                | selectedBuildId = Just response.buildId
+                                                                , buildLogs = ""
+                                                                , buildLogsLoading = True
+                                                            }
                                                 }
                                       }
-                                    , Cmd.batch
-                                        [ fetchAppDetail state.token detailState.app.name
-                                        , fetchBuilds state.token detailState.app.name
-                                        ]
+                                    , fetchBuildLogs state.token detailState.app.name response.buildId
                                     )
 
                                 Err err ->
@@ -1651,7 +1674,7 @@ update msg model =
                                                             }
                                                 }
                                       }
-                                    , fetchBuilds state.token detailState.app.name
+                                    , Cmd.none
                                     )
 
                         _ ->
@@ -1837,14 +1860,39 @@ update msg model =
                             case result of
                                 Ok builds ->
                                     let
-                                        -- Auto-select the most recent build (first in list)
-                                        latestBuildId =
-                                            List.head builds |> Maybe.map .id
+                                        -- Keep selected build if we have one, otherwise select latest
+                                        selectedBuildId =
+                                            case detailState.selectedBuildId of
+                                                Just id ->
+                                                    Just id
 
-                                        -- If we're in build logs view, fetch logs for latest build
+                                                Nothing ->
+                                                    List.head builds |> Maybe.map .id
+
+                                        -- Check if selected build finished (status changed from building)
+                                        selectedBuild =
+                                            selectedBuildId
+                                                |> Maybe.andThen (\id -> List.filter (\b -> b.id == id) builds |> List.head)
+
+                                        buildFinished =
+                                            case ( detailState.actionInProgress, selectedBuild ) of
+                                                ( Just Building, Just build ) ->
+                                                    build.status /= "building"
+
+                                                _ ->
+                                                    False
+
+                                        newActionInProgress =
+                                            if buildFinished then
+                                                Nothing
+
+                                            else
+                                                detailState.actionInProgress
+
+                                        -- If we're in build logs view and not currently building, fetch logs
                                         ( buildLogsLoading, cmd ) =
-                                            case ( detailState.logsView, latestBuildId ) of
-                                                ( BuildLogs, Just buildId ) ->
+                                            case ( detailState.logsView, selectedBuildId, detailState.actionInProgress ) of
+                                                ( BuildLogs, Just buildId, Nothing ) ->
                                                     ( True
                                                     , fetchBuildLogs state.token detailState.app.name buildId
                                                     )
@@ -1860,8 +1908,9 @@ update msg model =
                                                         AppDetailView
                                                             { detailState
                                                                 | builds = builds
-                                                                , selectedBuildId = latestBuildId
+                                                                , selectedBuildId = selectedBuildId
                                                                 , buildLogsLoading = buildLogsLoading
+                                                                , actionInProgress = newActionInProgress
                                                             }
                                                 }
                                       }
@@ -1954,6 +2003,44 @@ update msg model =
                                       }
                                     , Cmd.none
                                     )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PollBuildLogs ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case detailState.selectedBuildId of
+                                Just buildId ->
+                                    ( model
+                                    , fetchBuildLogs state.token detailState.app.name buildId
+                                    )
+
+                                Nothing ->
+                                    ( model, Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PollBuildStatus ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( model
+                            , Cmd.batch
+                                [ fetchBuilds state.token detailState.app.name
+                                , fetchAppDetail state.token detailState.app.name
+                                ]
+                            )
 
                         _ ->
                             ( model, Cmd.none )
@@ -2168,10 +2255,17 @@ buildAppRequest token appName =
         , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
         , url = "/api/apps/" ++ appName ++ "/build"
         , body = Http.emptyBody
-        , expect = Http.expectString GotAppBuilt
-        , timeout = Just 300000
+        , expect = Http.expectJson GotAppBuilt buildStartResponseDecoder
+        , timeout = Nothing
         , tracker = Nothing
         }
+
+
+buildStartResponseDecoder : Decode.Decoder BuildStartResponse
+buildStartResponseDecoder =
+    Decode.map2 BuildStartResponse
+        (Decode.field "message" Decode.string)
+        (Decode.field "build_id" Decode.string)
 
 
 deleteAppRequest : String -> String -> Cmd Msg
@@ -2239,11 +2333,12 @@ serverStatusDecoder =
 
 buildInfoDecoder : Decode.Decoder BuildInfo
 buildInfoDecoder =
-    Decode.map5 BuildInfo
+    Decode.map6 BuildInfo
         (Decode.field "id" Decode.string)
         (Decode.field "app_id" Decode.string)
-        (Decode.field "image_tag" Decode.string)
-        (Decode.field "git_commit" Decode.string)
+        (Decode.field "image_tag" (Decode.nullable Decode.string))
+        (Decode.field "git_commit" (Decode.nullable Decode.string))
+        (Decode.field "status" Decode.string)
         (Decode.field "created_at" Decode.string)
 
 
@@ -2990,11 +3085,32 @@ viewAppDetail state =
                         ]
                         (List.map
                             (\build ->
+                                let
+                                    commitStr =
+                                        build.gitCommit |> Maybe.map (String.left 8) |> Maybe.withDefault "pending"
+
+                                    tagStr =
+                                        build.imageTag |> Maybe.withDefault "building"
+
+                                    statusIndicator =
+                                        case build.status of
+                                            "building" ->
+                                                "🔨 "
+
+                                            "success" ->
+                                                "✓ "
+
+                                            "failed" ->
+                                                "✗ "
+
+                                            _ ->
+                                                ""
+                                in
                                 option
                                     [ value build.id
                                     , selected (state.selectedBuildId == Just build.id)
                                     ]
-                                    [ text (String.left 8 build.gitCommit ++ " - " ++ build.imageTag ++ " (" ++ formatBuildDate build.createdAt ++ ")") ]
+                                    [ text (statusIndicator ++ commitStr ++ " - " ++ tagStr ++ " (" ++ formatBuildDate build.createdAt ++ ")") ]
                             )
                             state.builds
                         )

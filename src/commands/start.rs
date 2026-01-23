@@ -76,8 +76,10 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
     tracing::info!("Mounting app data directory: {} -> /app/data", data_dir.display());
 
     // Start the app with docker
-    tracing::info!("Running {} for {} on port {:?}", &app.name, &build.image_tag, app.port);
-    docker::run_with_port(&app.name, &build.image_tag, app.port, env_vars, volume_binds)
+    let image_tag = build.image_tag.as_ref()
+        .ok_or_else(|| StartError::AppBuildMissing(format!("Build {} has no image tag", build.id)))?;
+    tracing::info!("Running {} for {} on port {:?}", &app.name, image_tag, app.port);
+    docker::run_with_port(&app.name, image_tag, app.port, env_vars, volume_binds)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 

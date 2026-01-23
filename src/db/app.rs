@@ -44,10 +44,27 @@ pub async fn get_by_name(pool: &Pool<Sqlite>, name: &str) -> Result<Option<App>>
         App,
         r#"
             SELECT *
-            FROM app 
+            FROM app
             WHERE name = ?
             "#,
         name
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(app)
+}
+
+/// Get an app by id
+#[instrument(skip(pool))]
+pub async fn get_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Option<App>> {
+    let app = sqlx::query_as!(
+        App,
+        r#"
+            SELECT *
+            FROM app
+            WHERE id = ?
+            "#,
+        id
     )
     .fetch_optional(pool)
     .await?;

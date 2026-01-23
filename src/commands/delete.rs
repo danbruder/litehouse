@@ -41,7 +41,9 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
 
     let build = db::build::get_latest_by_app(pool, &app.id).await?;
     if let Some(build) = build {
-        docker::remove(&build.image_tag).await?;
+        if let Some(image_tag) = &build.image_tag {
+            docker::remove(image_tag).await?;
+        }
     }
 
     // Delete environment variables
