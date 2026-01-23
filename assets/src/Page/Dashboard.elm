@@ -1,11 +1,18 @@
 module Page.Dashboard exposing
     ( Model
     , Msg(..)
+    , DashboardView(..)
+    , CreateAppState
+    , CreateAppStep(..)
+    , GitHubConnectState
+    , SidebarItem(..)
     , init
     , update
     , view
     , save
     , load
+    -- Exposed for testing
+    , handleGotGitHubStatus
     )
 
 import Effect exposing (Effect)
@@ -197,50 +204,16 @@ update shared msg model =
                     )
 
         GotGitHubStatus result ->
-            case ( result, model.view, shared.token ) of
-                ( Ok response, CreateAppView createState, Just token ) ->
-                    if response.connected then
-                        let
-                            username =
-                                Maybe.withDefault "" response.username
-
-                            status =
-                                Effect.GitHubConnected username
-                        in
-                        ( { model
-                            | view = CreateAppView { createState | step = SelectRepo [] "", error = Nothing }
-                          }
-                        , Effect.batch
-                            [ Effect.UpdateGitHubStatus status
-                            , Effect.FetchRepos token GotRepoList
-                            ]
-                        )
-
-                    else
-                        ( { model
-                            | view =
-                                CreateAppView
-                                    { createState
-                                        | step =
-                                            ConnectGitHub
-                                                { userCode = ""
-                                                , verificationUri = ""
-                                                , deviceCode = ""
-                                                , expiresIn = 0
-                                                , interval = 0
-                                                , polling = False
-                                                }
-                                        , error = Nothing
-                                    }
-                          }
-                        , Effect.UpdateGitHubStatus Effect.GitHubNotConnected
-                        )
-
-                ( Err _, CreateAppView createState, _ ) ->
+            case model.view of
+                CreateAppView createState ->
+                    let
+                        ( newStep, newError, effect ) =
+                            handleGotGitHubStatus result createState shared.token
+                    in
                     ( { model
-                        | view = CreateAppView { createState | step = EnterName, error = Just "Failed to check GitHub connection" }
+                        | view = CreateAppView { createState | step = newStep, error = newError }
                       }
-                    , Effect.none
+                    , effect
                     )
 
                 _ ->
@@ -1037,6 +1010,64 @@ update shared msg model =
 -- Note: GitHub SSE subscription is handled by Main.elm
 -- Main subscribes to the gitHubSSEEvent port and forwards events
 -- to the Dashboard's GotGitHubSSEEvent message when appropriate
+
+
+-- TESTABLE HELPERS
+
+
+{-| Pure function to handle GitHub status response. Extracted for testability.
+Takes the GitHub status result, current create state, and auth token.
+Returns the new create state step, any error message, and effects to emit.
+-}
+handleGotGitHubStatus :
+    Result String Effect.GitHubStatusResponse
+    -> CreateAppState
+    -> Maybe String
+    -> ( CreateAppStep, Maybe String, Effect Msg )
+handleGotGitHubStatus result createState maybeToken =
+    case ( result, maybeToken ) of
+        ( Ok response, Just token ) ->
+            if response.connected then
+                let
+                    username =
+                        Maybe.withDefault "" response.username
+
+                    status =
+                        Effect.GitHubConnected username
+                in
+                ( SelectRepo [] ""
+                , Nothing
+                , Effect.batch
+                    [ Effect.UpdateGitHubStatus status
+                    , Effect.FetchRepos token GotRepoList
+                    ]
+                )
+
+            else
+                ( ConnectGitHub
+                    { userCode = ""
+                    , verificationUri = ""
+                    , deviceCode = ""
+                    , expiresIn = 0
+                    , interval = 0
+                    , polling = False
+                    }
+                , Nothing
+                , Effect.UpdateGitHubStatus Effect.GitHubNotConnected
+                )
+
+        ( Err _, _ ) ->
+            ( EnterName
+            , Just "Failed to check GitHub connection"
+            , Effect.none
+            )
+
+        ( Ok _, Nothing ) ->
+            -- No token, can't proceed
+            ( createState.step
+            , Nothing
+            , Effect.none
+            )
 
 
 -- DECODERS
