@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM app \n            WHERE name = ?\n            ",
+  "query": "\n            SELECT *\n            FROM app\n            WHERE id = ?\n            ",
   "describe": {
     "columns": [
       {
@@ -52,5 +52,5 @@
       true
     ]
   },
-  "hash": "e31232081672dec02f8ea45437e936e3dcfe73a130aec83c72bc10938da83cf1"
+  "hash": "6caadc35b5a27e6f73b0c5bf7183e5858ee0ef658ae5ef3944955985c7aa589f"
 }

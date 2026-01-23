@@ -115,3 +115,8 @@ NEXT: Phase 2 - Web UI & GitHub Webhooks
 IDEA: 
 - to make the install feedback better, could have a TUI with parallel streaming logs etc. Or maybe a text visualization happening for each thing / a diagram of what's happening / phases?
 - Or a ASCII based first person driver game where you see billboards and stuff of what's happening on the server.
+
+
+TODOS
+- [ ] Remove old build directories for deleted apps.
+- [ ] Failed to create app: Failed to create app: Invalid app name: YEEEEE. App names must be lowercase alphanumeric with optional hyphens or underscores.

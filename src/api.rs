@@ -562,8 +562,9 @@ async fn build_app(
 struct BuildInfo {
     id: String,
     app_id: String,
-    image_tag: String,
-    git_commit: String,
+    image_tag: Option<String>,
+    git_commit: Option<String>,
+    status: String,
     created_at: String,
 }
 
@@ -598,6 +599,7 @@ async fn list_builds(
                     app_id: b.app_id,
                     image_tag: b.image_tag,
                     git_commit: b.git_commit,
+                    status: b.status.to_string(),
                     created_at: b.created_at.0.to_rfc3339(),
                 })
                 .collect();

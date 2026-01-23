@@ -1,51 +1,80 @@
 use crate::models::{now, UtcDateTime};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildStatus {
+    Building,
+    Success,
+    Failed,
+}
+
+impl std::fmt::Display for BuildStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BuildStatus::Building => write!(f, "building"),
+            BuildStatus::Success => write!(f, "success"),
+            BuildStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl std::str::FromStr for BuildStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "building" => Ok(BuildStatus::Building),
+            "success" => Ok(BuildStatus::Success),
+            "failed" => Ok(BuildStatus::Failed),
+            _ => Err(format!("Unknown build status: {}", s)),
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub struct Build {
     pub id: String,
     pub app_id: String,
-    pub image_id: String,
-    pub image_tag: String,
-    pub git_commit: String,
+    pub image_id: Option<String>,
+    pub image_tag: Option<String>,
+    pub git_commit: Option<String>,
     pub log_path: Option<String>,
+    pub status: BuildStatus,
     pub created_at: UtcDateTime,
     pub updated_at: UtcDateTime,
 }
 
-#[derive(Debug)]
-pub struct BuildInput {
-    pub app_id: String,
-    pub image_id: String,
-    pub image_tag: String,
-    pub git_commit: String,
-    pub log_path: Option<String>,
-}
-
-impl BuildInput {
-    pub fn new(app_id: String, image_id: String, image_tag: String, git_commit: String) -> BuildInput {
-        BuildInput { app_id, image_id, image_tag, git_commit, log_path: None }
-    }
-
-    pub fn with_log_path(mut self, log_path: String) -> BuildInput {
-        self.log_path = Some(log_path);
-        self
-    }
-}
-
 impl Build {
-    pub fn new(input: BuildInput) -> Build {
+    /// Create a new build record in "building" state
+    pub fn new_building(app_id: String, log_path: String) -> Build {
         let now = now();
         Build {
             id: Uuid::new_v4().to_string(),
-            app_id: input.app_id,
-            image_id: input.image_id,
-            image_tag: input.image_tag,
-            git_commit: input.git_commit,
-            log_path: input.log_path,
+            app_id,
+            image_id: None,
+            image_tag: None,
+            git_commit: None,
+            log_path: Some(log_path),
+            status: BuildStatus::Building,
             created_at: now.clone(),
             updated_at: now,
         }
+    }
+
+    /// Mark build as successful with image details
+    pub fn mark_success(&mut self, image_id: String, image_tag: String, git_commit: String) {
+        self.image_id = Some(image_id);
+        self.image_tag = Some(image_tag);
+        self.git_commit = Some(git_commit);
+        self.status = BuildStatus::Success;
+        self.updated_at = now();
+    }
+
+    /// Mark build as failed
+    pub fn mark_failed(&mut self) {
+        self.status = BuildStatus::Failed;
+        self.updated_at = now();
     }
 }

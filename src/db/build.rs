@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::models::Build;
+use crate::models::build::BuildStatus;
 use crate::models::UtcDateTime;
 
 /// Save a build to the database
@@ -10,14 +11,15 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
     let result = sqlx::query(
         r#"
             INSERT INTO build (
-                id, app_id, image_id, image_tag, git_commit, log_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 app_id = excluded.app_id,
                 image_id = excluded.image_id,
                 image_tag = excluded.image_tag,
                 git_commit = excluded.git_commit,
                 log_path = excluded.log_path,
+                status = excluded.status,
                 updated_at = excluded.updated_at
             "#,
     )
@@ -27,6 +29,7 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
     .bind(&build.image_tag)
     .bind(&build.git_commit)
     .bind(&build.log_path)
+    .bind(build.status.to_string())
     .bind(&build.created_at)
     .bind(&build.updated_at)
     .execute(pool)
@@ -41,14 +44,14 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
     Ok(())
 }
 
-/// Get latest build by app id
+/// Get latest successful build by app id
 #[instrument(skip(pool))]
 pub async fn get_latest_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Option<Build>> {
     let row = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
             FROM build
-            WHERE app_id = ?
+            WHERE app_id = ? AND status = 'success'
             ORDER BY created_at DESC
             LIMIT 1
             "#,
@@ -65,7 +68,7 @@ pub async fn get_latest_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Opti
 pub async fn get_by_id(pool: &Pool<Sqlite>, build_id: &str) -> Result<Option<Build>> {
     let row = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
             FROM build
             WHERE id = ?
             "#,
@@ -82,7 +85,7 @@ pub async fn get_by_id(pool: &Pool<Sqlite>, build_id: &str) -> Result<Option<Bui
 pub async fn get_all_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Build>> {
     let rows = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
             FROM build
             WHERE app_id = ?
             ORDER BY created_at DESC
@@ -101,7 +104,7 @@ pub async fn delete_old_builds(pool: &Pool<Sqlite>, app_id: &str, keep_count: i6
     // First get the builds to delete (so we can return them for log cleanup)
     let rows = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
             FROM build
             WHERE app_id = ?
             ORDER BY created_at DESC
@@ -139,6 +142,7 @@ pub async fn delete_old_builds(pool: &Pool<Sqlite>, app_id: &str, keep_count: i6
 /// Helper to convert a row to a Build
 fn build_from_row(row: &sqlx::sqlite::SqliteRow) -> Build {
     use sqlx::Row;
+    let status_str: String = row.get("status");
     Build {
         id: row.get("id"),
         app_id: row.get("app_id"),
@@ -146,6 +150,7 @@ fn build_from_row(row: &sqlx::sqlite::SqliteRow) -> Build {
         image_tag: row.get("image_tag"),
         git_commit: row.get("git_commit"),
         log_path: row.get("log_path"),
+        status: status_str.parse().unwrap_or(BuildStatus::Success),
         created_at: row.get::<UtcDateTime, _>("created_at"),
         updated_at: row.get::<UtcDateTime, _>("updated_at"),
     }

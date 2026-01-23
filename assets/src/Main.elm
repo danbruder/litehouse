@@ -13,6 +13,9 @@ import Page.Login
 import Page.Setup
 import Route
 import Shared
+
+import Time
+
 import Url
 
 
@@ -654,6 +657,44 @@ performEffect navKey effect =
         Effect.CreateAppWithRepo token name repo toMsg ->
             createAppWithRepoHttp token name repo toMsg
 
+        PollBuildLogs ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            case detailState.selectedBuildId of
+                                Just buildId ->
+                                    ( model
+                                    , fetchBuildLogs state.token detailState.app.name buildId
+                                    )
+
+                                Nothing ->
+                                    ( model, Cmd.none )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PollBuildStatus ->
+            case model.page of
+                Dashboard state ->
+                    case state.view of
+                        AppDetailView detailState ->
+                            ( model
+                            , Cmd.batch
+                                [ fetchBuilds state.token detailState.app.name
+                                , fetchAppDetail state.token detailState.app.name
+                                ]
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
 
 
 -- HTTP REQUEST FUNCTIONS
@@ -941,8 +982,9 @@ buildInfoDecoder =
     Decode.map5 Effect.BuildInfo
         (Decode.field "id" Decode.string)
         (Decode.field "app_id" Decode.string)
-        (Decode.field "image_tag" Decode.string)
-        (Decode.field "git_commit" Decode.string)
+        (Decode.field "image_tag" (Decode.nullable Decode.string))
+        (Decode.field "git_commit" (Decode.nullable Decode.string))
+        (Decode.field "status" Decode.string)
         (Decode.field "created_at" Decode.string)
 
 

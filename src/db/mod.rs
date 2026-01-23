@@ -83,22 +83,15 @@ pub async fn init_pool() -> Result<Pool<Sqlite>> {
 }
 
 pub async fn seed() {
-    use crate::models::{Build, BuildInput};
+    use crate::models::Build;
 
     let pool = init_pool().await.unwrap();
 
     let app = App::new("caddy", 8000).unwrap();
     crate::db::app::save(&pool, &app).await.unwrap();
 
-    let input = BuildInput {
-        app_id: app.id,
-        image_id: "1234".to_string(),
-        image_tag: "caddy".to_string(),
-        git_commit: "hey".to_string(),
-        log_path: None,
-    };
-
-    let build = Build::new(input);
+    let mut build = Build::new_building(app.id, "/tmp/caddy.log".to_string());
+    build.mark_success("1234".to_string(), "caddy".to_string(), "hey".to_string());
     crate::db::build::save(&pool, &build).await.unwrap();
 }
 
