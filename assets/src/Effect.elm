@@ -151,8 +151,9 @@ type alias RemoteInfo =
 type alias BuildInfo =
     { id : String
     , appId : String
-    , imageTag : String
-    , gitCommit : String
+    , imageTag : Maybe String
+    , gitCommit : Maybe String
+    , status : String
     , createdAt : String
     }
 

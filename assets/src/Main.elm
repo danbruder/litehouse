@@ -657,44 +657,6 @@ performEffect navKey effect =
         Effect.CreateAppWithRepo token name repo toMsg ->
             createAppWithRepoHttp token name repo toMsg
 
-        PollBuildLogs ->
-            case model.page of
-                Dashboard state ->
-                    case state.view of
-                        AppDetailView detailState ->
-                            case detailState.selectedBuildId of
-                                Just buildId ->
-                                    ( model
-                                    , fetchBuildLogs state.token detailState.app.name buildId
-                                    )
-
-                                Nothing ->
-                                    ( model, Cmd.none )
-
-                        _ ->
-                            ( model, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
-
-        PollBuildStatus ->
-            case model.page of
-                Dashboard state ->
-                    case state.view of
-                        AppDetailView detailState ->
-                            ( model
-                            , Cmd.batch
-                                [ fetchBuilds state.token detailState.app.name
-                                , fetchAppDetail state.token detailState.app.name
-                                ]
-                            )
-
-                        _ ->
-                            ( model, Cmd.none )
-
-                _ ->
-                    ( model, Cmd.none )
-
 
 
 -- HTTP REQUEST FUNCTIONS
@@ -979,7 +941,7 @@ serverStatusDecoder =
 
 buildInfoDecoder : Decode.Decoder Effect.BuildInfo
 buildInfoDecoder =
-    Decode.map5 Effect.BuildInfo
+    Decode.map6 Effect.BuildInfo
         (Decode.field "id" Decode.string)
         (Decode.field "app_id" Decode.string)
         (Decode.field "image_tag" (Decode.nullable Decode.string))

@@ -1298,7 +1298,7 @@ viewAppDetail state =
                                     [ value build.id
                                     , selected (state.selectedBuildId == Just build.id)
                                     ]
-                                    [ text (String.left 8 build.gitCommit ++ " - " ++ build.imageTag ++ " (" ++ formatBuildDate build.createdAt ++ ")") ]
+                                    [ text (String.left 8 (Maybe.withDefault "unknown" build.gitCommit) ++ " - " ++ Maybe.withDefault "no tag" build.imageTag ++ " (" ++ formatBuildDate build.createdAt ++ ")") ]
                             )
                             state.builds
                         )
