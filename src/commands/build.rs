@@ -64,7 +64,6 @@ pub async fn execute(
     let log_path_str = log_path.to_string_lossy().to_string();
     let build = Build::new_building(app.id.clone(), log_path_str);
     db::build::save(pool, &build).await?;
-    panic!("ATD");
 
     // Spawn background task to do the actual build
     let pool_clone = pool.clone();

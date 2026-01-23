@@ -1,10 +1,20 @@
 use litehouse::cli;
 use tracing::info;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
+    // Initialize logging with clean output
+    // Use RUST_LOG env var for verbose output (e.g., RUST_LOG=debug)
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .without_time()
+        .with_level(true)
+        .compact()
+        .init();
 
     info!("Starting Litehouse v{}", env!("CARGO_PKG_VERSION"));
 
