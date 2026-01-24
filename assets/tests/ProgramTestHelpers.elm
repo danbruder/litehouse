@@ -4,8 +4,8 @@ module ProgramTestHelpers exposing
     , ensureHttpRequestWithBody
     , simulateHttpOk
     , simulateHttpError
-    , expectViewHasText
-    , expectViewHasNotText
+    , ensureViewHasText
+    , ensureViewHasNotText
     , clickButton
     , fillIn
     , submitForm
@@ -21,33 +21,35 @@ module ProgramTestHelpers exposing
 These follow best practices for testing Elm applications.
 -}
 
+import Browser
+import Browser.Navigation as Nav
+import Dict
 import Effect
 import Expect
 import Http
 import Json.Encode as Encode
 import Main
 import ProgramTest exposing (ProgramTest)
-import Test.Http
 import Test.Html.Query as Query
 import Test.Html.Selector exposing (text)
+import Url
 
 
 {-| Create a ProgramTest instance for the application with default flags.
-Note: This requires the app to use withSimulatedEffects, but since Main uses Cmd directly,
-we'll need to handle HTTP simulation differently. For now, this is a basic setup.
+Wraps Main.init to match the createApplication signature.
 -}
-createTestProgram : ProgramTest Main.Model Main.Msg (Cmd Main.Msg)
+createTestProgram : ProgramTest (Main.Model ()) Main.Msg (Cmd Main.Msg)
 createTestProgram =
     let
         flags =
             { token = Nothing }
     in
     ProgramTest.createApplication
-        { init = Main.init
+        { init = Main.initForTesting
         , update = Main.update
         , view = Main.view
-        , onUrlChange = \url -> Main.UrlChanged url
-        , onUrlRequest = \request -> Main.LinkClicked request
+        , onUrlChange = Main.UrlChanged
+        , onUrlRequest = Main.LinkClicked
         }
         |> ProgramTest.withBaseUrl "http://localhost"
         |> ProgramTest.start flags
@@ -88,49 +90,62 @@ simulateHttpOk method url responseBody programTest =
 -}
 simulateHttpError : String -> String -> Http.Error -> ProgramTest model msg effect -> ProgramTest model msg effect
 simulateHttpError method url error programTest =
+    let
+        metadata statusCode =
+            { url = url
+            , statusCode = statusCode
+            , statusText = ""
+            , headers = Dict.empty
+            }
+    in
     case error of
         Http.BadStatus statusCode ->
             ProgramTest.simulateHttpResponse method
                 url
-                { statusCode = statusCode
-                , headers = []
-                , body = ""
-                }
+                (Http.BadStatus_ (metadata statusCode) "")
                 programTest
 
         Http.NetworkError ->
             ProgramTest.simulateHttpResponse method
                 url
-                { statusCode = 0
-                , headers = []
-                , body = ""
-                }
+                Http.NetworkError_
                 programTest
 
-        _ ->
+        Http.Timeout ->
             ProgramTest.simulateHttpResponse method
                 url
-                { statusCode = 500
-                , headers = []
-                , body = ""
-                }
+                Http.Timeout_
+                programTest
+
+        Http.BadUrl badUrl ->
+            ProgramTest.simulateHttpResponse method
+                url
+                (Http.BadUrl_ badUrl)
+                programTest
+
+        Http.BadBody body ->
+            ProgramTest.simulateHttpResponse method
+                url
+                (Http.BadStatus_ (metadata 400) body)
                 programTest
 
 
-{-| Expect that the view contains the given text.
+{-| Ensure that the view contains the given text.
+Returns ProgramTest so it can be chained.
 -}
-expectViewHasText : String -> ProgramTest model msg effect -> ProgramTest model msg effect
-expectViewHasText expectedText programTest =
-    ProgramTest.expectView
+ensureViewHasText : String -> ProgramTest model msg effect -> ProgramTest model msg effect
+ensureViewHasText expectedText programTest =
+    ProgramTest.ensureView
         (Query.has [ text expectedText ])
         programTest
 
 
-{-| Expect that the view does not contain the given text.
+{-| Ensure that the view does not contain the given text.
+Returns ProgramTest so it can be chained.
 -}
-expectViewHasNotText : String -> ProgramTest model msg effect -> ProgramTest model msg effect
-expectViewHasNotText unexpectedText programTest =
-    ProgramTest.expectView
+ensureViewHasNotText : String -> ProgramTest model msg effect -> ProgramTest model msg effect
+ensureViewHasNotText unexpectedText programTest =
+    ProgramTest.ensureView
         (Query.hasNot [ text unexpectedText ])
         programTest
 
@@ -146,7 +161,9 @@ clickButton buttonText programTest =
 -}
 fillIn : String -> String -> ProgramTest model msg effect -> ProgramTest model msg effect
 fillIn label value programTest =
-    ProgramTest.fillIn label value programTest
+    -- fillIn takes: fieldId, label, newContent, programTest
+    -- We'll use label as both fieldId and label for simplicity
+    ProgramTest.fillIn label label value programTest
 
 
 {-| Submit a form by finding the form element and triggering submit.
@@ -154,9 +171,13 @@ fillIn label value programTest =
 submitForm : ProgramTest model msg effect -> ProgramTest model msg effect
 submitForm programTest =
     ProgramTest.within
-        "form"
-        []
-        (ProgramTest.simulateDomEvent "submit" (Encode.object []))
+        (Query.find [])
+        (\test ->
+            ProgramTest.simulateDomEvent
+                (Query.find [])
+                ( "submit", Encode.object [] )
+                test
+        )
         programTest
 
 

@@ -1,4 +1,4 @@
-port module Main exposing (main, init, update, view, Model, Msg(..), Flags)
+port module Main exposing (main, init, initForTesting, update, view, Model, Msg(..), Flags)
 
 import Browser
 import Browser.Navigation as Nav
@@ -79,7 +79,7 @@ type alias Flags =
 -- MODEL
 
 
-type alias Model =
+type alias Model navigationKey =
     { shared : Shared.Model
     , page : Page
     }
@@ -94,10 +94,12 @@ type Page
 
 
 
+
+
 -- INIT
 
 
-init : Flags -> Url.Url -> Nav.Key -> ( Model, Cmd Msg )
+init : Flags -> Url.Url -> Nav.Key -> ( Model Nav.Key, Cmd Msg )
 init flags url navKey =
     let
         route =
@@ -126,6 +128,14 @@ init flags url navKey =
             )
 
 
+initForTesting : Flags -> Url.Url -> () -> ( Model (), Cmd Msg )
+initForTesting flags url () =
+    -- Test version - ProgramTest.createApplication expects init to take () instead of Nav.Key
+    -- Based on NavigationKeyExample pattern: use () as the navigationKey type in tests
+    -- This allows ProgramTest to handle navigation internally
+    init flags url ()
+
+
 
 -- UPDATE
 
@@ -146,7 +156,7 @@ type Msg
     | SSEConnectionStateChanged String
 
 
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : Msg -> Model Nav.Key -> ( Model Nav.Key, Cmd Msg )
 update msg model =
     case msg of
         UrlChanged url ->
@@ -1161,7 +1171,7 @@ httpErrorToString error =
 -- VIEW
 
 
-view : Model -> Browser.Document Msg
+view : Model Nav.Key -> Browser.Document Msg
 view model =
     { title = getPageTitle model.page
     , body =

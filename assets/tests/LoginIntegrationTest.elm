@@ -21,65 +21,37 @@ suite =
             [ test "shows login form when server is initialized" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.expectViewHasText "Sign in to your account"
-                        |> Helpers.expectViewHasText "Email"
-                        |> Helpers.expectViewHasText "Password"
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureViewHasText "Sign in to your account"
+                        |> Helpers.ensureViewHasText "Email"
+                        |> Helpers.ensureViewHasText "Password"
+                        |> ProgramTest.done
             , test "redirects to setup when server is not initialized" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson False "1.0.0")
-                        |> ProgramTest.expectPageChange "/setup"
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/setup")
+                        |> ProgramTest.done
             ]
         , describe "Form Interaction"
             [ test "updates email field when typing" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Email" "user@example.com"
-                        |> Helpers.expectViewHasText "user@example.com"
+                        |> Helpers.ensureViewHasText "user@example.com"
+                        |> ProgramTest.done
             , test "updates password field when typing" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Password" "secret123"
-                        |> Helpers.expectViewHasText "secret123"
+                        |> Helpers.ensureViewHasText "secret123"
+                        |> ProgramTest.done
             ]
         , describe "Form Submission"
             [ test "submits login form with correct credentials" <|
@@ -94,16 +66,8 @@ suite =
                             Helpers.authResponseJson "access-token-123" "refresh-token-456" user
                     in
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Email" "user@example.com"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.submitForm
@@ -116,20 +80,13 @@ suite =
                                 ]
                             )
                         |> Helpers.simulateHttpOk "POST" "/api/auth/login" authResponse
-                        |> ProgramTest.expectPageChange "/dashboard"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.done
             , test "shows error message on login failure" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Email" "user@example.com"
                         |> Helpers.fillIn "Password" "wrongpassword"
                         |> Helpers.submitForm
@@ -142,44 +99,30 @@ suite =
                                 ]
                             )
                         |> Helpers.simulateHttpError "POST" "/api/auth/login" (Http.BadStatus 401)
-                        |> Helpers.expectViewHasText "Invalid email or password"
-                        |> ProgramTest.expectPageChange "/login"
+                        |> Helpers.ensureViewHasText "Invalid email or password"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
+                        |> ProgramTest.done
             , test "disables submit button while submitting" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Email" "user@example.com"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.submitForm
-                        |> Helpers.expectViewHasText "Signing in..."
+                        |> Helpers.ensureViewHasText "Signing in..."
+                        |> ProgramTest.done
             ]
         , describe "Navigation"
             [ test "stays on login page after failed login" <|
                 \_ ->
                     Helpers.createTestProgram
-                        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/auth/status"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.serverStatusJson True "1.0.0")
+                        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "Email" "user@example.com"
                         |> Helpers.fillIn "Password" "wrong"
                         |> Helpers.submitForm
-                        |> Helpers.expectHttpRequestWithBody
+                        |> Helpers.ensureHttpRequestWithBody
                             "POST"
                             "/api/auth/login"
                             (Encode.object
@@ -187,20 +130,8 @@ suite =
                                 , ( "password", Encode.string "wrong" )
                                 ]
                             )
-                        |> ProgramTest.simulateHttpError
-                            (ProgramTest.HttpRequest
-                                { method = "POST"
-                                , url = "/api/auth/login"
-                                , body = ProgramTest.HttpBodyJson
-                                    (Encode.object
-                                        [ ( "email", Encode.string "user@example.com" )
-                                        , ( "password", Encode.string "wrong" )
-                                        ]
-                                    )
-                                , headers = []
-                                }
-                            )
-                            (Http.BadStatus 401)
-                        |> ProgramTest.expectPageChange "/login"
+                        |> Helpers.simulateHttpError "POST" "/api/auth/login" (Http.BadStatus 401)
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
+                        |> ProgramTest.done
             ]
         ]

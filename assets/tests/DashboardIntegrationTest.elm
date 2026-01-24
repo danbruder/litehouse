@@ -15,19 +15,11 @@ import Test exposing (..)
 
 {-| Helper to create a program with an authenticated user already logged in.
 -}
-createAuthenticatedProgram : ProgramTest Main.Model Main.Msg (Cmd Main.Msg)
+createAuthenticatedProgram : ProgramTest (Main.Model ()) Main.Msg (Cmd Main.Msg)
 createAuthenticatedProgram =
     Helpers.createTestProgram
-        |> Helpers.expectHttpRequest "GET" "/api/auth/status"
-        |> ProgramTest.simulateHttpOk
-            (ProgramTest.HttpRequest
-                { method = "GET"
-                , url = "/api/auth/status"
-                , body = ProgramTest.HttpBodyEmpty
-                , headers = []
-                }
-            )
-            (Helpers.serverStatusJson True "1.0.0")
+        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
+        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
         |> ProgramTest.advanceTime 100
 
 
@@ -38,18 +30,20 @@ suite =
             [ test "shows create app form when clicking New App button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
-                        |> Helpers.expectViewHasText "My Apps"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureViewHasText "My Apps"
                         |> Helpers.clickButton "+ New App"
-                        |> Helpers.expectViewHasText "Create New App"
-                        |> Helpers.expectViewHasText "Step 1: Name your app"
+                        |> Helpers.ensureViewHasText "Create New App"
+                        |> Helpers.ensureViewHasText "Step 1: Name your app"
+                        |> ProgramTest.done
             , test "validates app name is required" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.submitForm
-                        |> Helpers.expectViewHasText "App name is required"
+                        |> Helpers.ensureViewHasText "App name is required"
+                        |> ProgramTest.done
             , test "creates app without repository" <|
                 \_ ->
                     let
@@ -60,49 +54,35 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.fillIn "App Name" "my-new-app"
                         |> Helpers.submitForm
-                        |> Helpers.expectHttpRequestWithBody
+                        |> Helpers.ensureHttpRequestWithBody
                             "POST"
                             "/api/apps"
                             (Encode.object [ ( "name", Encode.string "my-new-app" ) ])
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "POST"
-                                , url = "/api/apps"
-                                , body = ProgramTest.HttpBodyJson
-                                    (Encode.object [ ( "name", Encode.string "my-new-app" ) ])
-                                , headers = []
-                                }
-                            )
+                        |> Helpers.simulateHttpOk "POST" "/api/apps"
                             (Encode.object
                                 [ ( "id", Encode.string newApp.id )
                                 , ( "name", Encode.string newApp.name )
                                 , ( "state", Encode.string newApp.state )
                                 ]
                             )
-                        |> Helpers.expectViewHasText "My Apps"
-                        |> Helpers.expectViewHasText "my-new-app"
+                        |> Helpers.ensureViewHasText "My Apps"
+                        |> Helpers.ensureViewHasText "my-new-app"
+                        |> ProgramTest.done
             ]
         , describe "App List View"
             [ test "displays empty state when no apps exist" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appsListJson [])
-                        |> Helpers.expectViewHasText "No apps yet"
-                        |> Helpers.expectViewHasText "Create your first app"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson [])
+                        |> Helpers.ensureViewHasText "No apps yet"
+                        |> Helpers.ensureViewHasText "Create your first app"
+                        |> ProgramTest.done
             , test "displays apps list when apps exist" <|
                 \_ ->
                     let
@@ -112,21 +92,14 @@ suite =
                             ]
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appsListJson apps)
-                        |> Helpers.expectViewHasText "my-app"
-                        |> Helpers.expectViewHasText "another-app"
-                        |> Helpers.expectViewHasText "stopped"
-                        |> Helpers.expectViewHasText "running"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson apps)
+                        |> Helpers.ensureViewHasText "my-app"
+                        |> Helpers.ensureViewHasText "another-app"
+                        |> Helpers.ensureViewHasText "stopped"
+                        |> Helpers.ensureViewHasText "running"
+                        |> ProgramTest.done
             ]
         , describe "App Detail View"
             [ test "navigates to app detail when clicking app card" <|
@@ -143,33 +116,19 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
                         |> ProgramTest.clickButton "my-app"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps/my-app"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appDetailJson app)
-                        |> Helpers.expectViewHasText "my-app"
-                        |> Helpers.expectViewHasText "Information"
-                        |> Helpers.expectViewHasText "Actions"
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
+                        |> Helpers.ensureViewHasText "my-app"
+                        |> Helpers.ensureViewHasText "Information"
+                        |> Helpers.ensureViewHasText "Actions"
+                        |> ProgramTest.done
             , test "starts app when clicking Start button" <|
                 \_ ->
                     let
@@ -184,29 +143,14 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/apps/my-app"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps/my-app"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appDetailJson app)
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> Helpers.clickButton "Start"
-                        |> Helpers.expectHttpRequest "POST" "/api/apps/my-app/start"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "POST"
-                                , url = "/api/apps/my-app/start"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Encode.string "App started")
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/start"
+                        |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/start" (Encode.string "App started")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> ProgramTest.done
             , test "stops app when clicking Stop button" <|
                 \_ ->
                     let
@@ -221,29 +165,14 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/apps/my-app"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps/my-app"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appDetailJson runningApp)
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson runningApp)
                         |> Helpers.clickButton "Stop"
-                        |> Helpers.expectHttpRequest "POST" "/api/apps/my-app/stop"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "POST"
-                                , url = "/api/apps/my-app/stop"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Encode.string "App stopped")
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/stop"
+                        |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/stop" (Encode.string "App stopped")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> ProgramTest.done
             , test "builds app when clicking Build button" <|
                 \_ ->
                     let
@@ -263,33 +192,19 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/apps/my-app"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps/my-app"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appDetailJson app)
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> Helpers.clickButton "Build"
-                        |> Helpers.expectHttpRequest "POST" "/api/apps/my-app/build"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "POST"
-                                , url = "/api/apps/my-app/build"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
+                        |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/build"
+                        |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/build"
                             (Encode.object
                                 [ ( "message", Encode.string "Build started" )
                                 , ( "build_id", Encode.string "build-123" )
                                 ]
                             )
-                        |> Helpers.expectViewHasText "Building app"
+                        |> Helpers.ensureViewHasText "Building app"
+                        |> ProgramTest.done
             ]
         , describe "Navigation"
             [ test "navigates back to apps list from app detail" <|
@@ -306,24 +221,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/apps/my-app"
-                        |> Helpers.expectHttpRequest "GET" "/api/apps/my-app"
-                        |> ProgramTest.simulateHttpOk
-                            (ProgramTest.HttpRequest
-                                { method = "GET"
-                                , url = "/api/apps/my-app"
-                                , body = ProgramTest.HttpBodyEmpty
-                                , headers = []
-                                }
-                            )
-                            (Helpers.appDetailJson app)
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> Helpers.clickButton "< Apps"
-                        |> ProgramTest.expectPageChange "/dashboard"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.done
             , test "logs out when clicking Logout button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.visitUrl "/dashboard"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "Logout"
-                        |> ProgramTest.expectPageChange "/login"
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
+                        |> ProgramTest.done
             ]
         ]
