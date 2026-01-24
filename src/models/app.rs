@@ -26,7 +26,7 @@ pub enum AppError {
 }
 
 impl App {
-    pub fn new(name: &str, port: i64) -> Result<Self, AppError> {
+    pub fn new(name: &str) -> Result<Self, AppError> {
         let now = now();
 
         if !is_valid_app_name(name) {
@@ -36,7 +36,7 @@ impl App {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             name: name.to_string(),
-            port: Some(port),
+            port: None,
             organization_id: None,
             created_at: now.clone(),
             updated_at: now,
@@ -44,7 +44,7 @@ impl App {
         })
     }
 
-    pub fn new_with_org(name: &str, port: i64, organization_id: &str) -> Result<Self, AppError> {
+    pub fn new_with_org(name: &str, organization_id: &str) -> Result<Self, AppError> {
         let now = now();
 
         if !is_valid_app_name(name) {
@@ -54,7 +54,7 @@ impl App {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             name: name.to_string(),
-            port: Some(port),
+            port: None,
             organization_id: Some(organization_id.to_string()),
             created_at: now.clone(),
             updated_at: now,

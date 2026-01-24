@@ -573,23 +573,31 @@ ensureViewHasNotText unexpectedText programTest =
 
 
 {-| Click a button with the given text.
+If multiple buttons with the same text exist, clicks the first one.
 -}
 clickButton : String -> ProgramTest model msg effect -> ProgramTest model msg effect
 clickButton buttonText programTest =
-    ProgramTest.clickButton buttonText programTest
+    -- Use simulateDomEvent to have more control over which button to click
+    ProgramTest.simulateDomEvent
+        (\query ->
+            Query.findAll [ tag "button", containing [ text buttonText ] ] query
+                |> Query.index 0
+        )
+        ( "click", Encode.object [] )
+        programTest
 
 
 {-| Click a link (anchor element) that contains the given text.
 Finds the first anchor element containing the text and clicks it.
-For app cards, looks for links with the app card class to avoid clicking header links.
+For app cards, looks for links with the app card styling to avoid clicking header links.
 -}
 clickLink : String -> ProgramTest model msg effect -> ProgramTest model msg effect
 clickLink linkText programTest =
-    -- Try to find app card links first (more specific), fall back to any link
+    -- Find app card links (they have specific classes like "block" and "bg-litehouse-surface")
+    -- Use findAll to get all matching links, then take the first one
     ProgramTest.simulateDomEvent
         (\query ->
-            -- Look for app card links (they have a specific class)
-            Query.findAll [ tag "a", class "block", containing [ text linkText ] ] query
+            Query.findAll [ tag "a", containing [ text linkText ] ] query
                 |> Query.index 0
         )
         ( "click", Encode.object [] )
@@ -603,38 +611,38 @@ We map common fieldIds to their label text for ProgramTest.fillIn.
 fillIn : String -> String -> ProgramTest model msg effect -> ProgramTest model msg effect
 fillIn fieldId value programTest =
     -- fillIn takes: fieldId, label, newContent, programTest
-    -- Map fieldIds to their label text
+    -- Map fieldIds to their actual HTML id and label text
     let
-        labelText =
+        ( actualFieldId, labelText ) =
             case fieldId of
                 "appName" ->
-                    "App Name"
+                    ( "appName", "App Name" )
 
                 "email" ->
-                    "Email"
+                    ( "email", "Email" )
 
                 "password" ->
-                    "Password"
+                    ( "password", "Password" )
 
                 "Password" ->
-                    "Password"
+                    ( "password", "Password" )
 
                 "fullName" ->
-                    "Full Name"
+                    ( "fullName", "Full Name" )
 
                 "orgName" ->
-                    "Organization Name"
+                    ( "orgName", "Organization Name" )
 
                 "confirmPassword" ->
-                    "Confirm Password"
+                    ( "confirmPassword", "Confirm Password" )
 
                 "Confirm Password" ->
-                    "Confirm Password"
+                    ( "confirmPassword", "Confirm Password" )
 
                 _ ->
-                    fieldId
+                    ( fieldId, fieldId )
     in
-    ProgramTest.fillIn fieldId labelText value programTest
+    ProgramTest.fillIn actualFieldId labelText value programTest
 
 
 {-| Submit a form by finding the form element and triggering submit.

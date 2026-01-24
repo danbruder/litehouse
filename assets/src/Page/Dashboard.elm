@@ -421,6 +421,7 @@ update shared msg model =
                     -- App created, add to list and go back to apps view
                     ( { model
                         | apps = app :: model.apps
+                        , appsLoading = False
                         , view = AppsListView
                       }
                     , Effect.none

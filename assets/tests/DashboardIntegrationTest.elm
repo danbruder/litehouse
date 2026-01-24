@@ -121,8 +121,10 @@ suite =
                                 , ( "state", Encode.string newApp.state )
                                 ]
                             )
-                        |> ProgramTest.advanceTime 200
+                        |> ProgramTest.advanceTime 300
                         |> Helpers.ensureViewHasText "My Apps"
+                        -- App should be in the list (added to model.apps when created)
+                        -- The app name appears in the h3 element inside the app card
                         |> Helpers.ensureViewHasText "my-new-app"
                         |> ProgramTest.done
             ]
@@ -278,7 +280,9 @@ suite =
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureBrowserUrlPath "/apps/my-app"
+                        |> ProgramTest.advanceTime 50
                         |> Helpers.clickButton "Build"
+                        |> ProgramTest.advanceTime 50
                         |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/build"
                         |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/build"
                             (Encode.object

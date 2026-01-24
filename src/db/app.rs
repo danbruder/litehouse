@@ -149,7 +149,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_id() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
 
         save(&pool, &app).await.unwrap();
         let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
@@ -163,14 +163,14 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_name() {
         let pool = get_test_pool().await;
-        let app = App::new("myapp", 3000).unwrap();
+        let app = App::new("myapp").unwrap();
 
         save(&pool, &app).await.unwrap();
         let retrieved = get_by_name(&pool, "myapp").await.unwrap().unwrap();
 
         assert_eq!(retrieved.id, app.id);
         assert_eq!(retrieved.name, "myapp");
-        assert_eq!(retrieved.port, Some(3000));
+        assert_eq!(retrieved.port, None);
     }
 
     #[tokio::test]
@@ -183,8 +183,8 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_state() {
         let pool = get_test_pool().await;
-        let app1 = App::new("app1", 8080).unwrap();
-        let mut app2 = App::new("app2", 8081).unwrap();
+        let app1 = App::new("app1").unwrap();
+        let mut app2 = App::new("app2").unwrap();
         app2.state = AppState::Running;
 
         save(&pool, &app1).await.unwrap();
@@ -202,7 +202,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_app_id() {
         let pool = get_test_pool().await;
-        let app = App::new("todelete", 8080).unwrap();
+        let app = App::new("todelete").unwrap();
 
         save(&pool, &app).await.unwrap();
         assert!(get_by_id(&pool, &app.id).await.unwrap().is_some());
@@ -214,9 +214,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_all() {
         let pool = get_test_pool().await;
-        let app1 = App::new("app1", 8080).unwrap();
-        let app2 = App::new("app2", 8081).unwrap();
-        let app3 = App::new("app3", 8082).unwrap();
+        let app1 = App::new("app1").unwrap();
+        let app2 = App::new("app2").unwrap();
+        let app3 = App::new("app3").unwrap();
 
         save(&pool, &app1).await.unwrap();
         save(&pool, &app2).await.unwrap();
@@ -232,8 +232,8 @@ mod tests {
     #[tokio::test]
     async fn test_get_all_with_ports() {
         let pool = get_test_pool().await;
-        let mut app1 = App::new("app1", 8080).unwrap();
-        let app2 = App::new("app2", 8081).unwrap();
+        let mut app1 = App::new("app1").unwrap();
+        let app2 = App::new("app2").unwrap();
         app1.port = None;
 
         save(&pool, &app1).await.unwrap();
@@ -247,7 +247,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_update_existing() {
         let pool = get_test_pool().await;
-        let mut app = App::new("updateapp", 8080).unwrap();
+        let mut app = App::new("updateapp").unwrap();
         let original_id = app.id.clone();
 
         save(&pool, &app).await.unwrap();
@@ -271,7 +271,7 @@ mod tests {
         let org = crate::models::Organization::new("Test Org").unwrap();
         crate::db::organization::save(&pool, &org).await.unwrap();
 
-        let app = App::new_with_org("orgapp", 8080, &org.id).unwrap();
+        let app = App::new_with_org("orgapp", &org.id).unwrap();
 
         save(&pool, &app).await.unwrap();
         let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();

@@ -169,7 +169,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_id() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let build = Build::new_building(app.id.clone(), "/tmp/build.log".to_string());
@@ -187,7 +187,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_latest_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let mut build1 = Build::new_building(app.id.clone(), "/tmp/build1.log".to_string());
@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_by_app_only_success() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let mut build1 = Build::new_building(app.id.clone(), "/tmp/build1.log".to_string());
@@ -240,7 +240,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_all_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let build1 = Build::new_building(app.id.clone(), "/tmp/build1.log".to_string());
@@ -274,7 +274,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_old_builds() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let build1 = Build::new_building(app.id.clone(), "/tmp/build1.log".to_string());
@@ -312,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_update_existing() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let mut build = Build::new_building(app.id.clone(), "/tmp/build.log".to_string());
