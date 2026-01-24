@@ -63,7 +63,7 @@ createAuthenticatedProgram =
         |> ProgramTest.simulateIncomingPort "refreshTokenReceived" (Encode.string refreshToken)
         |> ProgramTest.advanceTime 100
         -- Should now be on dashboard
-        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+        |> Helpers.ensureBrowserUrlPath "/dashboard"
 
 
 suite : Test
@@ -73,7 +73,7 @@ suite =
             [ test "shows create app form when clicking New App button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureViewHasText "My Apps"
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.ensureViewHasText "Create New App"
@@ -82,7 +82,7 @@ suite =
             , test "validates app name is required" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "App name is required"
@@ -97,10 +97,19 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
+                        |> Helpers.ensureHttpRequest "GET" "/api/github/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/github/status" (Helpers.githubStatusJson False Nothing)
+                        |> ProgramTest.advanceTime 100
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.fillIn "appName" "my-new-app"
                         |> Helpers.submitForm
+                        |> ProgramTest.advanceTime 100
+                        |> Helpers.ensureHttpRequest "GET" "/api/github/status"
+                        |> Helpers.simulateHttpOk "GET" "/api/github/status" (Helpers.githubStatusJson False Nothing)
+                        |> ProgramTest.advanceTime 100
+                        |> Helpers.ensureViewHasText "Step 2: Connect GitHub (Optional)"
+                        |> Helpers.clickButton "Skip"
                         |> Helpers.ensureHttpRequestWithBody
                             "POST"
                             "/api/apps"
@@ -112,6 +121,7 @@ suite =
                                 , ( "state", Encode.string newApp.state )
                                 ]
                             )
+                        |> ProgramTest.advanceTime 200
                         |> Helpers.ensureViewHasText "My Apps"
                         |> Helpers.ensureViewHasText "my-new-app"
                         |> ProgramTest.done
@@ -120,7 +130,7 @@ suite =
             [ test "displays empty state when no apps exist" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson [])
                         |> Helpers.ensureViewHasText "No apps yet"
@@ -135,7 +145,7 @@ suite =
                             ]
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson apps)
                         |> Helpers.ensureViewHasText "my-app"
@@ -159,18 +169,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
-                        |> ProgramTest.clickButton "my-app"
+                        |> Helpers.clickLink "my-app"
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
                         |> Helpers.ensureViewHasText "my-app"
                         |> Helpers.ensureViewHasText "Information"
                         |> Helpers.ensureViewHasText "Actions"
@@ -189,18 +199,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
-                        |> ProgramTest.clickButton "my-app"
+                        |> Helpers.clickLink "my-app"
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
                         |> Helpers.clickButton "Start"
                         |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/start"
                         |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/start" (Encode.string "App started")
@@ -220,18 +230,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "running" } ]
                             )
-                        |> ProgramTest.clickButton "my-app"
+                        |> Helpers.clickLink "my-app"
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson runningApp)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
                         |> Helpers.clickButton "Stop"
                         |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/stop"
                         |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/stop" (Encode.string "App stopped")
@@ -256,18 +266,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
-                        |> ProgramTest.clickButton "my-app"
+                        |> Helpers.clickLink "my-app"
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
                         |> Helpers.clickButton "Build"
                         |> Helpers.ensureHttpRequest "POST" "/api/apps/my-app/build"
                         |> Helpers.simulateHttpOk "POST" "/api/apps/my-app/build"
@@ -294,27 +304,27 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
-                        |> ProgramTest.clickButton "my-app"
+                        |> Helpers.clickLink "my-app"
                         |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
                         |> Helpers.clickButton "< Apps"
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> ProgramTest.done
             , test "logs out when clicking Logout button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> Helpers.clickButton "Logout"
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
+                        |> Helpers.ensureBrowserUrlPath "/login"
                         |> ProgramTest.done
             ]
         ]

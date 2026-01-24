@@ -184,16 +184,37 @@ fn create_build_context_tar(directory: &str) -> Result<Vec<u8>> {
     Ok(tar_data)
 }
 
+/// Get the exposed port from a Docker image
+///
+/// Inspects the Docker image and returns the first exposed port.
+/// Defaults to "3000" if no EXPOSE directive is found.
+/// Strips the "/tcp" suffix for a clean port number.
 #[instrument]
-pub async fn run(name: &str, image_tag: &str) -> Result<()> {
-    run_with_port(name, image_tag, None, vec![], vec![]).await
+pub async fn get_exposed_port(image_tag: &str) -> Result<String> {
+    let docker = connect().await?;
+
+    let image_inspect = docker.inspect_image(image_tag).await?;
+    let exposed_ports = image_inspect
+        .config
+        .and_then(|c| c.exposed_ports)
+        .unwrap_or_default();
+
+    // Get the first exposed port, or default to 3000
+    let port = if let Some(port_key) = exposed_ports.keys().next() {
+        // Strip the "/tcp" suffix
+        port_key.split('/').next().unwrap_or("3000").to_string()
+    } else {
+        "3000".to_string()
+    };
+
+    info!("Detected exposed port {} for image {}", port, image_tag);
+    Ok(port)
 }
 
 #[instrument]
-pub async fn run_with_port(
+pub async fn run(
     name: &str,
     image_tag: &str,
-    host_port: Option<i64>,
     env_vars: Vec<EnvVar>,
     volume_binds: Vec<String>,
 ) -> Result<()> {
@@ -202,7 +223,7 @@ pub async fn run_with_port(
         return Err(DockerError::BuildError("App name cannot be empty".to_string()).into());
     }
 
-    info!("Running app: {} (host_port: {:?})", name, host_port);
+    info!("Running app: {}", name);
 
     let docker = Docker::connect_with_unix(
         &resolve_docker_socket_path()?,
@@ -269,46 +290,11 @@ pub async fn run_with_port(
         }
     }
 
-    // Inspect the image to get exposed ports
-    let image_inspect = docker.inspect_image(image_tag).await?;
-    let exposed_ports = image_inspect
-        .config
-        .and_then(|c| c.exposed_ports)
-        .unwrap_or_default();
-
-    // Get the first exposed port, or default to 3000
-    let container_port = if let Some(port_key) = exposed_ports.keys().next() {
-        port_key.clone()
-    } else {
-        "3000/tcp".to_string()
-    };
-
-    info!("Container exposes port: {}", container_port);
-
-    // Configure port bindings, volume binds, and restart policy
+    // Configure volume binds, restart policy, and network mode
     let host_config = {
-        use bollard::models::{HostConfig, PortBinding, RestartPolicy, RestartPolicyNameEnum};
-        use std::collections::HashMap;
+        use bollard::models::{HostConfig, RestartPolicy, RestartPolicyNameEnum};
 
         let mut config = HostConfig::default();
-
-        // Add port bindings if host_port is provided
-        if let Some(port) = host_port {
-            let mut port_bindings = HashMap::new();
-            port_bindings.insert(
-                container_port.clone(),
-                Some(vec![PortBinding {
-                    host_ip: Some("0.0.0.0".to_string()),
-                    host_port: Some(port.to_string()),
-                }]),
-            );
-
-            info!(
-                "Binding container port {} to host port {}",
-                container_port, port
-            );
-            config.port_bindings = Some(port_bindings);
-        }
 
         // Add volume binds if provided
         if !volume_binds.is_empty() {

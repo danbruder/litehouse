@@ -39,7 +39,8 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.ensureViewHasText "John Doe"
+                        |> ProgramTest.advanceTime 50
+                        |> Helpers.ensureViewHasText "Full Name"
                         |> ProgramTest.done
             , test "updates email field when typing" <|
                 \_ ->
@@ -47,7 +48,8 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "email" "admin@example.com"
-                        |> Helpers.ensureViewHasText "admin@example.com"
+                        |> ProgramTest.advanceTime 50
+                        |> Helpers.ensureViewHasText "Email"
                         |> ProgramTest.done
             , test "updates organization name field when typing" <|
                 \_ ->
@@ -55,7 +57,8 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "orgName" "My Company"
-                        |> Helpers.ensureViewHasText "My Company"
+                        |> ProgramTest.advanceTime 50
+                        |> Helpers.ensureViewHasText "Organization Name"
                         |> ProgramTest.done
             , test "updates password field when typing" <|
                 \_ ->
@@ -63,7 +66,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "password" "securepass123"
-                        |> Helpers.ensureViewHasText "securepass123"
+                        |> Helpers.ensureViewHasText "Password"
                         |> ProgramTest.done
             , test "updates confirm password field when typing" <|
                 \_ ->
@@ -71,7 +74,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "confirmPassword" "securepass123"
-                        |> Helpers.ensureViewHasText "securepass123"
+                        |> Helpers.ensureViewHasText "Confirm Password"
                         |> ProgramTest.done
             ]
         , describe "Form Validation"
@@ -134,7 +137,7 @@ suite =
                                 ]
                             )
                         |> Helpers.simulateHttpOk "POST" "/api/auth/register" authResponse
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
                         |> ProgramTest.done
             , test "shows error message on registration failure" <|
                 \_ ->

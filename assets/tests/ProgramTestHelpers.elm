@@ -8,6 +8,7 @@ module ProgramTestHelpers exposing
     , ensureViewHasText
     , ensureViewHasNotText
     , clickButton
+    , clickLink
     , fillIn
     , submitForm
     , authResponseJson
@@ -16,6 +17,7 @@ module ProgramTestHelpers exposing
     , appDetailJson
     , githubStatusJson
     , reposListJson
+    , ensureBrowserUrlPath
     )
 
 {-| Helper functions for writing integration tests with elm-program-test.
@@ -37,7 +39,7 @@ import SimulatedEffect.Http
 import SimulatedEffect.Navigation
 import SimulatedEffect.Ports
 import Test.Html.Query as Query
-import Test.Html.Selector exposing (tag, text)
+import Test.Html.Selector exposing (attribute, class, containing, tag, text)
 import Url
 
 
@@ -577,6 +579,23 @@ clickButton buttonText programTest =
     ProgramTest.clickButton buttonText programTest
 
 
+{-| Click a link (anchor element) that contains the given text.
+Finds the first anchor element containing the text and clicks it.
+For app cards, looks for links with the app card class to avoid clicking header links.
+-}
+clickLink : String -> ProgramTest model msg effect -> ProgramTest model msg effect
+clickLink linkText programTest =
+    -- Try to find app card links first (more specific), fall back to any link
+    ProgramTest.simulateDomEvent
+        (\query ->
+            -- Look for app card links (they have a specific class)
+            Query.findAll [ tag "a", class "block", containing [ text linkText ] ] query
+                |> Query.index 0
+        )
+        ( "click", Encode.object [] )
+        programTest
+
+
 {-| Fill in an input field with the given field ID.
 The fieldId should match the HTML id attribute of the input.
 We map common fieldIds to their label text for ProgramTest.fillIn.
@@ -597,6 +616,9 @@ fillIn fieldId value programTest =
                 "password" ->
                     "Password"
 
+                "Password" ->
+                    "Password"
+
                 "fullName" ->
                     "Full Name"
 
@@ -604,6 +626,9 @@ fillIn fieldId value programTest =
                     "Organization Name"
 
                 "confirmPassword" ->
+                    "Confirm Password"
+
+                "Confirm Password" ->
                     "Confirm Password"
 
                 _ ->
@@ -740,3 +765,20 @@ reposListJson repos =
                 ]
         )
         repos
+
+
+{-| Ensure that the browser URL path matches the expected path.
+Extracts the path from the full URL for comparison.
+-}
+ensureBrowserUrlPath : String -> ProgramTest model msg effect -> ProgramTest model msg effect
+ensureBrowserUrlPath expectedPath programTest =
+    ProgramTest.ensureBrowserUrl
+        (\urlString ->
+            case Url.fromString urlString of
+                Just url ->
+                    Expect.equal expectedPath url.path
+
+                Nothing ->
+                    Expect.fail ("Could not parse URL: " ++ urlString)
+        )
+        programTest

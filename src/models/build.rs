@@ -44,6 +44,7 @@ pub struct Build {
     pub image_tag: Option<String>,
     pub git_commit: Option<String>,
     pub log_path: Option<String>,
+    pub exposed_port: Option<String>,
     pub status: BuildStatus,
     pub created_at: UtcDateTime,
     pub updated_at: UtcDateTime,
@@ -60,6 +61,7 @@ impl Build {
             image_tag: None,
             git_commit: None,
             log_path: Some(log_path),
+            exposed_port: None,
             status: BuildStatus::Building,
             created_at: now.clone(),
             updated_at: now,
@@ -78,6 +80,12 @@ impl Build {
     /// Mark build as failed
     pub fn mark_failed(&mut self) {
         self.status = BuildStatus::Failed;
+        self.updated_at = now();
+    }
+
+    /// Set the exposed port from the Docker image
+    pub fn set_exposed_port(&mut self, port: String) {
+        self.exposed_port = Some(port);
         self.updated_at = now();
     }
 }

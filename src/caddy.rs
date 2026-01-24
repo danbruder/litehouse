@@ -641,7 +641,12 @@ async fn wait_for_container_stable(docker: &Docker, container_id: &str) -> Resul
 // Caddy Configuration Management Functions
 
 /// Build Caddy JSON configuration from apps
-fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> CaddyConfig {
+async fn build_caddy_config(
+    apps: Vec<App>,
+    local_dev: bool,
+    domain: Option<&str>,
+    db_pool: &Pool<Sqlite>,
+) -> Result<CaddyConfig> {
     let mut routes = Vec::new();
 
     // Add admin API route
@@ -671,34 +676,67 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
 
     // Add app routes
     for app in apps {
-        if let Some(port) = app.port {
-            let host = if local_dev {
-                // For local development, use .localhost domains
-                format!("{}.localhost", app.name)
-            } else {
-                // For production, use the domain pattern
-                if let Some(domain_str) = domain {
-                    format!("{}.{}", app.name, domain_str)
-                } else {
-                    // Fallback to old hardcoded domain for backwards compatibility
-                    format!("{}.lh.danbruder.com", app.name)
+        // Get the latest successful build for this app
+        let build = match crate::db::build::get_latest_by_app(db_pool, &app.id).await {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                // Skip apps without builds
+                info!("Skipping app '{}' - no successful builds found", app.name);
+                continue;
+            }
+            Err(e) => {
+                warn!("Failed to get build for app '{}': {}", app.name, e);
+                continue;
+            }
+        };
+
+        // Get exposed port from build record or detect from image
+        let port = if let Some(p) = build.exposed_port {
+            p
+        } else if let Some(image_tag) = &build.image_tag {
+            // Fallback: detect from image if not cached
+            match crate::docker::get_exposed_port(image_tag).await {
+                Ok(p) => {
+                    info!("Detected exposed port {} for app '{}' from image", p, app.name);
+                    p
                 }
-            };
+                Err(e) => {
+                    warn!("Failed to detect port for app '{}': {}. Using default 3000", app.name, e);
+                    "3000".to_string()
+                }
+            }
+        } else {
+            // No image tag available, skip this app
+            warn!("Skipping app '{}' - no image tag available", app.name);
+            continue;
+        };
 
-            // Use container name for Docker network routing (works on Linux servers)
-            // Apps run in containers named {app-name}-container on the same Docker network
-            let upstream = format!("{}-container:{}", app.name, port);
+        let host = if local_dev {
+            // For local development, use .localhost domains
+            format!("{}.localhost", app.name)
+        } else {
+            // For production, use the domain pattern
+            if let Some(domain_str) = domain {
+                format!("{}.{}", app.name, domain_str)
+            } else {
+                // Fallback to old hardcoded domain for backwards compatibility
+                format!("{}.lh.danbruder.com", app.name)
+            }
+        };
 
-            let route = Route {
-                match_rules: vec![HostMatcher { host: vec![host] }],
-                handle: vec![Handler {
-                    handler: "reverse_proxy".to_string(),
-                    upstreams: vec![Upstream { dial: upstream }],
-                }],
-            };
+        // Use container name for Docker network routing (works on Linux servers)
+        // Apps run in containers named {app-name}-container on the same Docker network
+        let upstream = format!("{}-container:{}", app.name, port);
 
-            routes.push(route);
-        }
+        let route = Route {
+            match_rules: vec![HostMatcher { host: vec![host] }],
+            handle: vec![Handler {
+                handler: "reverse_proxy".to_string(),
+                upstreams: vec![Upstream { dial: upstream }],
+            }],
+        };
+
+        routes.push(route);
     }
 
     let mut servers = HashMap::new();
@@ -723,11 +761,11 @@ fn build_caddy_config(apps: Vec<App>, local_dev: bool, domain: Option<&str>) -> 
         },
     );
 
-    CaddyConfig {
+    Ok(CaddyConfig {
         apps: CaddyApps {
             http: HttpApp { servers },
         },
-    }
+    })
 }
 
 /// Update Caddy configuration via API
@@ -782,11 +820,11 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     let server_config = ServerConfig::load().unwrap_or_default();
     let domain = server_config.domain.as_deref();
 
-    match db_app::get_all_with_ports(db_pool).await {
+    match db_app::get_all(db_pool).await {
         Ok(apps) => {
-            info!("Found {} apps with ports", apps.len());
+            info!("Found {} apps", apps.len());
 
-            let config = build_caddy_config(apps, local_dev, domain);
+            let config = build_caddy_config(apps, local_dev, domain, db_pool).await?;
             update_caddy_config(docker, config).await?;
 
             info!("Caddy configuration synchronized successfully");

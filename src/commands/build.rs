@@ -270,6 +270,19 @@ async fn do_build(
 
     info!("Built image with tag: {} and ID: {}", tag, image_id);
 
+    // Detect and store the exposed port from the Docker image
+    let exposed_port = match docker::get_exposed_port(&tag).await {
+        Ok(port) => {
+            info!("Detected exposed port {} for image {}", port, tag);
+            port
+        }
+        Err(e) => {
+            warn!("Failed to detect exposed port, using default 3000: {}", e);
+            "3000".to_string()
+        }
+    };
+    build.set_exposed_port(exposed_port);
+
     // Mark build as successful
     build.mark_success(image_id, tag, git_result.commit);
     db::build::save(pool, &build).await?;

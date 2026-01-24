@@ -11,14 +11,15 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
     let result = sqlx::query(
         r#"
             INSERT INTO build (
-                id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 app_id = excluded.app_id,
                 image_id = excluded.image_id,
                 image_tag = excluded.image_tag,
                 git_commit = excluded.git_commit,
                 log_path = excluded.log_path,
+                exposed_port = excluded.exposed_port,
                 status = excluded.status,
                 updated_at = excluded.updated_at
             "#,
@@ -29,6 +30,7 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
     .bind(&build.image_tag)
     .bind(&build.git_commit)
     .bind(&build.log_path)
+    .bind(&build.exposed_port)
     .bind(build.status.to_string())
     .bind(&build.created_at)
     .bind(&build.updated_at)
@@ -49,7 +51,7 @@ pub async fn save(pool: &Pool<Sqlite>, build: &Build) -> Result<()> {
 pub async fn get_latest_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Option<Build>> {
     let row = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
             FROM build
             WHERE app_id = ? AND status = 'success'
             ORDER BY created_at DESC
@@ -68,7 +70,7 @@ pub async fn get_latest_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Opti
 pub async fn get_by_id(pool: &Pool<Sqlite>, build_id: &str) -> Result<Option<Build>> {
     let row = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
             FROM build
             WHERE id = ?
             "#,
@@ -85,7 +87,7 @@ pub async fn get_by_id(pool: &Pool<Sqlite>, build_id: &str) -> Result<Option<Bui
 pub async fn get_all_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Build>> {
     let rows = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
             FROM build
             WHERE app_id = ?
             ORDER BY created_at DESC
@@ -104,7 +106,7 @@ pub async fn delete_old_builds(pool: &Pool<Sqlite>, app_id: &str, keep_count: i6
     // First get the builds to delete (so we can return them for log cleanup)
     let rows = sqlx::query(
         r#"
-            SELECT id, app_id, image_id, image_tag, git_commit, log_path, status, created_at, updated_at
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
             FROM build
             WHERE app_id = ?
             ORDER BY created_at DESC
@@ -150,6 +152,7 @@ fn build_from_row(row: &sqlx::sqlite::SqliteRow) -> Build {
         image_tag: row.get("image_tag"),
         git_commit: row.get("git_commit"),
         log_path: row.get("log_path"),
+        exposed_port: row.get("exposed_port"),
         status: status_str.parse().unwrap_or(BuildStatus::Success),
         created_at: row.get::<UtcDateTime, _>("created_at"),
         updated_at: row.get::<UtcDateTime, _>("updated_at"),
