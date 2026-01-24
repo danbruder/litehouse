@@ -1572,6 +1572,15 @@ viewAppDetail state =
                     [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "Created" ]
                     , span [ class "text-sm text-litehouse-text" ] [ text app.createdAt ]
                     ]
+                , div []
+                    [ span [ class "block text-xs text-litehouse-muted uppercase font-medium mb-1" ] [ text "URL" ]
+                    , a
+                        [ href ("https://" ++ app.name ++ ".litehouse.run")
+                        , target "_blank"
+                        , class "text-sm text-litehouse-amber hover:text-litehouse-amberDeep hover:underline break-all"
+                        ]
+                        [ text (app.name ++ ".litehouse.run") ]
+                    ]
                 ]
             ]
 
