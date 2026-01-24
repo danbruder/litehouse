@@ -87,7 +87,7 @@ pub async fn seed() {
 
     let pool = init_pool().await.unwrap();
 
-    let app = App::new("caddy", 8000).unwrap();
+    let app = App::new("caddy").unwrap();
     crate::db::app::save(&pool, &app).await.unwrap();
 
     let mut build = Build::new_building(app.id, "/tmp/caddy.log".to_string());

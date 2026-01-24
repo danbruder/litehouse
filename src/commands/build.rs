@@ -346,7 +346,7 @@ mod tests {
         let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app in Building state
-        let mut app = App::new("test-building-app", 8000).unwrap();
+        let mut app = App::new("test-building-app").unwrap();
         app.state = AppState::Building;
         db::app::save(&pool, &app).await.unwrap();
 
@@ -361,7 +361,7 @@ mod tests {
         let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app without remote
-        let app = App::new("test-no-remote-app", 8001).unwrap();
+        let app = App::new("test-no-remote-app").unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
         let result = execute(&pool, "test-no-remote-app", None, message_bus).await;
@@ -375,7 +375,7 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
 
         // Create app
-        let app = App::new("test-build-app", 8002).unwrap();
+        let app = App::new("test-build-app").unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
         // Create remote - use a fake git repo path

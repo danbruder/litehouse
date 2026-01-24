@@ -83,7 +83,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
@@ -101,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_replace_existing() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
@@ -119,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_key() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
@@ -156,8 +156,8 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_apps_isolation() {
         let pool = get_test_pool().await;
-        let app1 = App::new("app1", 8080).unwrap();
-        let app2 = App::new("app2", 8081).unwrap();
+        let app1 = App::new("app1").unwrap();
+        let app2 = App::new("app2").unwrap();
         app::save(&pool, &app1).await.unwrap();
         app::save(&pool, &app2).await.unwrap();
 

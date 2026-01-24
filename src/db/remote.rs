@@ -92,7 +92,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let remote = Remote::new(
@@ -117,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_by_app_not_found() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         // get_by_app expects exactly one row, so it will return an error if none found
@@ -128,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_id() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let remote = Remote::new(
@@ -147,7 +147,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let remote = Remote::new(
@@ -165,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_multiple_remotes_same_app() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         // Note: The current schema allows only one remote per app

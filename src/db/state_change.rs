@@ -83,7 +83,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_get_by_app_id() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let change1 = StateChange::new(&app.id, AppState::Created);
@@ -127,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_by_app_id_empty() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let changes = get_by_app_id(&pool, &app.id).await.unwrap();
@@ -137,7 +137,7 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_app_id() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let change1 = StateChange::new(&app.id, AppState::Created);
@@ -156,7 +156,7 @@ mod tests {
     #[tokio::test]
     async fn test_state_change_with_error() {
         let pool = get_test_pool().await;
-        let app = App::new("testapp", 8080).unwrap();
+        let app = App::new("testapp").unwrap();
         app::save(&pool, &app).await.unwrap();
 
         let change = StateChange::new(&app.id, AppState::Failed)
@@ -175,8 +175,8 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_apps_isolation() {
         let pool = get_test_pool().await;
-        let app1 = App::new("app1", 8080).unwrap();
-        let app2 = App::new("app2", 8081).unwrap();
+        let app1 = App::new("app1").unwrap();
+        let app2 = App::new("app2").unwrap();
         app::save(&pool, &app1).await.unwrap();
         app::save(&pool, &app2).await.unwrap();
 

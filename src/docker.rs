@@ -859,7 +859,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Create an App instance for testing
-        let app = App::new(app_name, 8000)?;
+        let app = App::new(app_name)?;
 
         // Stop the container
         let stop_result = stop(&app).await;
@@ -887,7 +887,7 @@ mod tests {
         let app_name = "nonexistent-stop-test";
 
         // Create an App instance for testing
-        let app = App::new(app_name, 8000)?;
+        let app = App::new(app_name)?;
 
         // Stop should succeed even if no container exists
         let stop_result = stop(&app).await;
@@ -916,7 +916,7 @@ mod tests {
         assert!(is_container_started(&format!("{}-2-container", app_name))?);
 
         // Create an App instance for testing
-        let app = App::new(app_name, 8000)?;
+        let app = App::new(app_name)?;
 
         // Stop should only stop containers matching the exact app name
         let stop_result = stop(&app).await;
@@ -960,7 +960,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Create an App instance for testing
-        let app = App::new(app_name, 8000)?;
+        let app = App::new(app_name)?;
 
         // Stop the container and measure time
         let start_time = std::time::Instant::now();
