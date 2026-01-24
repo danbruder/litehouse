@@ -6,21 +6,64 @@ These tests verify user interactions, app management flows, and navigation.
 
 import Effect
 import Expect
+import Json.Decode as Decode
 import Json.Encode as Encode
 import Main exposing (Flags, Msg(..))
 import ProgramTest exposing (ProgramTest)
 import ProgramTestHelpers as Helpers
+import SimulatedEffect.Ports
 import Test exposing (..)
 
 
 {-| Helper to create a program with an authenticated user already logged in.
 -}
-createAuthenticatedProgram : ProgramTest (Main.Model ()) Main.Msg (Cmd Main.Msg)
+createAuthenticatedProgram : ProgramTest (Main.Model ()) Main.Msg (Effect.Effect Main.Msg)
 createAuthenticatedProgram =
-    Helpers.createTestProgram
-        |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
-        |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
+    let
+        user =
+            { email = "test@example.com"
+            , fullName = "Test User"
+            }
+
+        accessToken = "test-access-token"
+        refreshToken = "test-refresh-token"
+    in
+    -- Start with a token so we skip the login flow
+    ProgramTest.createApplication
+        { init = Main.initForTesting
+        , update = Main.update
+        , view = Main.view
+        , onUrlChange = Main.UrlChanged
+        , onUrlRequest = Main.LinkClicked
+        }
+        |> ProgramTest.withBaseUrl "http://localhost"
+        |> ProgramTest.withSimulatedEffects (Helpers.createSimulateEffects ())
+        |> ProgramTest.withSimulatedSubscriptions
+            (\model ->
+                SimulatedEffect.Ports.subscribe "refreshTokenReceived"
+                    (Decode.maybe Decode.string)
+                    Main.RefreshTokenReceived
+            )
+        |> ProgramTest.start { token = Just accessToken }
+        -- App will verify the token
+        |> Helpers.ensureHttpRequest "GET" "/api/auth/me"
+        |> Helpers.simulateHttpOk "GET" "/api/auth/me"
+            (Encode.object
+                [ ( "user"
+                  , Encode.object
+                        [ ( "email", Encode.string user.email )
+                        , ( "full_name", Encode.string user.fullName )
+                        ]
+                  )
+                , ( "token", Encode.string accessToken )
+                ]
+            )
         |> ProgramTest.advanceTime 100
+        -- Simulate refresh token port response
+        |> ProgramTest.simulateIncomingPort "refreshTokenReceived" (Encode.string refreshToken)
+        |> ProgramTest.advanceTime 100
+        -- Should now be on dashboard
+        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
 
 
 suite : Test
@@ -30,7 +73,7 @@ suite =
             [ test "shows create app form when clicking New App button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.ensureViewHasText "My Apps"
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.ensureViewHasText "Create New App"
@@ -39,7 +82,7 @@ suite =
             , test "validates app name is required" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "App name is required"
@@ -54,9 +97,9 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.clickButton "+ New App"
-                        |> Helpers.fillIn "App Name" "my-new-app"
+                        |> Helpers.fillIn "appName" "my-new-app"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
                             "POST"
@@ -77,7 +120,7 @@ suite =
             [ test "displays empty state when no apps exist" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson [])
                         |> Helpers.ensureViewHasText "No apps yet"
@@ -92,7 +135,7 @@ suite =
                             ]
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson apps)
                         |> Helpers.ensureViewHasText "my-app"
@@ -116,15 +159,18 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
                                 [ { id = "app-1", name = "my-app", state = "stopped" } ]
                             )
                         |> ProgramTest.clickButton "my-app"
+                        |> ProgramTest.advanceTime 100
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
+                        |> ProgramTest.advanceTime 100
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/apps/my-app")
                         |> Helpers.ensureViewHasText "my-app"
                         |> Helpers.ensureViewHasText "Information"
                         |> Helpers.ensureViewHasText "Actions"
@@ -225,12 +271,12 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> Helpers.clickButton "< Apps"
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> ProgramTest.done
             , test "logs out when clicking Logout button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
                         |> Helpers.clickButton "Logout"
                         |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
                         |> ProgramTest.done

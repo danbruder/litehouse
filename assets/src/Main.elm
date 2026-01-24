@@ -162,28 +162,9 @@ initForTesting flags url () =
         -- So we can use a workaround where we get the key from somewhere.
         -- Let's try: use a test helper that provides a key.
         -- For now, using a workaround with a test-specific key creation.
-        testKey =
-            -- Nav.Key is opaque, but we can get one by creating a minimal Browser.application
-            -- Actually, the simplest approach: use a test helper function
-            -- Since ProgramTest handles navigation, we just need something that satisfies the type
-            -- Let's use a workaround: create key from Browser's internal mechanism
-            -- Actually, we'll need to modify this to use a proper test helper
-            -- For now, using Debug.todo as a placeholder - we'll need to create a proper helper
-            -- Actually, let me check if we can use the regular init and ProgramTest will handle it
-            -- Based on the example, it seems like createApplication might accept init with Nav.Key
-            -- But the type signature says () ->. Let me try using init directly and see.
-            -- Actually, the example uses init which takes navigationKey, so maybe it works.
-            -- But we're getting a type error, so maybe not.
-            -- Let's use a workaround: create a test key using a helper
-            -- Since this is complex, let's use a simpler approach: make navKey optional in tests
-            -- But that requires changing Shared.Model.
-            -- Actually, the simplest solution: use a test helper that creates Nav.Key
-            -- Since we can't do that, let's use a workaround with Debug.todo for now
-            -- and create a proper helper later
-            Debug.todo "Nav.Key - need to create test helper or use SimulatedEffect.Navigation"
-
+        -- In tests, navigationKey is () and navigation is handled by ProgramTest via withSimulatedEffects
         shared =
-            Shared.init testKey
+            Shared.init ()
                 |> (\s -> { s | currentRoute = route })
 
         initialModel =

@@ -1,5 +1,6 @@
 module ProgramTestHelpers exposing
     ( createTestProgram
+    , createSimulateEffects
     , ensureHttpRequest
     , ensureHttpRequestWithBody
     , simulateHttpOk
@@ -27,6 +28,7 @@ import Dict
 import Effect
 import Expect
 import Http
+import Json.Decode as Decode
 import Json.Encode as Encode
 import Main
 import ProgramTest exposing (ProgramTest, SimulatedEffect)
@@ -35,28 +37,163 @@ import SimulatedEffect.Http
 import SimulatedEffect.Navigation
 import SimulatedEffect.Ports
 import Test.Html.Query as Query
-import Test.Html.Selector exposing (text)
+import Test.Html.Selector exposing (tag, text)
 import Url
 
 
-{-| Create a ProgramTest instance for the application with default flags.
-Wraps Main.init to match the createApplication signature.
--}
-createTestProgram : ProgramTest (Main.Model ()) Main.Msg (Effect.Effect Main.Msg)
-createTestProgram =
-    let
-        flags =
-            { token = Nothing }
+httpErrorToString : Http.Error -> String
+httpErrorToString error =
+    case error of
+        Http.BadUrl url ->
+            "Invalid URL: " ++ url
 
-        -- Convert Effect to SimulatedEffect for testing
-        simulateEffects : Effect.Effect Main.Msg -> SimulatedEffect Main.Msg
-        simulateEffects effect =
-            case effect of
+        Http.Timeout ->
+            "Request timed out"
+
+        Http.NetworkError ->
+            "Network error - please check your connection"
+
+        Http.BadStatus status ->
+            case status of
+                401 ->
+                    "Invalid email or password"
+
+                409 ->
+                    "An account with this email already exists"
+
+                _ ->
+                    "Server error (status " ++ String.fromInt status ++ ")"
+
+        Http.BadBody message ->
+            "Error parsing response: " ++ message
+
+
+-- Decoders (recreated from Main.elm for use in tests)
+appInfoDecoder : Decode.Decoder Effect.AppInfo
+appInfoDecoder =
+    Decode.map3 Effect.AppInfo
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "state" Decode.string)
+
+
+appsListDecoder : Decode.Decoder (List Effect.AppInfo)
+appsListDecoder =
+    Decode.list appInfoDecoder
+
+
+appDetailDecoder : Decode.Decoder Effect.AppDetail
+appDetailDecoder =
+    Decode.map7 Effect.AppDetail
+        (Decode.field "id" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "state" Decode.string)
+        (Decode.maybe (Decode.field "port" Decode.int))
+        (Decode.field "created_at" Decode.string)
+        (Decode.field "updated_at" Decode.string)
+        (Decode.maybe (Decode.field "remote" remoteInfoDecoder))
+
+
+remoteInfoDecoder : Decode.Decoder Effect.RemoteInfo
+remoteInfoDecoder =
+    Decode.map3 Effect.RemoteInfo
+        (Decode.field "name" Decode.string)
+        (Decode.field "url" Decode.string)
+        (Decode.field "branch" Decode.string)
+
+
+githubStatusDecoder : Decode.Decoder Effect.GitHubStatusResponse
+githubStatusDecoder =
+    Decode.map2 Effect.GitHubStatusResponse
+        (Decode.field "connected" Decode.bool)
+        (Decode.maybe (Decode.field "username" Decode.string))
+
+
+deviceFlowStartDecoder : Decode.Decoder Effect.DeviceFlowStartResponse
+deviceFlowStartDecoder =
+    Decode.map5 Effect.DeviceFlowStartResponse
+        (Decode.field "user_code" Decode.string)
+        (Decode.field "verification_uri" Decode.string)
+        (Decode.field "device_code" Decode.string)
+        (Decode.field "expires_in" Decode.int)
+        (Decode.field "interval" Decode.int)
+
+
+reposListDecoder : Decode.Decoder (List Effect.RepoInfo)
+reposListDecoder =
+    Decode.list repoInfoDecoder
+
+
+repoInfoDecoder : Decode.Decoder Effect.RepoInfo
+repoInfoDecoder =
+    Decode.map6 Effect.RepoInfo
+        (Decode.field "name" Decode.string)
+        (Decode.field "full_name" Decode.string)
+        (Decode.maybe (Decode.field "description" Decode.string))
+        (Decode.field "private" Decode.bool)
+        (Decode.field "clone_url" Decode.string)
+        (Decode.field "default_branch" Decode.string)
+
+
+buildInfoDecoder : Decode.Decoder Effect.BuildInfo
+buildInfoDecoder =
+    Decode.map6 Effect.BuildInfo
+        (Decode.field "id" Decode.string)
+        (Decode.field "app_id" Decode.string)
+        (Decode.field "image_tag" (Decode.nullable Decode.string))
+        (Decode.field "git_commit" (Decode.nullable Decode.string))
+        (Decode.field "status" Decode.string)
+        (Decode.field "created_at" Decode.string)
+
+
+authResponseDecoder : Decode.Decoder Effect.AuthResponse
+authResponseDecoder =
+    Decode.map3 Effect.AuthResponse
+        (Decode.at [ "tokens", "access_token" ] Decode.string)
+        (Decode.at [ "tokens", "refresh_token" ] Decode.string)
+        (Decode.field "user" userDecoder)
+
+
+userDecoder : Decode.Decoder Effect.UserInfo
+userDecoder =
+    Decode.map2 Effect.UserInfo
+        (Decode.field "email" Decode.string)
+        (Decode.field "full_name" Decode.string)
+
+
+tokenPairDecoder : Decode.Decoder { accessToken : String, refreshToken : String }
+tokenPairDecoder =
+    Decode.map2 (\access refresh -> { accessToken = access, refreshToken = refresh })
+        (Decode.field "access_token" Decode.string)
+        (Decode.field "refresh_token" Decode.string)
+
+
+serverStatusDecoder : Decode.Decoder { initialized : Bool, version : String }
+serverStatusDecoder =
+    Decode.map2 (\init ver -> { initialized = init, version = ver })
+        (Decode.field "initialized" Decode.bool)
+        (Decode.field "version" Decode.string)
+
+
+tokenVerificationDecoder : String -> Decode.Decoder { user : Effect.UserInfo, token : String }
+tokenVerificationDecoder token =
+    Decode.map (\user -> { user = user, token = token })
+        (Decode.map2 Effect.UserInfo
+            (Decode.at [ "user", "email" ] Decode.string)
+            (Decode.at [ "user", "full_name" ] Decode.string)
+        )
+
+
+{-| Create a function to simulate effects for testing.
+-}
+createSimulateEffects : () -> Effect.Effect Main.Msg -> SimulatedEffect Main.Msg
+createSimulateEffects () effect =
+    case effect of
                 Effect.None ->
                     SimulatedEffect.Cmd.none
 
                 Effect.Batch effects ->
-                    SimulatedEffect.Cmd.batch (List.map simulateEffects effects)
+                    SimulatedEffect.Cmd.batch (List.map (createSimulateEffects ()) effects)
 
                 Effect.PushUrl url ->
                     SimulatedEffect.Navigation.pushUrl url
@@ -100,7 +237,7 @@ createTestProgram =
                 Effect.CheckServerStatus toMsg ->
                     SimulatedEffect.Http.get
                         { url = "/api/auth/status"
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) serverStatusDecoder
                         }
 
                 Effect.VerifyToken token toMsg ->
@@ -109,7 +246,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/auth/me"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) (tokenVerificationDecoder token)
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.RefreshAccessToken refreshToken toMsg ->
@@ -117,7 +256,7 @@ createTestProgram =
                         { url = "/api/auth/refresh"
                         , body = SimulatedEffect.Http.jsonBody
                             (Encode.object [ ( "refresh_token", Encode.string refreshToken ) ])
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) tokenPairDecoder
                         }
 
                 Effect.SubmitLogin form toMsg ->
@@ -129,7 +268,7 @@ createTestProgram =
                                 , ( "password", Encode.string form.password )
                                 ]
                             )
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) authResponseDecoder
                         }
 
                 Effect.SubmitRegister form toMsg ->
@@ -143,7 +282,7 @@ createTestProgram =
                                 , ( "organization_name", Encode.string form.organizationName )
                                 ]
                             )
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) authResponseDecoder
                         }
 
                 Effect.FetchApps token toMsg ->
@@ -152,7 +291,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) appsListDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.FetchAppDetail token appName toMsg ->
@@ -161,7 +302,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) appDetailDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.StartApp token appName toMsg ->
@@ -170,7 +313,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/start"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.StopApp token appName toMsg ->
@@ -179,7 +324,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/stop"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.BuildApp token appName toMsg ->
@@ -188,7 +335,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/build"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.DeleteApp token appName toMsg ->
@@ -197,7 +346,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.FetchLogs token appName toMsg ->
@@ -206,7 +357,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/logs?lines=100"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.FetchBuilds token appName toMsg ->
@@ -215,7 +368,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/builds"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) (Decode.list buildInfoDecoder)
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.FetchBuildLogs token appName buildId toMsg ->
@@ -224,7 +379,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/apps/" ++ appName ++ "/builds/" ++ buildId ++ "/logs"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.FetchGitHubStatus token toMsg ->
@@ -233,7 +390,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/github/status"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) githubStatusDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.StartDeviceFlow token toMsg ->
@@ -242,7 +401,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/github/connect/start"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) deviceFlowStartDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.StartGitHubPolling token deviceCode interval expiresIn ->
@@ -256,7 +417,9 @@ createTestProgram =
                         , headers = [ ( "Authorization", "Bearer " ++ token ) ]
                         , url = "/api/github/repos"
                         , body = SimulatedEffect.Http.emptyBody
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) reposListDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.CreateApp token name toMsg ->
@@ -266,7 +429,9 @@ createTestProgram =
                         , url = "/api/apps"
                         , body = SimulatedEffect.Http.jsonBody
                             (Encode.object [ ( "name", Encode.string name ) ])
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) appInfoDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
 
                 Effect.CreateAppWithRepo token name repo toMsg ->
@@ -280,11 +445,23 @@ createTestProgram =
                                 , ( "from_github", Encode.string repo )
                                 ]
                             )
-                        , expect = SimulatedEffect.Http.expectString (toMsg << Ok)
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) appInfoDecoder
+                        , timeout = Nothing
+                        , tracker = Nothing
                         }
+
+                Effect.Load href ->
+                    SimulatedEffect.Navigation.load href
 
                 Effect.UpdateGitHubStatus _ ->
                     SimulatedEffect.Cmd.none
+
+
+createTestProgram : ProgramTest (Main.Model ()) Main.Msg (Effect.Effect Main.Msg)
+createTestProgram =
+    let
+        flags =
+            { token = Nothing }
     in
     ProgramTest.createApplication
         { init = Main.initForTesting
@@ -294,7 +471,7 @@ createTestProgram =
         , onUrlRequest = Main.LinkClicked
         }
         |> ProgramTest.withBaseUrl "http://localhost"
-        |> ProgramTest.withSimulatedEffects simulateEffects
+        |> ProgramTest.withSimulatedEffects (createSimulateEffects ())
         |> ProgramTest.start flags
 
 
@@ -413,14 +590,9 @@ fillIn label value programTest =
 -}
 submitForm : ProgramTest model msg effect -> ProgramTest model msg effect
 submitForm programTest =
-    ProgramTest.within
-        (Query.find [])
-        (\test ->
-            ProgramTest.simulateDomEvent
-                (Query.find [])
-                ( "submit", Encode.object [] )
-                test
-        )
+    ProgramTest.simulateDomEvent
+        (Query.find [ tag "form" ])
+        ( "submit", Encode.object [] )
         programTest
 
 

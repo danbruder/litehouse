@@ -41,7 +41,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Email" "user@example.com"
+                        |> Helpers.fillIn "email" "user@example.com"
                         |> Helpers.ensureViewHasText "user@example.com"
                         |> ProgramTest.done
             , test "updates password field when typing" <|
@@ -49,7 +49,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Password" "secret123"
+                        |> Helpers.fillIn "password" "secret123"
                         |> Helpers.ensureViewHasText "secret123"
                         |> ProgramTest.done
             ]
@@ -68,7 +68,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Email" "user@example.com"
+                        |> Helpers.fillIn "email" "user@example.com"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
@@ -87,7 +87,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Email" "user@example.com"
+                        |> Helpers.fillIn "email" "user@example.com"
                         |> Helpers.fillIn "Password" "wrongpassword"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
@@ -107,7 +107,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Email" "user@example.com"
+                        |> Helpers.fillIn "email" "user@example.com"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "Signing in..."
@@ -119,8 +119,8 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
-                        |> Helpers.fillIn "Email" "user@example.com"
-                        |> Helpers.fillIn "Password" "wrong"
+                        |> Helpers.fillIn "email" "user@example.com"
+                        |> Helpers.fillIn "password" "wrong"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
                             "POST"

@@ -38,7 +38,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.ensureViewHasText "John Doe"
                         |> ProgramTest.done
             , test "updates email field when typing" <|
@@ -54,7 +54,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.ensureViewHasText "My Company"
                         |> ProgramTest.done
             , test "updates password field when typing" <|
@@ -70,7 +70,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Confirm Password" "securepass123"
+                        |> Helpers.fillIn "confirmPassword" "securepass123"
                         |> Helpers.ensureViewHasText "securepass123"
                         |> ProgramTest.done
             ]
@@ -80,11 +80,11 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.fillIn "Email" "admin@example.com"
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
-                        |> Helpers.fillIn "Confirm Password" "differentpass"
+                        |> Helpers.fillIn "confirmPassword" "differentpass"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "Passwords do not match"
                         |> ProgramTest.done
@@ -93,11 +93,11 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.fillIn "Email" "admin@example.com"
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "short"
-                        |> Helpers.fillIn "Confirm Password" "short"
+                        |> Helpers.fillIn "confirmPassword" "short"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "Password must be at least 8 characters"
                         |> ProgramTest.done
@@ -117,9 +117,9 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.fillIn "Email" "admin@example.com"
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"
                         |> Helpers.submitForm
@@ -141,9 +141,9 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.fillIn "Email" "admin@example.com"
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"
                         |> Helpers.submitForm
@@ -165,9 +165,9 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Full Name" "John Doe"
+                        |> Helpers.fillIn "fullName" "John Doe"
                         |> Helpers.fillIn "Email" "admin@example.com"
-                        |> Helpers.fillIn "Organization Name" "My Company"
+                        |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"
                         |> Helpers.submitForm
