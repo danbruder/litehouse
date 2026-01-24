@@ -1,4 +1,4 @@
-port module Main exposing (main)
+port module Main exposing (main, init, update, view, Model, Msg(..), Flags)
 
 import Browser
 import Browser.Navigation as Nav

@@ -349,6 +349,16 @@ suite =
                         |> Expect.onFail "should return Effect.none when no token"
             ]
         ]
+        {- NOTE: The handleBuildStatusEvent and handleBuildLogsEvent tests below
+           require a Shared.Model with a Browser.Navigation.Key, which is opaque
+           and can't be created in unit tests. These tests use Debug.todo for navKey.
+           The functions being tested only use shared.token, so navKey should never
+           be evaluated. If these tests fail with "TODO navKey", it indicates the
+           code path is trying to use navKey unexpectedly.
+           
+           TODO: Convert these to integration tests using elm-program-test which
+           can provide a real navKey, or refactor to make navKey optional for testing.
+        -}
         , describe "handleBuildStatusEvent"
         [ describe "when build status is 'failed'"
             [ test "updates app state to 'failed' in apps list" <|

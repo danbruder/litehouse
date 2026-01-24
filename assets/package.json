@@ -3,7 +3,9 @@
   "scripts": {
     "build:css": "tailwindcss -i ./src/input.css -o ./dist/styles.css --minify",
     "watch:css": "tailwindcss -i ./src/input.css -o ./dist/styles.css --watch",
-    "build": "npm run build:css && elm make src/Main.elm --optimize --output=dist/app.js && cp public/index.html dist/index.html"
+    "build": "npm run build:css && elm make src/Main.elm --optimize --output=dist/app.js && cp public/index.html dist/index.html",
+    "test": "elm-test",
+    "test:watch": "elm-test --watch"
   },
   "devDependencies": {
     "elm-test": "^0.19.1-revision17",
