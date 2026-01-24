@@ -9,6 +9,7 @@
 <body class="bg-litehouse-bg text-litehouse-text">
     <div id="elm"></div>
     <script src="/app.js?v=2"></script>
+    <script src="/sse-manager.js"></script>
     <script>
         // Token storage keys
         var TOKEN_KEY = 'litehouse_token';
@@ -46,6 +47,55 @@
         app.ports.clearToken.subscribe(function() {
             localStorage.removeItem(TOKEN_KEY);
             localStorage.removeItem(REFRESH_TOKEN_KEY);
+        });
+
+        // Unified SSE Manager
+        var sseManager = null;
+
+        // Port: Connect to unified SSE endpoint
+        app.ports.connectSSE.subscribe(function(config) {
+            var token = config.token;
+            var filters = config.filters;
+
+            // Disconnect existing connection if any
+            if (sseManager) {
+                sseManager.disconnect();
+            }
+
+            // Parse filters from Elm's Maybe Value
+            var parsedFilters = {};
+            if (filters) {
+                try {
+                    parsedFilters = filters;
+                } catch (e) {
+                    console.error('Failed to parse SSE filters:', e);
+                }
+            }
+
+            // Create new SSE manager
+            sseManager = new SSEManager(
+                window.location.origin,
+                token,
+                function(event) {
+                    // Send events to Elm via sseEvent port
+                    app.ports.sseEvent.send(event);
+                },
+                function(state) {
+                    // Send connection state to Elm via sseConnectionState port
+                    app.ports.sseConnectionState.send(state);
+                }
+            );
+
+            // Connect with filters
+            sseManager.connect(parsedFilters);
+        });
+
+        // Port: Disconnect from SSE
+        app.ports.disconnectSSE.subscribe(function() {
+            if (sseManager) {
+                sseManager.disconnect();
+                sseManager = null;
+            }
         });
 
         // Track current EventSource connection

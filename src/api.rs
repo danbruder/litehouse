@@ -17,7 +17,6 @@ use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::Request,
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -1507,23 +1506,20 @@ struct SSEQueryParams {
 }
 
 /// Unified SSE endpoint for all real-time events
-#[instrument(skip(state, request))]
+#[instrument(skip(state, auth_user))]
 async fn events_stream_handler(
     State(state): State<Arc<RwLock<AppState>>>,
     Query(params): Query<SSEQueryParams>,
-    request: Request<axum::body::Body>,
-) -> impl IntoResponse {
-    // Extract authenticated user from request extensions
-    let auth_user = match crate::auth::middleware::get_auth_user(request.extensions()) {
-        Ok(user) => user,
-        Err(e) => return Err(e),
-    };
-
+    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
     // Parse user_id to i64
     let user_id = match auth_user.user_id.parse::<i64>() {
         Ok(id) => id,
         Err(_) => {
-            return Err(crate::auth::middleware::AuthError::InvalidToken);
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "Invalid user ID".to_string(),
+            ));
         }
     };
 
