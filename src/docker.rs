@@ -1,3 +1,4 @@
+use crate::message_bus::{Message, MessageBus};
 use crate::models::{App, EnvVar};
 use bollard::Docker;
 use bollard::image::BuildImageOptions;
@@ -6,6 +7,7 @@ use flate2::write::GzEncoder;
 use futures_util::{StreamExt, stream::unfold};
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::Arc;
 use tracing::{info, instrument};
 
 type Result<T> = std::result::Result<T, DockerError>;
@@ -39,52 +41,43 @@ pub async fn connect() -> Result<Docker> {
 
 #[instrument]
 pub async fn build(directory: &str, tag: &str) -> Result<String> {
-    build_with_log(directory, tag, None).await
+    // For builds without logging, we still need a message bus
+    // This is a temporary solution - callers should provide a message bus
+    // For now, create a dummy message bus that won't be used
+    let message_bus = Arc::new(MessageBus::new());
+    build_with_log(directory, tag, "", "", message_bus).await
 }
 
-#[instrument(skip(log_file_path))]
+#[instrument(skip(message_bus))]
 pub async fn build_with_log(
     directory: &str,
     tag: &str,
-    log_file_path: Option<&Path>,
+    app_name: &str,
+    build_id: &str,
+    message_bus: Arc<MessageBus>,
 ) -> Result<String> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
     info!("Building app in: {}", directory);
 
-    // Open log file if path provided
-    let mut log_file = if let Some(path) = log_file_path {
-        Some(
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(path)
-                .map_err(|e| DockerError::BuildError(format!("Failed to open log file: {}", e)))?,
-        )
-    } else {
-        None
+    // Helper to publish log message
+    let publish_log = |data: &str| {
+        message_bus.publish(Message::BuildLogs {
+            app_name: app_name.to_string(),
+            build_id: build_id.to_string(),
+            event_type: "message".to_string(),
+            data: data.to_string(),
+        });
     };
 
-    // Helper to write to log file
-    let mut write_log = |msg: &str| {
-        if let Some(ref mut file) = log_file {
-            let _ = writeln!(file, "{}", msg);
-            let _ = file.flush();
-        }
-    };
-
-    write_log(&format!("Building app in: {}", directory));
+    publish_log(&format!("Building app in: {}", directory));
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
         let err_msg = format!("Dockerfile not found in directory: {}", directory);
-        write_log(&format!("ERROR: {}", err_msg));
+        publish_log(&format!("ERROR: {}", err_msg));
         return Err(DockerError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    write_log("Starting container image build with Bollard API...");
+    publish_log("Starting container image build with Bollard API...");
     info!("Starting container image build with Bollard API...");
 
     // Create a tar archive of the build context
@@ -110,35 +103,35 @@ pub async fn build_with_log(
                     let msg = stream.trim();
                     if !msg.is_empty() {
                         info!("Build: {}", msg);
-                        write_log(msg);
+                        publish_log(msg);
                     }
                 }
                 if let Some(error) = output.error {
                     tracing::error!("Build error: {}", error);
-                    write_log(&format!("ERROR: {}", error));
+                    publish_log(&format!("ERROR: {}", error));
                     last_error = Some(error);
                 }
             }
             Err(e) => {
                 tracing::error!("Build stream error: {}", e);
-                write_log(&format!("ERROR: Build stream error: {}", e));
+                publish_log(&format!("ERROR: Build stream error: {}", e));
                 return Err(DockerError::BuildStreamError(e.to_string()).into());
             }
         }
     }
 
     if let Some(error) = last_error {
-        write_log(&format!("Build failed: {}", error));
+        publish_log(&format!("Build failed: {}", error));
         return Err(DockerError::BuildError(error).into());
     }
 
-    write_log("Container image build completed successfully");
+    publish_log("Container image build completed successfully");
     info!("Container image build completed successfully");
 
     // Get the image ID by inspecting the built image using Bollard API
     let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
         let err_msg = format!("Failed to inspect built image: {}", e);
-        write_log(&format!("ERROR: {}", err_msg));
+        publish_log(&format!("ERROR: {}", err_msg));
         DockerError::BuildError(err_msg)
     })?;
 
@@ -146,7 +139,7 @@ pub async fn build_with_log(
         DockerError::BuildError("Failed to get image ID from build result".to_string())
     })?;
 
-    write_log(&format!("Built image ID: {}", image_id));
+    publish_log(&format!("Built image ID: {}", image_id));
     info!("Built image ID: {}", image_id);
     Ok(image_id)
 }

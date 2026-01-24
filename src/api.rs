@@ -11,7 +11,8 @@ use crate::db::system_config as db_system_config;
 use crate::github;
 use crate::litestream;
 use crate::models::{GitHubConnection, S3Config, S3ConfigRedacted, SystemConfig};
-use crate::sse::{start_sse_stream, SubscriptionFilter};
+use crate::message_bus::{Message, SubscriptionFilter};
+use crate::sse::start_sse_stream;
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
@@ -544,9 +545,9 @@ async fn build_app(
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let (pool, sse_hub) = {
+    let (pool, message_bus) = {
         let state = state.read().await;
-        (state.db_pool.clone(), state.sse_hub.clone())
+        (state.db_pool.clone(), state.message_bus.clone())
     };
 
     // Get GitHub token for the user (if connected)
@@ -556,7 +557,7 @@ async fn build_app(
         _ => None,
     };
 
-    match build::execute(&pool, &name, github_token.as_deref(), sse_hub).await {
+    match build::execute(&pool, &name, github_token.as_deref(), message_bus).await {
         Ok(build_record) => Json(serde_json::json!({
             "message": format!("App '{}' built", name),
             "build_id": build_record.id
@@ -1239,7 +1240,7 @@ async fn github_connect_stream(
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Query(query): Query<DeviceFlowStreamQuery>,
 ) -> impl IntoResponse {
-    let (client_id, pool, sse_hub) = {
+    let (client_id, pool, message_bus) = {
         let state = state.read().await;
         let client_id = match state.github_client_id.clone() {
             Some(id) => id,
@@ -1251,7 +1252,7 @@ async fn github_connect_stream(
                     .into_response();
             }
         };
-        (client_id, state.db_pool.clone(), state.sse_hub.clone())
+        (client_id, state.db_pool.clone(), state.message_bus.clone())
     };
 
     let device_code = query.device_code;
@@ -1259,7 +1260,7 @@ async fn github_connect_stream(
     let expires_in = query.expires_in.unwrap_or(900); // Default 15 minutes
     let user_id = auth_user.user_id.clone();
 
-    // Spawn background task to poll GitHub and publish to SSE hub
+    // Spawn background task to poll GitHub and publish to message bus
     tokio::spawn(async move {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(expires_in);
@@ -1267,7 +1268,7 @@ async fn github_connect_stream(
 
         loop {
             if start.elapsed() > timeout {
-                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                message_bus.publish(Message::GitHubOAuth {
                     event_type: "error".to_string(),
                     data: "Authorization timed out".to_string(),
                 });
@@ -1277,7 +1278,7 @@ async fn github_connect_stream(
             // Poll GitHub
             match github::poll_once(&client_id, &device_code).await {
                 Ok(github::PollResult::Pending) => {
-                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                    message_bus.publish(Message::GitHubOAuth {
                         event_type: "pending".to_string(),
                         data: "Waiting for authorization...".to_string(),
                     });
@@ -1298,7 +1299,7 @@ async fn github_connect_stream(
                             );
 
                             if let Err(e) = db::github_connection::save(&pool, &connection).await {
-                                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                                message_bus.publish(Message::GitHubOAuth {
                                     event_type: "error".to_string(),
                                     data: format!("Failed to save connection: {}", e),
                                 });
@@ -1308,14 +1309,14 @@ async fn github_connect_stream(
                                     "username": gh_user.login,
                                     "email": gh_user.email
                                 });
-                                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                                message_bus.publish(Message::GitHubOAuth {
                                     event_type: "success".to_string(),
                                     data: response.to_string(),
                                 });
                             }
                         }
                         Err(e) => {
-                            sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                            message_bus.publish(Message::GitHubOAuth {
                                 event_type: "error".to_string(),
                                 data: format!("Failed to get GitHub user: {}", e),
                             });
@@ -1324,21 +1325,21 @@ async fn github_connect_stream(
                     break;
                 }
                 Err(github::OAuthError::AuthorizationTimeout) => {
-                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                    message_bus.publish(Message::GitHubOAuth {
                         event_type: "error".to_string(),
                         data: "Authorization timed out".to_string(),
                     });
                     break;
                 }
                 Err(github::OAuthError::AccessDenied) => {
-                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                    message_bus.publish(Message::GitHubOAuth {
                         event_type: "error".to_string(),
                         data: "Authorization was denied".to_string(),
                     });
                     break;
                 }
                 Err(e) => {
-                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                    message_bus.publish(Message::GitHubOAuth {
                         event_type: "error".to_string(),
                         data: format!("Error: {}", e),
                     });
@@ -1515,7 +1516,7 @@ async fn events_stream_handler(
     let user_id = auth_user.user_id.clone();
 
     // Build subscription filter from query params
-    let mut filter = SubscriptionFilter::new(user_id.clone());
+    let mut filter = SubscriptionFilter::new(Some(user_id.clone()));
 
     if let Some(types) = params.message_types {
         let types_vec: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();
@@ -1527,14 +1528,14 @@ async fn events_stream_handler(
         filter = filter.with_app_names(names_vec);
     }
 
-    // Get SSE hub from state
-    let sse_hub = {
+    // Get message bus from state
+    let message_bus = {
         let state_guard = state.read().await;
-        state_guard.sse_hub.clone()
+        state_guard.message_bus.clone()
     };
 
     // Create SSE stream
-    let stream = start_sse_stream(sse_hub, filter, user_id);
+    let stream = start_sse_stream(message_bus, filter, user_id);
 
     Ok(Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()

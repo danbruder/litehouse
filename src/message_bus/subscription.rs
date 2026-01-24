@@ -1,4 +1,4 @@
-use super::message::SSEMessage;
+use super::message::Message;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -7,11 +7,11 @@ pub struct SubscriptionFilter {
     pub message_types: Option<Vec<String>>,
     #[serde(default)]
     pub app_names: Option<Vec<String>>,
-    pub user_id: String,
+    pub user_id: Option<String>,
 }
 
 impl SubscriptionFilter {
-    pub fn new(user_id: String) -> Self {
+    pub fn new(user_id: Option<String>) -> Self {
         Self {
             message_types: None,
             app_names: None,
@@ -29,9 +29,9 @@ impl SubscriptionFilter {
         self
     }
 
-    pub fn matches(&self, message: &SSEMessage) -> bool {
+    pub fn matches(&self, message: &Message) -> bool {
         // Always allow heartbeats
-        if matches!(message, SSEMessage::Heartbeat) {
+        if matches!(message, Message::Heartbeat) {
             return true;
         }
 
@@ -53,7 +53,7 @@ impl SubscriptionFilter {
                 // Exception: GitHubOAuth and SystemNotification don't have app_name but should still be shown
                 if !matches!(
                     message,
-                    SSEMessage::GitHubOAuth { .. } | SSEMessage::SystemNotification { .. }
+                    Message::GitHubOAuth { .. } | Message::SystemNotification { .. }
                 ) {
                     return false;
                 }
@@ -70,16 +70,16 @@ mod tests {
 
     #[test]
     fn test_filter_by_message_type() {
-        let filter = SubscriptionFilter::new("1".to_string()).with_message_types(vec!["BuildLogs".to_string()]);
+        let filter = SubscriptionFilter::new(None).with_message_types(vec!["BuildLogs".to_string()]);
 
-        let build_log = SSEMessage::BuildLogs {
+        let build_log = Message::BuildLogs {
             app_name: "test".to_string(),
             build_id: "123".to_string(),
             event_type: "message".to_string(),
             data: "line".to_string(),
         };
 
-        let build_status = SSEMessage::BuildStatus {
+        let build_status = Message::BuildStatus {
             app_name: "test".to_string(),
             build_id: "123".to_string(),
             status: "building".to_string(),
@@ -87,21 +87,21 @@ mod tests {
 
         assert!(filter.matches(&build_log));
         assert!(!filter.matches(&build_status));
-        assert!(filter.matches(&SSEMessage::Heartbeat)); // Heartbeats always pass
+        assert!(filter.matches(&Message::Heartbeat)); // Heartbeats always pass
     }
 
     #[test]
     fn test_filter_by_app_name() {
-        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new(None).with_app_names(vec!["myapp".to_string()]);
 
-        let matching = SSEMessage::BuildLogs {
+        let matching = Message::BuildLogs {
             app_name: "myapp".to_string(),
             build_id: "123".to_string(),
             event_type: "message".to_string(),
             data: "line".to_string(),
         };
 
-        let not_matching = SSEMessage::BuildLogs {
+        let not_matching = Message::BuildLogs {
             app_name: "otherapp".to_string(),
             build_id: "456".to_string(),
             event_type: "message".to_string(),
@@ -114,9 +114,9 @@ mod tests {
 
     #[test]
     fn test_github_oauth_always_passes_app_filter() {
-        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new(None).with_app_names(vec!["myapp".to_string()]);
 
-        let oauth_msg = SSEMessage::GitHubOAuth {
+        let oauth_msg = Message::GitHubOAuth {
             event_type: "success".to_string(),
             data: "{}".to_string(),
         };

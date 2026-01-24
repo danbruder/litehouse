@@ -1,3 +1,4 @@
+use crate::message_bus::Message;
 use axum::response::sse::Event;
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +70,47 @@ impl SSEMessage {
             SSEMessage::AppState { .. } => "AppState",
             SSEMessage::SystemNotification { .. } => "SystemNotification",
             SSEMessage::Heartbeat => "Heartbeat",
+        }
+    }
+}
+
+impl From<Message> for SSEMessage {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::GitHubOAuth { event_type, data } => SSEMessage::GitHubOAuth {
+                event_type,
+                data,
+            },
+            Message::BuildLogs {
+                app_name,
+                build_id,
+                event_type,
+                data,
+            } => SSEMessage::BuildLogs {
+                app_name,
+                build_id,
+                event_type,
+                data,
+            },
+            Message::BuildStatus {
+                app_name,
+                build_id,
+                status,
+            } => SSEMessage::BuildStatus {
+                app_name,
+                build_id,
+                status,
+            },
+            Message::ContainerLogs { app_name, data } => SSEMessage::ContainerLogs {
+                app_name,
+                data,
+            },
+            Message::AppState { app_name, state } => SSEMessage::AppState { app_name, state },
+            Message::SystemNotification { level, message } => SSEMessage::SystemNotification {
+                level,
+                message,
+            },
+            Message::Heartbeat => SSEMessage::Heartbeat,
         }
     }
 }

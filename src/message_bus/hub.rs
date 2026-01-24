@@ -1,25 +1,25 @@
-use super::message::SSEMessage;
+use super::message::Message;
 use tokio::sync::broadcast;
 use tracing::debug;
 
 const CHANNEL_CAPACITY: usize = 1000;
 
 #[derive(Clone)]
-pub struct SSEHub {
-    sender: broadcast::Sender<SSEMessage>,
+pub struct MessageBus {
+    sender: broadcast::Sender<Message>,
 }
 
-impl SSEHub {
+impl MessageBus {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(CHANNEL_CAPACITY);
         Self { sender }
     }
 
-    pub fn publish(&self, message: SSEMessage) {
+    pub fn publish(&self, message: Message) {
         match self.sender.send(message.clone()) {
             Ok(receiver_count) => {
                 debug!(
-                    "Published SSE message type={} to {} receivers",
+                    "Published message type={} to {} receivers",
                     message.message_type(),
                     receiver_count
                 );
@@ -27,14 +27,14 @@ impl SSEHub {
             Err(_) => {
                 // No receivers, this is fine
                 debug!(
-                    "Published SSE message type={} but no receivers",
+                    "Published message type={} but no receivers",
                     message.message_type()
                 );
             }
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<SSEMessage> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Message> {
         self.sender.subscribe()
     }
 
@@ -43,7 +43,7 @@ impl SSEHub {
     }
 }
 
-impl Default for SSEHub {
+impl Default for MessageBus {
     fn default() -> Self {
         Self::new()
     }
@@ -55,41 +55,41 @@ mod tests {
 
     #[tokio::test]
     async fn test_publish_and_subscribe() {
-        let hub = SSEHub::new();
-        let mut rx = hub.subscribe();
+        let bus = MessageBus::new();
+        let mut rx = bus.subscribe();
 
-        let msg = SSEMessage::Heartbeat;
-        hub.publish(msg.clone());
+        let msg = Message::Heartbeat;
+        bus.publish(msg.clone());
 
         let received = rx.recv().await.unwrap();
-        assert!(matches!(received, SSEMessage::Heartbeat));
+        assert!(matches!(received, Message::Heartbeat));
     }
 
     #[tokio::test]
     async fn test_multiple_subscribers() {
-        let hub = SSEHub::new();
-        let mut rx1 = hub.subscribe();
-        let mut rx2 = hub.subscribe();
+        let bus = MessageBus::new();
+        let mut rx1 = bus.subscribe();
+        let mut rx2 = bus.subscribe();
 
-        assert_eq!(hub.receiver_count(), 2);
+        assert_eq!(bus.receiver_count(), 2);
 
-        let msg = SSEMessage::SystemNotification {
+        let msg = Message::SystemNotification {
             level: "info".to_string(),
             message: "test".to_string(),
         };
 
-        hub.publish(msg.clone());
+        bus.publish(msg.clone());
 
         let received1 = rx1.recv().await.unwrap();
         let received2 = rx2.recv().await.unwrap();
 
         assert!(matches!(
             received1,
-            SSEMessage::SystemNotification { .. }
+            Message::SystemNotification { .. }
         ));
         assert!(matches!(
             received2,
-            SSEMessage::SystemNotification { .. }
+            Message::SystemNotification { .. }
         ));
     }
 }

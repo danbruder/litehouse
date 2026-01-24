@@ -1,8 +1,8 @@
 use crate::config;
-use crate::sse::SSEHub;
+use crate::message_bus::{Message, MessageBus, SubscriptionFilter};
 use sqlx::{Pool, Sqlite};
 use std::sync::Arc;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 use crate::db;
 use crate::docker;
@@ -30,12 +30,12 @@ type BuildResult<T> = Result<T, BuildError>;
 
 /// Start an async build for an app. Returns immediately with a Build record that has status=building.
 /// The actual build runs in a background task.
-#[instrument(skip(pool, github_token, sse_hub))]
+#[instrument(skip(pool, github_token, message_bus))]
 pub async fn execute(
     pool: &Pool<Sqlite>,
     app_name: &str,
     github_token: Option<&str>,
-    sse_hub: Arc<SSEHub>,
+    message_bus: Arc<MessageBus>,
 ) -> BuildResult<Build> {
     // Get app
     let mut app = db::app::get_by_name(pool, app_name)
@@ -69,7 +69,7 @@ pub async fn execute(
     db::build::save(pool, &build).await?;
 
     // Publish build started event
-    sse_hub.publish(crate::sse::SSEMessage::BuildStatus {
+    message_bus.publish(Message::BuildStatus {
         app_name: app.name.clone(),
         build_id: build.id.clone(),
         status: "building".to_string(),
@@ -81,7 +81,7 @@ pub async fn execute(
     let app_id = app.id.clone();
     let app_name_clone = app.name.clone();
     let github_token_owned = github_token.map(|s| s.to_string());
-    let sse_hub_clone = sse_hub.clone();
+    let message_bus_clone = message_bus.clone();
 
     tokio::spawn(async move {
         let result = do_build(
@@ -91,7 +91,7 @@ pub async fn execute(
             &app_name_clone,
             &remote,
             github_token_owned.as_deref(),
-            sse_hub_clone.clone(),
+            message_bus_clone.clone(),
         )
         .await;
 
@@ -105,7 +105,7 @@ pub async fn execute(
                         original_state
                     };
                     // Publish build success event
-                    sse_hub_clone.publish(crate::sse::SSEMessage::BuildStatus {
+                    message_bus_clone.publish(Message::BuildStatus {
                         app_name: app_name_clone.clone(),
                         build_id: build_id.clone(),
                         status: "success".to_string(),
@@ -115,7 +115,7 @@ pub async fn execute(
                     error!("Build failed for app '{}': {}", app_name_clone, e);
                     app.state = AppState::Failed;
                     // Publish build failed event
-                    sse_hub_clone.publish(crate::sse::SSEMessage::BuildStatus {
+                    message_bus_clone.publish(Message::BuildStatus {
                         app_name: app_name_clone.clone(),
                         build_id: build_id.clone(),
                         status: "failed".to_string(),
@@ -142,9 +142,10 @@ async fn do_build(
     app_name: &str,
     remote: &crate::models::Remote,
     github_token: Option<&str>,
-    sse_hub: Arc<SSEHub>,
+    message_bus: Arc<MessageBus>,
 ) -> BuildResult<()> {
-    use std::path::Path;
+    use std::fs::OpenOptions;
+    use std::io::Write;
 
     // Get the build record to get log path
     let mut build = db::build::get_by_id(pool, build_id)
@@ -158,36 +159,80 @@ async fn do_build(
 
     let build_dir = config::get_app_build_dir(app_name)?;
 
-    // Spawn task to tail log file and publish to SSE
+    // Spawn file writer subscriber
     let log_path_clone = log_path.clone();
-    let app_name_clone = app_name.to_string();
     let build_id_clone = build_id.to_string();
-    let sse_hub_clone = sse_hub.clone();
+    let app_name_clone = app_name.to_string();
+    let message_bus_clone = message_bus.clone();
     tokio::spawn(async move {
-        use tokio::fs::File;
-        use tokio::io::{AsyncBufReadExt, BufReader};
-        use tokio::time::{sleep, Duration};
+        // Create filter for BuildLogs messages for this app
+        let filter = SubscriptionFilter::new(None)
+            .with_message_types(vec!["BuildLogs".to_string()])
+            .with_app_names(vec![app_name_clone.clone()]);
 
-        // Wait for log file to be created
-        for _ in 0..30 {
-            if tokio::fs::metadata(&log_path_clone).await.is_ok() {
-                break;
+        // Open log file for writing
+        let mut log_file = match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_path_clone)
+        {
+            Ok(file) => file,
+            Err(e) => {
+                error!("Failed to open log file {}: {}", log_path_clone, e);
+                return;
             }
-            sleep(Duration::from_millis(100)).await;
-        }
+        };
 
-        // Tail the log file
-        if let Ok(file) = File::open(&log_path_clone).await {
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines();
+        // Subscribe to message bus
+        let mut rx = message_bus_clone.subscribe();
+        let mut build_complete = false;
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                sse_hub_clone.publish(crate::sse::SSEMessage::BuildLogs {
-                    app_name: app_name_clone.clone(),
-                    build_id: build_id_clone.clone(),
-                    event_type: "message".to_string(),
-                    data: line,
-                });
+        while !build_complete {
+            match rx.recv().await {
+                Ok(msg) => {
+                    // Check if this is a build status message indicating completion
+                    if let Message::BuildStatus {
+                        build_id,
+                        status,
+                        ..
+                    } = &msg
+                    {
+                        if build_id == &build_id_clone
+                            && (status == "success" || status == "failed")
+                        {
+                            build_complete = true;
+                        }
+                    }
+
+                    // Filter and write BuildLogs messages
+                    if filter.matches(&msg) {
+                        if let Message::BuildLogs {
+                            build_id,
+                            data,
+                            ..
+                        } = msg
+                        {
+                            if build_id == build_id_clone {
+                                if let Err(e) = writeln!(log_file, "{}", data) {
+                                    error!("Failed to write to log file: {}", e);
+                                    break;
+                                }
+                                if let Err(e) = log_file.flush() {
+                                    error!("Failed to flush log file: {}", e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!("File writer lagged, skipped {} messages", skipped);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    info!("Message bus closed, stopping file writer");
+                    break;
+                }
             }
         }
     });
@@ -208,7 +253,9 @@ async fn do_build(
     let image_id = match docker::build_with_log(
         build_dir.to_str().unwrap(),
         &tag,
-        Some(Path::new(&log_path)),
+        app_name,
+        build_id,
+        message_bus.clone(),
     )
     .await
     {
@@ -273,9 +320,9 @@ mod tests {
     #[tokio::test]
     async fn test_build_app_not_found() {
         let pool = get_test_pool().await;
-        let sse_hub = Arc::new(crate::sse::SSEHub::new());
+        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
-        let result = execute(&pool, "nonexistent-app", None, sse_hub).await;
+        let result = execute(&pool, "nonexistent-app", None, message_bus).await;
 
         assert!(matches!(result, Err(BuildError::AppNotFound(_))));
     }
@@ -283,14 +330,14 @@ mod tests {
     #[tokio::test]
     async fn test_build_already_building() {
         let pool = get_test_pool().await;
-        let sse_hub = Arc::new(crate::sse::SSEHub::new());
+        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app in Building state
         let mut app = App::new("test-building-app", 8000).unwrap();
         app.state = AppState::Building;
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-building-app", None, sse_hub).await;
+        let result = execute(&pool, "test-building-app", None, message_bus).await;
 
         assert!(matches!(result, Err(BuildError::AlreadyBuilding(_))));
     }
@@ -298,13 +345,13 @@ mod tests {
     #[tokio::test]
     async fn test_build_no_remote_configured() {
         let pool = get_test_pool().await;
-        let sse_hub = Arc::new(crate::sse::SSEHub::new());
+        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app without remote
         let app = App::new("test-no-remote-app", 8001).unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-no-remote-app", None, sse_hub).await;
+        let result = execute(&pool, "test-no-remote-app", None, message_bus).await;
 
         assert!(matches!(result, Err(BuildError::AppNotConfigured(_))));
     }
@@ -329,8 +376,8 @@ mod tests {
         db::remote::save(&pool, &remote).await.unwrap();
 
         // Execute build - this should start the build and return immediately
-        let sse_hub = Arc::new(crate::sse::SSEHub::new());
-        let result = execute(&pool, "test-build-app", None, sse_hub).await;
+        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
+        let result = execute(&pool, "test-build-app", None, message_bus).await;
 
         // Build should start successfully (returns a build record)
         assert!(result.is_ok(), "Build should start: {:?}", result.err());

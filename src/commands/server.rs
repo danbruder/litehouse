@@ -1,6 +1,6 @@
 use crate::docker;
+use crate::message_bus::{Message, MessageBus};
 use crate::reconciler::Reconciler;
-use crate::sse::SSEHub;
 use anyhow::{Context, Result};
 use axum::Router;
 use bollard::Docker;
@@ -21,7 +21,7 @@ pub struct AppState {
     pub docker: Docker,
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
-    pub sse_hub: Arc<SSEHub>,
+    pub message_bus: Arc<MessageBus>,
 }
 
 /// Start the Litehouse server
@@ -69,17 +69,17 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string()),
     );
 
-    // Initialize SSE hub for real-time messaging
-    let sse_hub = Arc::new(SSEHub::new());
+    // Initialize message bus for real-time messaging
+    let message_bus = Arc::new(MessageBus::new());
 
     // Spawn background task for periodic heartbeat
     {
-        let hub = sse_hub.clone();
+        let bus = message_bus.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(15));
             loop {
                 interval.tick().await;
-                hub.publish(crate::sse::SSEMessage::Heartbeat);
+                bus.publish(Message::Heartbeat);
             }
         });
     }
@@ -90,7 +90,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         docker: docker_conn.clone(),
         jwt_secret,
         github_client_id,
-        sse_hub,
+        message_bus,
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else

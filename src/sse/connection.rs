@@ -1,4 +1,5 @@
-use super::{hub::SSEHub, message::SSEMessage, subscription::SubscriptionFilter};
+use super::message::SSEMessage;
+use crate::message_bus::{MessageBus, Message, SubscriptionFilter};
 use axum::response::sse::Event;
 use futures_util::stream::Stream;
 use std::convert::Infallible;
@@ -8,12 +9,12 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 pub fn start_sse_stream(
-    hub: Arc<SSEHub>,
+    message_bus: Arc<MessageBus>,
     filter: SubscriptionFilter,
     _user_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
 
-    let receiver = hub.subscribe();
+    let receiver = message_bus.subscribe();
 
     async_stream::stream! {
         let mut rx = receiver;
@@ -28,7 +29,9 @@ pub fn start_sse_stream(
                         Ok(msg) => {
                             // Filter message
                             if filter.matches(&msg) {
-                                match msg.to_sse_event() {
+                                // Convert Message to SSEMessage
+                                let sse_msg: SSEMessage = msg.into();
+                                match sse_msg.to_sse_event() {
                                     Ok(event) => yield Ok(event),
                                     Err(e) => {
                                         warn!("Failed to serialize SSE message: {}", e);
@@ -41,11 +44,12 @@ pub fn start_sse_stream(
                         }
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
                             warn!("SSE client lagged, skipped {} messages", skipped);
-                            let msg = SSEMessage::SystemNotification {
+                            let msg = Message::SystemNotification {
                                 level: "warning".to_string(),
                                 message: format!("Connection lagged, {} messages skipped", skipped),
                             };
-                            if let Ok(event) = msg.to_sse_event() {
+                            let sse_msg: SSEMessage = msg.into();
+                            if let Ok(event) = sse_msg.to_sse_event() {
                                 yield Ok(event);
                             }
                         }
@@ -58,7 +62,8 @@ pub fn start_sse_stream(
                 }
                 // Send heartbeat
                 _ = interval.tick() => {
-                    if let Ok(event) = SSEMessage::Heartbeat.to_sse_event() {
+                    let heartbeat: SSEMessage = Message::Heartbeat.into();
+                    if let Ok(event) = heartbeat.to_sse_event() {
                         yield Ok(event);
                     }
                 }
@@ -74,13 +79,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_receives_messages() {
-        let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new("1".to_string());
+        use crate::message_bus::MessageBus;
+        let message_bus = Arc::new(MessageBus::new());
+        let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
 
         // Publish a message
-        hub.publish(SSEMessage::SystemNotification {
+        message_bus.publish(Message::SystemNotification {
             level: "info".to_string(),
             message: "test".to_string(),
         });
@@ -99,13 +105,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_filters_by_app_name() {
-        let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
+        use crate::message_bus::MessageBus;
+        let message_bus = Arc::new(MessageBus::new());
+        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
 
         // Publish a message for different app
-        hub.publish(SSEMessage::BuildLogs {
+        message_bus.publish(Message::BuildLogs {
             app_name: "otherapp".to_string(),
             build_id: "123".to_string(),
             event_type: "message".to_string(),
@@ -113,7 +120,7 @@ mod tests {
         });
 
         // Publish a message for matching app
-        hub.publish(SSEMessage::BuildLogs {
+        message_bus.publish(Message::BuildLogs {
             app_name: "myapp".to_string(),
             build_id: "456".to_string(),
             event_type: "message".to_string(),
@@ -135,10 +142,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_heartbeat_sent() {
-        let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new("1".to_string());
+        use crate::message_bus::MessageBus;
+        let message_bus = Arc::new(MessageBus::new());
+        let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
 
         // Wait for heartbeat (should come within 15 seconds, but we'll wait up to 20)
         let event = tokio::time::timeout(Duration::from_secs(20), async {
