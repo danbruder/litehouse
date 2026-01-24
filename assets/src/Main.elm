@@ -621,19 +621,6 @@ handleDashboardEffect model pageModel effect =
 
 -- EFFECT HELPERS
 
-{-| Cast navigationKey to Nav.Key.
-In production: navigationKey is Nav.Key, so this is a no-op.
-In tests: navigationKey is (), so this will fail - but tests should use withSimulatedEffects.
--}
-castNavKey : navigationKey -> Nav.Key
-castNavKey key =
-    -- This is a type-level cast that only works when navigationKey = Nav.Key
-    -- In production: key is Nav.Key, this works
-    -- In tests: key is (), this will fail at runtime, but withSimulatedEffects should prevent this
-    -- from being called. If it is called, it will crash, which indicates a test setup issue.
-    Debug.todo "Nav.Key cast - this should not be called in tests when using withSimulatedEffects"
-
-
 {-| Extract AuthResponse from an effect if it contains one
 -}
 getAuthResponseFromEffect : Effect.Effect msg -> Maybe Effect.AuthResponse
