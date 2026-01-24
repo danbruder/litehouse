@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Pool;
 use sqlx::Sqlite;
 use std::collections::HashMap;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DockerError {

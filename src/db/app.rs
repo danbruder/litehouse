@@ -232,9 +232,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_all_with_ports() {
         let pool = get_test_pool().await;
-        let mut app1 = App::new("app1").unwrap();
-        let app2 = App::new("app2").unwrap();
-        app1.port = None;
+        let app1 = App::new("app1").unwrap();
+        let mut app2 = App::new("app2").unwrap();
+        app2.port = Some(8080); // Explicitly set port for testing
 
         save(&pool, &app1).await.unwrap();
         save(&pool, &app2).await.unwrap();

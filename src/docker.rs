@@ -680,7 +680,7 @@ mod tests {
         let _ = cleanup_container(&container_name);
 
         // Step 1: Call the run function
-        let run_result = run(app_name, image_tag).await;
+        let run_result = run(app_name, image_tag, vec![], vec![]).await;
         assert!(
             run_result.is_ok(),
             "Run function should succeed: {:?}",
@@ -708,7 +708,7 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // First run: create a container
-        let first_run = run(app_name, image_tag).await;
+        let first_run = run(app_name, image_tag, vec![], vec![]).await;
         if let Err(e) = &first_run {
             println!("First run failed with error: {:?}", e);
         }
@@ -718,7 +718,7 @@ mod tests {
         assert!(is_container_started(&container_name)?);
 
         // Second run: should skip startup since container already exists
-        let second_run = run(app_name, image_tag).await;
+        let second_run = run(app_name, image_tag, vec![], vec![]).await;
         if let Err(e) = &second_run {
             println!("Second run failed with error: {:?}", e);
         }
@@ -734,7 +734,7 @@ mod tests {
     // Test error handling with invalid image
     #[tokio::test]
     async fn test_run_function_with_invalid_image() -> Result<()> {
-        let result = run("invalid-test", "nonexistent-image:latest").await;
+        let result = run("invalid-test", "nonexistent-image:latest", vec![], vec![]).await;
         assert!(result.is_err(), "Should fail with invalid image");
         Ok(())
     }
@@ -742,7 +742,7 @@ mod tests {
     // Test error handling with empty app name
     #[tokio::test]
     async fn test_run_function_with_empty_app_name() -> Result<()> {
-        let result = run("", "alpine:latest").await;
+        let result = run("", "alpine:latest", vec![], vec![]).await;
         assert!(result.is_err(), "Should fail with empty app name");
         Ok(())
     }
@@ -773,7 +773,7 @@ mod tests {
             .map(|_| {
                 let app = app_name.to_string();
                 let image = image_tag.to_string();
-                tokio::spawn(async move { run(&app, &image).await })
+                tokio::spawn(async move { run(&app, &image, vec![], vec![]).await })
             })
             .collect();
 
@@ -797,7 +797,7 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // Try to run with invalid image (should fail)
-        let result = run(app_name, "invalid-image:latest").await;
+        let result = run(app_name, "invalid-image:latest", vec![], vec![]).await;
         assert!(result.is_err());
 
         // Verify no container was left behind
@@ -818,7 +818,7 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // First run: create and start a container
-        let first_run = run(app_name, image_tag).await;
+        let first_run = run(app_name, image_tag, vec![], vec![]).await;
         assert!(first_run.is_ok());
 
         // Verify container exists
@@ -829,7 +829,7 @@ mod tests {
 
         // Second run: should skip startup and return immediately
         let start_time = std::time::Instant::now();
-        let second_run = run(app_name, image_tag).await;
+        let second_run = run(app_name, image_tag, vec![], vec![]).await;
         let duration = start_time.elapsed();
 
         assert!(second_run.is_ok());
@@ -852,7 +852,7 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // First, create and start a container
-        let run_result = run(app_name, image_tag).await;
+        let run_result = run(app_name, image_tag, vec![], vec![]).await;
         assert!(run_result.is_ok());
 
         // Verify container exists
@@ -904,11 +904,11 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // Create multiple containers with similar names
-        let run_result1 = run(app_name, image_tag).await;
+        let run_result1 = run(app_name, image_tag, vec![], vec![]).await;
         assert!(run_result1.is_ok());
 
         // Create a second container with a slightly different name
-        let run_result2 = run(&format!("{}-2", app_name), image_tag).await;
+        let run_result2 = run(&format!("{}-2", app_name), image_tag, vec![], vec![]).await;
         assert!(run_result2.is_ok());
 
         // Verify both containers exist
@@ -953,7 +953,7 @@ mod tests {
         let container_name = format!("{}-container", app_name);
 
         // Create and start a container
-        let run_result = run(app_name, image_tag).await;
+        let run_result = run(app_name, image_tag, vec![], vec![]).await;
         assert!(run_result.is_ok());
 
         // Verify container exists
