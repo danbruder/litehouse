@@ -45,18 +45,11 @@ type Effect msg
     | SaveRefreshToken String
     | ClearToken
     | GetRefreshToken
-    | StartGitHubSSE
+    | ConnectSSE
         { token : String
-        , deviceCode : String
-        , interval : Int
-        , expiresIn : Int
+        , filters : Maybe Encode.Value
         }
-    | StartBuildLogsSSE
-        { token : String
-        , appName : String
-        , buildId : String
-        }
-    | StopBuildLogsSSE
+    | DisconnectSSE
       -- HTTP Requests - Auth
     | CheckServerStatus (Result String ServerStatus -> msg)
     | VerifyToken String (Result String TokenVerificationResponse -> msg)

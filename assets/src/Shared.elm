@@ -22,6 +22,7 @@ type alias Model =
     , token : Maybe String
     , refreshToken : Maybe String
     , githubStatus : GitHubStatus
+    , sseConnectionState : String
     }
 
 
@@ -49,6 +50,7 @@ init navKey =
     , token = Nothing
     , refreshToken = Nothing
     , githubStatus = GitHubUnknown
+    , sseConnectionState = "disconnected"
     }
 
 
@@ -62,6 +64,7 @@ type Msg
     | SetTokens String String
     | ClearAuth
     | SetGitHubStatus GitHubStatus
+    | SetSSEConnectionState String
 
 
 update : Msg -> Model -> Model
@@ -92,3 +95,6 @@ update msg model =
 
         SetGitHubStatus status ->
             { model | githubStatus = status }
+
+        SetSSEConnectionState state ->
+            { model | sseConnectionState = state }

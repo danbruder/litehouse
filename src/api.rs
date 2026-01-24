@@ -11,11 +11,13 @@ use crate::db::system_config as db_system_config;
 use crate::github;
 use crate::litestream;
 use crate::models::{GitHubConnection, S3Config, S3ConfigRedacted, SystemConfig};
+use crate::sse::{start_sse_stream, SubscriptionFilter};
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
 use axum::{
     extract::{Multipart, Path, Query, State},
+    http::Request,
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -67,6 +69,8 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/github/status", get(github_status))
         .route("/github/repos", get(github_list_repos))
         .route("/github/repos/search", get(github_search_repos))
+        // Unified SSE endpoint
+        .route("/events/stream", get(events_stream_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::auth_middleware,
@@ -541,7 +545,10 @@ async fn build_app(
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
+    let (pool, sse_hub) = {
+        let state = state.read().await;
+        (state.db_pool.clone(), state.sse_hub.clone())
+    };
 
     // Get GitHub token for the user (if connected)
     let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await
@@ -550,7 +557,7 @@ async fn build_app(
         _ => None,
     };
 
-    match build::execute(&pool, &name, github_token.as_deref()).await {
+    match build::execute(&pool, &name, github_token.as_deref(), sse_hub).await {
         Ok(build_record) => Json(serde_json::json!({
             "message": format!("App '{}' built", name),
             "build_id": build_record.id
@@ -1233,7 +1240,7 @@ async fn github_connect_stream(
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Query(query): Query<DeviceFlowStreamQuery>,
 ) -> impl IntoResponse {
-    let (client_id, pool) = {
+    let (client_id, pool, sse_hub) = {
         let state = state.read().await;
         let client_id = match state.github_client_id.clone() {
             Some(id) => id,
@@ -1245,7 +1252,7 @@ async fn github_connect_stream(
                     .into_response();
             }
         };
-        (client_id, state.db_pool.clone())
+        (client_id, state.db_pool.clone(), state.sse_hub.clone())
     };
 
     let device_code = query.device_code;
@@ -1253,22 +1260,28 @@ async fn github_connect_stream(
     let expires_in = query.expires_in.unwrap_or(900); // Default 15 minutes
     let user_id = auth_user.user_id.clone();
 
-    // Create an async stream that polls GitHub
-    let stream = async_stream::stream! {
+    // Spawn background task to poll GitHub and publish to SSE hub
+    tokio::spawn(async move {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(expires_in);
         let poll_interval = std::time::Duration::from_secs(interval);
 
         loop {
             if start.elapsed() > timeout {
-                yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization timed out"));
+                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                    event_type: "error".to_string(),
+                    data: "Authorization timed out".to_string(),
+                });
                 break;
             }
 
             // Poll GitHub
             match github::poll_once(&client_id, &device_code).await {
                 Ok(github::PollResult::Pending) => {
-                    yield Ok::<_, std::convert::Infallible>(Event::default().event("pending").data("Waiting for authorization..."));
+                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                        event_type: "pending".to_string(),
+                        data: "Waiting for authorization...".to_string(),
+                    });
                 }
                 Ok(github::PollResult::Success { access_token, scope }) => {
                     // Get GitHub user info
@@ -1286,41 +1299,60 @@ async fn github_connect_stream(
                             );
 
                             if let Err(e) = db::github_connection::save(&pool, &connection).await {
-                                yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Failed to save connection: {}", e)));
+                                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                                    event_type: "error".to_string(),
+                                    data: format!("Failed to save connection: {}", e),
+                                });
                             } else {
                                 // Send success with username as JSON
                                 let response = serde_json::json!({
                                     "username": gh_user.login,
                                     "email": gh_user.email
                                 });
-                                yield Ok::<_, std::convert::Infallible>(Event::default().event("success").data(response.to_string()));
+                                sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                                    event_type: "success".to_string(),
+                                    data: response.to_string(),
+                                });
                             }
                         }
                         Err(e) => {
-                            yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Failed to get GitHub user: {}", e)));
+                            sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                                event_type: "error".to_string(),
+                                data: format!("Failed to get GitHub user: {}", e),
+                            });
                         }
                     }
                     break;
                 }
                 Err(github::OAuthError::AuthorizationTimeout) => {
-                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization timed out"));
+                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                        event_type: "error".to_string(),
+                        data: "Authorization timed out".to_string(),
+                    });
                     break;
                 }
                 Err(github::OAuthError::AccessDenied) => {
-                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data("Authorization was denied"));
+                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                        event_type: "error".to_string(),
+                        data: "Authorization was denied".to_string(),
+                    });
                     break;
                 }
                 Err(e) => {
-                    yield Ok::<_, std::convert::Infallible>(Event::default().event("error").data(format!("Error: {}", e)));
+                    sse_hub.publish(crate::sse::SSEMessage::GitHubOAuth {
+                        event_type: "error".to_string(),
+                        data: format!("Error: {}", e),
+                    });
                     break;
                 }
             }
 
             tokio::time::sleep(poll_interval).await;
         }
-    };
+    });
 
-    Sse::new(stream).into_response()
+    // Return immediately - client will receive events via /events/stream
+    (StatusCode::ACCEPTED, "Polling started").into_response()
 }
 
 #[instrument(skip(state))]
@@ -1465,4 +1497,61 @@ async fn github_search_repos(
         )
             .into_response(),
     }
+}
+
+// SSE Query Parameters
+#[derive(Debug, Deserialize)]
+struct SSEQueryParams {
+    message_types: Option<String>,
+    app_names: Option<String>,
+}
+
+/// Unified SSE endpoint for all real-time events
+#[instrument(skip(state, request))]
+async fn events_stream_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Query(params): Query<SSEQueryParams>,
+    request: Request<axum::body::Body>,
+) -> impl IntoResponse {
+    // Extract authenticated user from request extensions
+    let auth_user = match crate::auth::middleware::get_auth_user(request.extensions()) {
+        Ok(user) => user,
+        Err(e) => return Err(e),
+    };
+
+    // Parse user_id to i64
+    let user_id = match auth_user.user_id.parse::<i64>() {
+        Ok(id) => id,
+        Err(_) => {
+            return Err(crate::auth::middleware::AuthError::InvalidToken);
+        }
+    };
+
+    // Build subscription filter from query params
+    let mut filter = SubscriptionFilter::new(user_id);
+
+    if let Some(types) = params.message_types {
+        let types_vec: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();
+        filter = filter.with_message_types(types_vec);
+    }
+
+    if let Some(names) = params.app_names {
+        let names_vec: Vec<String> = names.split(',').map(|s| s.trim().to_string()).collect();
+        filter = filter.with_app_names(names_vec);
+    }
+
+    // Get SSE hub from state
+    let sse_hub = {
+        let state_guard = state.read().await;
+        state_guard.sse_hub.clone()
+    };
+
+    // Create SSE stream
+    let stream = start_sse_stream(sse_hub, filter, user_id);
+
+    Ok(Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
 }

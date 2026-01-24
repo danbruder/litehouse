@@ -1,5 +1,7 @@
 use crate::config;
+use crate::sse::SSEHub;
 use sqlx::{Pool, Sqlite};
+use std::sync::Arc;
 use tracing::{error, info, instrument};
 
 use crate::db;
@@ -28,11 +30,12 @@ type BuildResult<T> = Result<T, BuildError>;
 
 /// Start an async build for an app. Returns immediately with a Build record that has status=building.
 /// The actual build runs in a background task.
-#[instrument(skip(pool, github_token))]
+#[instrument(skip(pool, github_token, sse_hub))]
 pub async fn execute(
     pool: &Pool<Sqlite>,
     app_name: &str,
     github_token: Option<&str>,
+    sse_hub: Arc<SSEHub>,
 ) -> BuildResult<Build> {
     // Get app
     let mut app = db::app::get_by_name(pool, app_name)
@@ -65,12 +68,20 @@ pub async fn execute(
     let build = Build::new_building(app.id.clone(), log_path_str);
     db::build::save(pool, &build).await?;
 
+    // Publish build started event
+    sse_hub.publish(crate::sse::SSEMessage::BuildStatus {
+        app_name: app.name.clone(),
+        build_id: build.id.clone(),
+        status: "building".to_string(),
+    });
+
     // Spawn background task to do the actual build
     let pool_clone = pool.clone();
     let build_id = build.id.clone();
     let app_id = app.id.clone();
     let app_name_clone = app.name.clone();
     let github_token_owned = github_token.map(|s| s.to_string());
+    let sse_hub_clone = sse_hub.clone();
 
     tokio::spawn(async move {
         let result = do_build(
@@ -80,6 +91,7 @@ pub async fn execute(
             &app_name_clone,
             &remote,
             github_token_owned.as_deref(),
+            sse_hub_clone.clone(),
         )
         .await;
 
@@ -92,10 +104,22 @@ pub async fn execute(
                     } else {
                         original_state
                     };
+                    // Publish build success event
+                    sse_hub_clone.publish(crate::sse::SSEMessage::BuildStatus {
+                        app_name: app_name_clone.clone(),
+                        build_id: build_id.clone(),
+                        status: "success".to_string(),
+                    });
                 }
                 Err(ref e) => {
                     error!("Build failed for app '{}': {}", app_name_clone, e);
                     app.state = AppState::Failed;
+                    // Publish build failed event
+                    sse_hub_clone.publish(crate::sse::SSEMessage::BuildStatus {
+                        app_name: app_name_clone.clone(),
+                        build_id: build_id.clone(),
+                        status: "failed".to_string(),
+                    });
                 }
             }
             if let Err(e) = db::app::save(&pool_clone, &app).await {
@@ -118,6 +142,7 @@ async fn do_build(
     app_name: &str,
     remote: &crate::models::Remote,
     github_token: Option<&str>,
+    sse_hub: Arc<SSEHub>,
 ) -> BuildResult<()> {
     use std::path::Path;
 
@@ -132,6 +157,40 @@ async fn do_build(
         .ok_or_else(|| BuildError::AppNotConfigured("Build log path not set".to_string()))?;
 
     let build_dir = config::get_app_build_dir(app_name)?;
+
+    // Spawn task to tail log file and publish to SSE
+    let log_path_clone = log_path.clone();
+    let app_name_clone = app_name.to_string();
+    let build_id_clone = build_id.to_string();
+    let sse_hub_clone = sse_hub.clone();
+    tokio::spawn(async move {
+        use tokio::fs::File;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        use tokio::time::{sleep, Duration};
+
+        // Wait for log file to be created
+        for _ in 0..30 {
+            if tokio::fs::metadata(&log_path_clone).await.is_ok() {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // Tail the log file
+        if let Ok(file) = File::open(&log_path_clone).await {
+            let reader = BufReader::new(file);
+            let mut lines = reader.lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                sse_hub_clone.publish(crate::sse::SSEMessage::BuildLogs {
+                    app_name: app_name_clone.clone(),
+                    build_id: build_id_clone.clone(),
+                    event_type: "message".to_string(),
+                    data: line,
+                });
+            }
+        }
+    });
 
     // Pull the git repo
     let git_result = match git::pull(remote, &build_dir, github_token).await {

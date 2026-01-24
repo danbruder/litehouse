@@ -148,7 +148,6 @@ type Msg
     | SubmitAppName
     | StartGitHubConnect
     | GotDeviceFlowStart (Result String Effect.DeviceFlowStartResponse)
-    | GotGitHubSSEEvent Decode.Value
     | GotRepoList (Result String (List Effect.RepoInfo))
     | RepoSearchChanged String
     | ChooseRepo Effect.RepoInfo
@@ -176,8 +175,8 @@ type Msg
     | GotBuilds (Result String (List Effect.BuildInfo))
     | SelectBuild String
     | GotBuildLogs (Result String String)
-      -- Build logs streaming
-    | GotBuildLogsSSEEvent Decode.Value
+      -- Unified SSE message handler
+    | HandleSSEEvent Decode.Value
 
 
 update : Shared.Model -> Msg -> Model -> ( Model, Effect Msg )

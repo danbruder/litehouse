@@ -121,3 +121,4 @@ TODOS
 - [ ] Remove old build directories for deleted apps.
 - [ ] Failed to create app: Failed to create app: Invalid app name: YEEEEE. App names must be lowercase alphanumeric with optional hyphens or underscores.
 - [ ] Bypass auth locally.
+- [ ] 5 min sse event buffer for reconnects

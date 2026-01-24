@@ -37,19 +37,17 @@ port getRefreshToken : () -> Cmd msg
 port refreshTokenReceived : (Maybe String -> msg) -> Sub msg
 
 
-port startGitHubSSE : { token : String, deviceCode : String, interval : Int, expiresIn : Int } -> Cmd msg
+-- Unified SSE ports
+port connectSSE : { token : String, filters : Maybe Encode.Value } -> Cmd msg
 
 
-port gitHubSSEEvent : (Decode.Value -> msg) -> Sub msg
+port disconnectSSE : () -> Cmd msg
 
 
-port startBuildLogsSSE : { token : String, appName : String, buildId : String } -> Cmd msg
+port sseEvent : (Decode.Value -> msg) -> Sub msg
 
 
-port stopBuildLogsSSE : () -> Cmd msg
-
-
-port buildLogsSSEEvent : (Decode.Value -> msg) -> Sub msg
+port sseConnectionState : (String -> msg) -> Sub msg
 
 
 
@@ -143,8 +141,8 @@ type Msg
     | GotTokenVerification (Result Http.Error TokenVerificationResponse)
     | RefreshTokenReceived (Maybe String)
     | GotTokenRefresh (Result Http.Error TokenPair)
-    | GitHubSSEEvent Decode.Value
-    | BuildLogsSSEEvent Decode.Value
+    | SSEEvent Decode.Value
+    | SSEConnectionStateChanged String
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -428,35 +426,29 @@ update msg model =
                         ]
                     )
 
-        GitHubSSEEvent value ->
-            -- Forward to Dashboard
+        SSEEvent value ->
+            -- Route SSE message to appropriate page based on message type
+            -- For now, forward all to Dashboard if we're on that page
             case model.page of
                 Dashboard pageModel ->
                     let
                         ( newPageModel, effect ) =
-                            Page.Dashboard.update model.shared (Page.Dashboard.GotGitHubSSEEvent value) pageModel
+                            Page.Dashboard.update model.shared (Page.Dashboard.HandleSSEEvent value) pageModel
                     in
                     ( { model | page = Dashboard newPageModel }
                     , performEffect model.shared.navKey (Effect.map DashboardMsg effect)
                     )
 
                 _ ->
+                    -- TODO: Handle SSE events on other pages or update global state
                     ( model, Cmd.none )
 
-        BuildLogsSSEEvent value ->
-            -- Forward to Dashboard
-            case model.page of
-                Dashboard pageModel ->
-                    let
-                        ( newPageModel, effect ) =
-                            Page.Dashboard.update model.shared (Page.Dashboard.GotBuildLogsSSEEvent value) pageModel
-                    in
-                    ( { model | page = Dashboard newPageModel }
-                    , performEffect model.shared.navKey (Effect.map DashboardMsg effect)
-                    )
-
-                _ ->
-                    ( model, Cmd.none )
+        SSEConnectionStateChanged state ->
+            let
+                newShared =
+                    Shared.update (Shared.SetSSEConnectionState state) model.shared
+            in
+            ( { model | shared = newShared }, Cmd.none )
 
 
 
@@ -640,14 +632,11 @@ performEffect navKey effect =
         Effect.GetRefreshToken ->
             getRefreshToken ()
 
-        Effect.StartGitHubSSE config ->
-            startGitHubSSE config
+        Effect.ConnectSSE config ->
+            connectSSE config
 
-        Effect.StartBuildLogsSSE config ->
-            startBuildLogsSSE config
-
-        Effect.StopBuildLogsSSE ->
-            stopBuildLogsSSE ()
+        Effect.DisconnectSSE ->
+            disconnectSSE ()
 
         Effect.CheckServerStatus toMsg ->
             checkServerStatusHttp
@@ -1220,6 +1209,6 @@ subscriptions : Model -> Sub Msg
 subscriptions model =
     Sub.batch
         [ refreshTokenReceived RefreshTokenReceived
-        , gitHubSSEEvent GitHubSSEEvent
-        , buildLogsSSEEvent BuildLogsSSEEvent
+        , sseEvent SSEEvent
+        , sseConnectionState SSEConnectionStateChanged
         ]

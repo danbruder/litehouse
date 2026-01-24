@@ -14,3 +14,4 @@ pub mod litestream;
 pub mod models;
 pub mod docker;
 pub mod reconciler;
+pub mod sse;
