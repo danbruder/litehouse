@@ -23,12 +23,11 @@ The functions we're testing (handleBuildStatusEvent, handleBuildLogsEvent)
 only use shared.token, so navKey should never be evaluated in these tests.
 If tests fail with "TODO navKey", it means the code path is trying to use navKey.
 -}
-testSharedModel : Maybe String -> Shared.Model Nav.Key
+testSharedModel : Maybe String -> Shared.Model ()
 testSharedModel maybeToken =
-    -- For unit tests, we need a Nav.Key but it's opaque
-    -- Since these tests only test pure functions that don't use navKey,
-    -- we can use Debug.todo. For integration tests, use ProgramTest which handles this.
-    { navKey = Debug.todo "navKey - should not be used in handleBuildStatusEvent/handleBuildLogsEvent tests"
+    -- For unit tests, we use () as navigationKey since these functions don't use navKey
+    -- The functions only use shared.token, so navKey type doesn't matter
+    { navKey = ()
     , currentRoute = Nothing
     , serverVersion = ""
     , user = Nothing

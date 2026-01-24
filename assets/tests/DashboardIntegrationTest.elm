@@ -63,7 +63,7 @@ createAuthenticatedProgram =
         |> ProgramTest.simulateIncomingPort "refreshTokenReceived" (Encode.string refreshToken)
         |> ProgramTest.advanceTime 100
         -- Should now be on dashboard
-        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
 
 
 suite : Test
@@ -73,7 +73,7 @@ suite =
             [ test "shows create app form when clicking New App button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.ensureViewHasText "My Apps"
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.ensureViewHasText "Create New App"
@@ -82,7 +82,7 @@ suite =
             , test "validates app name is required" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "App name is required"
@@ -97,7 +97,7 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "+ New App"
                         |> Helpers.fillIn "appName" "my-new-app"
                         |> Helpers.submitForm
@@ -120,7 +120,7 @@ suite =
             [ test "displays empty state when no apps exist" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson [])
                         |> Helpers.ensureViewHasText "No apps yet"
@@ -135,7 +135,7 @@ suite =
                             ]
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps" (Helpers.appsListJson apps)
                         |> Helpers.ensureViewHasText "my-app"
@@ -159,7 +159,7 @@ suite =
                             }
                     in
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.ensureHttpRequest "GET" "/api/apps"
                         |> Helpers.simulateHttpOk "GET" "/api/apps"
                             (Helpers.appsListJson
@@ -170,7 +170,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> ProgramTest.advanceTime 100
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/apps/my-app")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/apps/my-app")
                         |> Helpers.ensureViewHasText "my-app"
                         |> Helpers.ensureViewHasText "Information"
                         |> Helpers.ensureViewHasText "Actions"
@@ -271,12 +271,12 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
                         |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
                         |> Helpers.clickButton "< Apps"
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> ProgramTest.done
             , test "logs out when clicking Logout button" <|
                 \_ ->
                     createAuthenticatedProgram
-                        |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost/dashboard")
+                        |> ProgramTest.ensureBrowserUrl (Expect.equal "/dashboard")
                         |> Helpers.clickButton "Logout"
                         |> ProgramTest.ensureBrowserUrl (Expect.equal "/login")
                         |> ProgramTest.done
