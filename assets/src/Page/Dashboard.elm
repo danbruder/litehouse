@@ -25,6 +25,7 @@ import Html exposing (Html, a, aside, button, div, footer, h1, h2, h3, header, i
 import Html.Attributes exposing (class, disabled, for, href, id, placeholder, required, selected, target, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Shared
 
 
@@ -487,6 +488,10 @@ update shared msg model =
                                         Effect.none
                             else
                                 Effect.none
+
+                        -- Update SSE filters to only receive messages for this app
+                        sseFilterEffect =
+                            Effect.UpdateSSEFilters (Just (encodeAppFilter app.name))
                     in
                     ( { model
                         | view =
@@ -505,7 +510,7 @@ update shared msg model =
                                 , buildLogsStreaming = buildLogsStreaming
                                 }
                       }
-                    , logStreamingEffect
+                    , Effect.batch [ logStreamingEffect, sseFilterEffect ]
                     )
 
                 Err err ->
@@ -513,13 +518,13 @@ update shared msg model =
                     ( model, Effect.none )
 
         BackToApps ->
-            -- Stop any streaming when navigating away
+            -- Stop any streaming and clear SSE filters when navigating away
             let
-                stopStreamEffect =
-                    Effect.none
+                clearFilterEffect =
+                    Effect.UpdateSSEFilters Nothing
             in
             ( { model | view = AppsListView }
-            , Effect.batch [ stopStreamEffect, Effect.PushUrl "/dashboard" ]
+            , Effect.batch [ clearFilterEffect, Effect.PushUrl "/dashboard" ]
             )
 
         RefreshAppDetail ->
@@ -2046,6 +2051,18 @@ viewVersion version =
 
     else
         p [ class "text-xs text-litehouse-muted" ] [ text ("v" ++ version) ]
+
+
+-- HELPER FUNCTIONS
+
+
+{-| Encode SSE filter for a specific app name
+-}
+encodeAppFilter : String -> Encode.Value
+encodeAppFilter appName =
+    Encode.object
+        [ ( "app_names", Encode.list Encode.string [ appName ] )
+        ]
 
 
 -- PAGE LIFECYCLE

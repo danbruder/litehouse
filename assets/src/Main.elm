@@ -44,6 +44,9 @@ port connectSSE : { token : String, filters : Maybe Encode.Value } -> Cmd msg
 port disconnectSSE : () -> Cmd msg
 
 
+port updateSSEFilters : { filters : Maybe Encode.Value } -> Cmd msg
+
+
 port sseEvent : (Decode.Value -> msg) -> Sub msg
 
 
@@ -705,6 +708,9 @@ performEffect navKey effect =
 
         Effect.DisconnectSSE ->
             disconnectSSE ()
+
+        Effect.UpdateSSEFilters filters ->
+            updateSSEFilters { filters = filters }
 
         Effect.CheckServerStatus toMsg ->
             Http.get

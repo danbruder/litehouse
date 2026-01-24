@@ -17,6 +17,12 @@ class SSEManager {
     this.reconnectTimeout = null;
     this.heartbeatTimeout = null;
     this.heartbeatInterval = 45000; // 45 seconds - disconnect if no message
+    
+    // Message throttling
+    this.messageQueue = [];
+    this.throttleInterval = 100; // Process messages every 100ms (max 10 messages/second)
+    this.throttleTimeout = null;
+    this.lastFilters = {}; // Store last filters for reconnection
   }
 
   /**
@@ -27,6 +33,9 @@ class SSEManager {
     if (this.abortController) {
       this.abortController.abort();
     }
+
+    // Store filters for reconnection
+    this.lastFilters = filters;
 
     this.abortController = new AbortController();
     this.setState('connecting');
@@ -114,7 +123,7 @@ class SSEManager {
   }
 
   /**
-   * Parse and handle an SSE message
+   * Parse and handle an SSE message (with throttling)
    */
   handleMessage(eventType, data) {
     this.resetHeartbeatTimeout();
@@ -128,14 +137,38 @@ class SSEManager {
       // Parse JSON data
       const parsedData = JSON.parse(data);
 
-      // Send to onMessage callback
-      this.onMessage({
+      // Add to queue for throttled processing
+      this.messageQueue.push({
         type: eventType,
         data: parsedData,
       });
+
+      // Start throttling timer if not already running
+      if (!this.throttleTimeout) {
+        this.processMessageQueue();
+      }
     } catch (error) {
       console.error('Failed to parse SSE message:', error, { eventType, data });
     }
+  }
+
+  /**
+   * Process queued messages with throttling
+   */
+  processMessageQueue() {
+    if (this.messageQueue.length === 0) {
+      this.throttleTimeout = null;
+      return;
+    }
+
+    // Process one message from the queue
+    const message = this.messageQueue.shift();
+    this.onMessage(message);
+
+    // Schedule next message processing
+    this.throttleTimeout = setTimeout(() => {
+      this.processMessageQueue();
+    }, this.throttleInterval);
   }
 
   /**
@@ -204,6 +237,14 @@ class SSEManager {
       this.heartbeatTimeout = null;
     }
 
+    if (this.throttleTimeout) {
+      clearTimeout(this.throttleTimeout);
+      this.throttleTimeout = null;
+    }
+
+    // Clear message queue
+    this.messageQueue = [];
+
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -234,6 +275,18 @@ class SSEManager {
     if (this.state === 'connected' || this.state === 'connecting') {
       this.disconnect();
       this.connect(this.lastFilters || {});
+    }
+  }
+
+  /**
+   * Update filters and reconnect if needed
+   */
+  updateFilters(filters = {}) {
+    this.lastFilters = filters;
+    // If connected, reconnect with new filters
+    if (this.state === 'connected' || this.state === 'connecting') {
+      this.disconnect();
+      this.connect(filters);
     }
   }
 }

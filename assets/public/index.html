@@ -97,6 +97,29 @@
                 sseManager = null;
             }
         });
+
+        // Port: Update SSE filters (reconnects with new filters)
+        app.ports.updateSSEFilters.subscribe(function(config) {
+            if (!sseManager) {
+                console.warn('Cannot update SSE filters: SSE manager not initialized');
+                return;
+            }
+
+            var filters = config.filters;
+
+            // Parse filters from Elm's Maybe Value
+            var parsedFilters = {};
+            if (filters) {
+                try {
+                    parsedFilters = filters;
+                } catch (e) {
+                    console.error('Failed to parse SSE filters:', e);
+                }
+            }
+
+            // Update filters (will reconnect if connected)
+            sseManager.updateFilters(parsedFilters);
+        });
     </script>
 </body>
 </html>

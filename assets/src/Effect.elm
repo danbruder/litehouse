@@ -51,6 +51,7 @@ type Effect msg
         , filters : Maybe Encode.Value
         }
     | DisconnectSSE
+    | UpdateSSEFilters (Maybe Encode.Value)
       -- HTTP Requests - Auth
     | CheckServerStatus (Result String ServerStatus -> msg)
     | VerifyToken String (Result String { user : UserInfo, token : String } -> msg)
@@ -245,6 +246,9 @@ map fn effect =
 
         DisconnectSSE ->
             DisconnectSSE
+
+        UpdateSSEFilters filters ->
+            UpdateSSEFilters filters
 
         StartGitHubPolling token deviceCode interval expiresIn ->
             StartGitHubPolling token deviceCode interval expiresIn
