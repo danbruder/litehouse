@@ -2,11 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=National+Park:wght@200..800&family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap');
 
 @layer base {
   html {
-    font-family: 'Manrope', sans-serif;
+    font-family: 'Noto Sans', sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 { 
+    font-family: 'National Park', sans-serif;
   }
 }
 
