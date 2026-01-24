@@ -11,6 +11,21 @@
     <script src="/app.js?v=2"></script>
     <script src="/sse-manager.js"></script>
     <script>
+        // Suppress harmless browser extension errors
+        window.addEventListener('unhandledrejection', function(event) {
+            // Filter out common browser extension message channel errors
+            if (event.reason && typeof event.reason === 'object') {
+                var message = event.reason.message || String(event.reason);
+                if (message.includes('message channel closed') || 
+                    message.includes('asynchronous response')) {
+                    event.preventDefault();
+                    return;
+                }
+            }
+            // Log other unhandled rejections for debugging
+            console.error('Unhandled promise rejection:', event.reason);
+        });
+
         // Token storage keys
         var TOKEN_KEY = 'litehouse_token';
         var REFRESH_TOKEN_KEY = 'litehouse_refresh_token';

@@ -330,5 +330,81 @@ suite =
                         |> Helpers.clickButton "Logout"
                         |> Helpers.ensureBrowserUrlPath "/login"
                         |> ProgramTest.done
+            , test "updates SSE filters when viewing app detail" <|
+                \_ ->
+                    let
+                        app =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "stopped"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        expectedFilter =
+                            Encode.object
+                                [ ( "app_names", Encode.list Encode.string [ "my-app" ] )
+                                ]
+                    in
+                    createAuthenticatedProgram
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps"
+                            (Helpers.appsListJson
+                                [ { id = "app-1", name = "my-app", state = "stopped" } ]
+                            )
+                        |> Helpers.clickLink "my-app"
+                        |> ProgramTest.advanceTime 100
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
+                        |> ProgramTest.advanceTime 100
+                        |> ProgramTest.ensureOutgoingPortValues "updateSSEFilters"
+                            (Decode.field "filters" Decode.value)
+                            (\values ->
+                                if List.any (\v -> Encode.encode 0 v == Encode.encode 0 expectedFilter) values then
+                                    Expect.pass
+                                else
+                                    Expect.fail ("Expected filter not found in port values. Got: " ++ Debug.toString values)
+                            )
+                        |> ProgramTest.done
+            , test "clears SSE filters when navigating back from app detail" <|
+                \_ ->
+                    let
+                        app =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "stopped"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+                    in
+                    createAuthenticatedProgram
+                        |> Helpers.ensureBrowserUrlPath "/dashboard"
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps"
+                            (Helpers.appsListJson
+                                [ { id = "app-1", name = "my-app", state = "stopped" } ]
+                            )
+                        |> Helpers.clickLink "my-app"
+                        |> ProgramTest.advanceTime 100
+                        |> Helpers.ensureHttpRequest "GET" "/api/apps/my-app"
+                        |> Helpers.simulateHttpOk "GET" "/api/apps/my-app" (Helpers.appDetailJson app)
+                        |> ProgramTest.advanceTime 100
+                        |> Helpers.ensureBrowserUrlPath "/apps/my-app"
+                        |> Helpers.clickButton "< Apps"
+                        |> ProgramTest.advanceTime 100
+                        |> ProgramTest.ensureOutgoingPortValues "updateSSEFilters"
+                            (Decode.field "filters" Decode.value)
+                            (\values ->
+                                if List.any (\v -> Encode.encode 0 v == Encode.encode 0 Encode.null) values then
+                                    Expect.pass
+                                else
+                                    Expect.fail ("Expected null filter not found in port values. Got: " ++ Debug.toString values)
+                            )
+                        |> ProgramTest.done
             ]
         ]

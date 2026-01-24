@@ -869,7 +869,7 @@ suite =
                     ( _, effect ) =
                         Dashboard.handleContainerLogsEvent model shared "my-app" "log line"
                 in
-                Expect.true "Effect should be none" (effectIsNone effect)
+                Expect.equal True (effectIsNone effect)
         ]
     , describe "Page.Dashboard.GotAppDetail"
         [ test "triggers StartLogStreaming when app is running" <|
@@ -896,9 +896,9 @@ suite =
                         testSharedModel (Just "test-token")
 
                     ( _, effect ) =
-                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok runningApp))
+                        Dashboard.update shared (Dashboard.GotAppDetail (Ok runningApp)) model
                 in
-                Expect.true "Should contain StartLogStreaming" (effectContainsStartLogStreaming effect)
+                Expect.equal True (effectContainsStartLogStreaming effect)
         , test "does not trigger StartLogStreaming when app is stopped" <|
             \_ ->
                 let
@@ -923,9 +923,9 @@ suite =
                         testSharedModel (Just "test-token")
 
                     ( _, effect ) =
-                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok stoppedApp))
+                        Dashboard.update shared (Dashboard.GotAppDetail (Ok stoppedApp)) model
                 in
-                Expect.false "Should not contain StartLogStreaming" (effectContainsStartLogStreaming effect)
+                Expect.equal False (effectContainsStartLogStreaming effect)
         , test "does not trigger StartLogStreaming when no token" <|
             \_ ->
                 let
@@ -950,9 +950,9 @@ suite =
                         testSharedModel Nothing
 
                     ( _, effect ) =
-                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok runningApp))
+                        Dashboard.update shared (Dashboard.GotAppDetail (Ok runningApp)) model
                 in
-                Expect.false "Should not contain StartLogStreaming when no token" (effectContainsStartLogStreaming effect)
+                Expect.equal False (effectContainsStartLogStreaming effect)
         ]
     ]
 

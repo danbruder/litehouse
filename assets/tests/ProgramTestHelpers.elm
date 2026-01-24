@@ -236,6 +236,20 @@ createSimulateEffects () effect =
                 Effect.DisconnectSSE ->
                     SimulatedEffect.Ports.send "disconnectSSE" (Encode.null)
 
+                Effect.UpdateSSEFilters filters ->
+                    SimulatedEffect.Ports.send "updateSSEFilters"
+                        (Encode.object
+                            [ ( "filters"
+                              , case filters of
+                                    Just filterValue ->
+                                        filterValue
+
+                                    Nothing ->
+                                        Encode.null
+                              )
+                            ]
+                        )
+
                 Effect.CheckServerStatus toMsg ->
                     SimulatedEffect.Http.get
                         { url = "/api/auth/status"
@@ -363,6 +377,11 @@ createSimulateEffects () effect =
                         , timeout = Nothing
                         , tracker = Nothing
                         }
+
+                Effect.StartLogStreaming token appName toMsg ->
+                    -- StartLogStreaming doesn't return immediately, it's handled via SSE
+                    -- So we'll just return none for testing
+                    SimulatedEffect.Cmd.none
 
                 Effect.FetchBuilds token appName toMsg ->
                     SimulatedEffect.Http.request
