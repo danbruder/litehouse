@@ -791,3 +791,97 @@ pub struct GitHubStatusResponse {
     pub email: Option<String>,
     pub scopes: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config;
+    use tempfile::TempDir;
+
+    fn setup_test_dirs() -> (TempDir, TempDir) {
+        let data_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        let _ = config::set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+        (data_dir, config_dir)
+    }
+
+    #[test]
+    fn test_get_auth_header_with_token() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.access_token = Some("test-token".to_string());
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        let header = client.get_auth_header().unwrap();
+        assert_eq!(header, Some("Bearer test-token".to_string()));
+    }
+
+    #[test]
+    fn test_get_auth_header_without_token() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let config = ClientConfig::default();
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        let header = client.get_auth_header().unwrap();
+        assert_eq!(header, None);
+    }
+
+    #[test]
+    fn test_update_tokens() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let config = ClientConfig::default();
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        client.update_tokens(
+            Some("access-123".to_string()),
+            Some("refresh-456".to_string())
+        ).unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.access_token, Some("access-123".to_string()));
+        assert_eq!(loaded.refresh_token, Some("refresh-456".to_string()));
+    }
+
+    #[test]
+    fn test_clear_tokens() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.access_token = Some("access-123".to_string());
+        config.refresh_token = Some("refresh-456".to_string());
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        client.clear_tokens().unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.access_token, None);
+        assert_eq!(loaded.refresh_token, None);
+    }
+
+    #[test]
+    fn test_get_access_token() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.access_token = Some("test-access".to_string());
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        let token = client.get_access_token().unwrap();
+        assert_eq!(token, Some("test-access".to_string()));
+    }
+
+    #[test]
+    fn test_get_refresh_token() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.refresh_token = Some("test-refresh".to_string());
+        config.save().unwrap();
+        
+        let client = ApiClient::new(config);
+        let token = client.get_refresh_token().unwrap();
+        assert_eq!(token, Some("test-refresh".to_string()));
+    }
+}

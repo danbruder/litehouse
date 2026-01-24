@@ -68,9 +68,11 @@ impl Default for ClientConfig {
 }
 
 /// Set test directories
-pub fn set_test_dirs(data_dir: PathBuf, config_dir: PathBuf) {
-    TEST_DATA_DIR.set(data_dir).unwrap();
-    TEST_CONFIG_DIR.set(config_dir).unwrap();
+/// Returns Ok if set successfully, Err if already set
+pub fn set_test_dirs(data_dir: PathBuf, config_dir: PathBuf) -> Result<(), PathBuf> {
+    TEST_DATA_DIR.set(data_dir).map_err(|_| PathBuf::new())?;
+    TEST_CONFIG_DIR.set(config_dir).map_err(|_| PathBuf::new())?;
+    Ok(())
 }
 
 /// Get the config directory
@@ -266,6 +268,84 @@ impl ClientConfig {
 
     pub fn get_config_path() -> Result<PathBuf, ConfigError> {
         Ok(get_config_dir()?.join("client-config.toml"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn setup_test_dirs() -> (TempDir, TempDir) {
+        let data_dir = tempfile::tempdir().unwrap();
+        let config_dir = tempfile::tempdir().unwrap();
+        // Ensure directories exist
+        std::fs::create_dir_all(data_dir.path()).unwrap();
+        std::fs::create_dir_all(config_dir.path()).unwrap();
+        // Only set if not already set (for parallel test execution)
+        let _ = set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+        (data_dir, config_dir)
+    }
+
+    #[test]
+    fn test_client_config_default() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let config = ClientConfig::default();
+        assert_eq!(config.base_url, "http://localhost:3030/api");
+        assert_eq!(config.access_token, None);
+        assert_eq!(config.refresh_token, None);
+    }
+
+    #[test]
+    fn test_client_config_save_and_load() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.base_url = "http://test.example.com/api".to_string();
+        config.access_token = Some("test-access-token".to_string());
+        config.refresh_token = Some("test-refresh-token".to_string());
+        
+        config.save().unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.base_url, "http://test.example.com/api");
+        assert_eq!(loaded.access_token, Some("test-access-token".to_string()));
+        assert_eq!(loaded.refresh_token, Some("test-refresh-token".to_string()));
+    }
+
+    #[test]
+    fn test_client_config_save_without_tokens() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let config = ClientConfig::default();
+        config.save().unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.access_token, None);
+        assert_eq!(loaded.refresh_token, None);
+    }
+
+    #[test]
+    fn test_client_config_update_tokens() {
+        let (_data_dir, _config_dir) = setup_test_dirs();
+        let mut config = ClientConfig::default();
+        config.save().unwrap();
+        
+        // Update with tokens
+        config.access_token = Some("new-access".to_string());
+        config.refresh_token = Some("new-refresh".to_string());
+        config.save().unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.access_token, Some("new-access".to_string()));
+        assert_eq!(loaded.refresh_token, Some("new-refresh".to_string()));
+        
+        // Clear tokens
+        config.access_token = None;
+        config.refresh_token = None;
+        config.save().unwrap();
+        
+        let loaded = ClientConfig::load().unwrap();
+        assert_eq!(loaded.access_token, None);
+        assert_eq!(loaded.refresh_token, None);
     }
 }
 

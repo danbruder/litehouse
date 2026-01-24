@@ -313,7 +313,7 @@ mod tests {
     fn setup_test_dirs() -> (TempDir, TempDir) {
         let data_dir = tempfile::tempdir().unwrap();
         let config_dir = tempfile::tempdir().unwrap();
-        crate::config::set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+        let _ = crate::config::set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
         (data_dir, config_dir)
     }
 
