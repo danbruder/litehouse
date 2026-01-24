@@ -201,3 +201,170 @@ pub async fn get_user_org_ids(pool: &Pool<Sqlite>, user_id: &str) -> Result<Vec<
 
     Ok(rows.into_iter().map(|r| r.organization_id).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::db::{organization, user};
+    use crate::models::{Organization, OrganizationMember, OrgRole, User};
+
+    #[tokio::test]
+    async fn test_save_and_get_member() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Member);
+        save(&pool, &member).await.unwrap();
+
+        let retrieved = get_member(&pool, &org.id, &test_user.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.organization_id, org.id);
+        assert_eq!(retrieved.user_id, test_user.id);
+        assert_eq!(retrieved.role, OrgRole::Member);
+    }
+
+    #[tokio::test]
+    async fn test_get_members() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let user1 = User::new("user1@example.com", "password123", None).unwrap();
+        let user2 = User::new("user2@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &user1).await.unwrap();
+        user::save(&pool, &user2).await.unwrap();
+
+        let member1 = OrganizationMember::new(&org.id, &user1.id, OrgRole::Owner);
+        let member2 = OrganizationMember::new(&org.id, &user2.id, OrgRole::Member);
+        save(&pool, &member1).await.unwrap();
+        save(&pool, &member2).await.unwrap();
+
+        let members = get_members(&pool, &org.id).await.unwrap();
+        assert_eq!(members.len(), 2);
+        assert!(members.iter().any(|(u, r)| u.id == user1.id && *r == OrgRole::Owner));
+        assert!(members.iter().any(|(u, r)| u.id == user2.id && *r == OrgRole::Member));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_role() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Admin);
+        save(&pool, &member).await.unwrap();
+
+        let role = get_user_role(&pool, &org.id, &test_user.id).await.unwrap().unwrap();
+        assert_eq!(role, OrgRole::Admin);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_role_not_found() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let role = get_user_role(&pool, &org.id, &test_user.id).await.unwrap();
+        assert!(role.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_remove_member() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Member);
+        save(&pool, &member).await.unwrap();
+        assert!(get_member(&pool, &org.id, &test_user.id).await.unwrap().is_some());
+
+        remove_member(&pool, &org.id, &test_user.id).await.unwrap();
+        assert!(get_member(&pool, &org.id, &test_user.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_role() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Member);
+        save(&pool, &member).await.unwrap();
+
+        update_role(&pool, &org.id, &test_user.id, OrgRole::Admin).await.unwrap();
+        let retrieved = get_member(&pool, &org.id, &test_user.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.role, OrgRole::Admin);
+    }
+
+    #[tokio::test]
+    async fn test_count_owners() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let user1 = User::new("user1@example.com", "password123", None).unwrap();
+        let user2 = User::new("user2@example.com", "password123", None).unwrap();
+        let user3 = User::new("user3@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &user1).await.unwrap();
+        user::save(&pool, &user2).await.unwrap();
+        user::save(&pool, &user3).await.unwrap();
+
+        let member1 = OrganizationMember::new(&org.id, &user1.id, OrgRole::Owner);
+        let member2 = OrganizationMember::new(&org.id, &user2.id, OrgRole::Owner);
+        let member3 = OrganizationMember::new(&org.id, &user3.id, OrgRole::Member);
+        save(&pool, &member1).await.unwrap();
+        save(&pool, &member2).await.unwrap();
+        save(&pool, &member3).await.unwrap();
+
+        let count = count_owners(&pool, &org.id).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_org_ids() {
+        let pool = get_test_pool().await;
+        let org1 = Organization::new("Org 1").unwrap();
+        let org2 = Organization::new("Org 2").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org1).await.unwrap();
+        organization::save(&pool, &org2).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member1 = OrganizationMember::new(&org1.id, &test_user.id, OrgRole::Member);
+        let member2 = OrganizationMember::new(&org2.id, &test_user.id, OrgRole::Member);
+        save(&pool, &member1).await.unwrap();
+        save(&pool, &member2).await.unwrap();
+
+        let org_ids = get_user_org_ids(&pool, &test_user.id).await.unwrap();
+        assert_eq!(org_ids.len(), 2);
+        assert!(org_ids.contains(&org1.id));
+        assert!(org_ids.contains(&org2.id));
+    }
+
+    #[tokio::test]
+    async fn test_save_update_existing() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+        organization::save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member1 = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Member);
+        save(&pool, &member1).await.unwrap();
+
+        let member2 = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Admin);
+        save(&pool, &member2).await.unwrap();
+
+        let retrieved = get_member(&pool, &org.id, &test_user.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.role, OrgRole::Admin);
+    }
+}

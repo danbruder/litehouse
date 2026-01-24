@@ -92,7 +92,9 @@ mod tests {
             .expect("Stream ended");
 
         let event = event.expect("Event error");
-        assert!(event.data().contains("SystemNotification"));
+        // Format event as SSE string to check its data
+        let event_str = format!("{:?}", event);
+        assert!(event_str.contains("SystemNotification"));
     }
 
     #[tokio::test]
@@ -125,9 +127,10 @@ mod tests {
             .expect("Stream ended");
 
         let event = event.expect("Event error");
-        let data = event.data();
-        assert!(data.contains("myapp"));
-        assert!(data.contains("matching line"));
+        // Format event as SSE string to check its data
+        let event_str = format!("{:?}", event);
+        assert!(event_str.contains("myapp"));
+        assert!(event_str.contains("matching line"));
     }
 
     #[tokio::test]
@@ -141,7 +144,8 @@ mod tests {
         let event = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Some(Ok(event)) = stream.next().await {
-                    if event.data().contains("Heartbeat") {
+                    let event_str = format!("{:?}", event);
+                    if event_str.contains("Heartbeat") {
                         return event;
                     }
                 }
@@ -150,6 +154,7 @@ mod tests {
         .await
         .expect("Timeout waiting for heartbeat");
 
-        assert!(event.data().contains("Heartbeat"));
+        let event_str = format!("{:?}", event);
+        assert!(event_str.contains("Heartbeat"));
     }
 }

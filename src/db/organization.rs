@@ -169,3 +169,145 @@ pub async fn user_has_access(pool: &Pool<Sqlite>, org_id: &str, user_id: &str) -
 
     Ok(result.count > 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::db::{organization_member, user};
+    use crate::models::{Organization, OrganizationMember, OrgRole, User};
+
+    #[tokio::test]
+    async fn test_save_and_get_by_id() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+
+        save(&pool, &org).await.unwrap();
+        let retrieved = get_by_id(&pool, &org.id).await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, org.id);
+        assert_eq!(retrieved.name, "Test Org");
+        assert_eq!(retrieved.slug, "test-org");
+    }
+
+    #[tokio::test]
+    async fn test_get_by_slug() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("My Company").unwrap();
+
+        save(&pool, &org).await.unwrap();
+        let retrieved = get_by_slug(&pool, "my-company").await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, org.id);
+        assert_eq!(retrieved.name, "My Company");
+    }
+
+    #[tokio::test]
+    async fn test_get_by_name() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+
+        save(&pool, &org).await.unwrap();
+        let retrieved = get_by_name(&pool, "Test Org").await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, org.id);
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id_not_found() {
+        let pool = get_test_pool().await;
+        let result = get_by_id(&pool, "nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_user_organizations() {
+        let pool = get_test_pool().await;
+        let org1 = Organization::new("Org 1").unwrap();
+        let org2 = Organization::new("Org 2").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+
+        save(&pool, &org1).await.unwrap();
+        save(&pool, &org2).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        let member1 = OrganizationMember::new(&org1.id, &test_user.id, OrgRole::Owner);
+        let member2 = OrganizationMember::new(&org2.id, &test_user.id, OrgRole::Member);
+        organization_member::save(&pool, &member1).await.unwrap();
+        organization_member::save(&pool, &member2).await.unwrap();
+
+        let orgs = get_user_organizations(&pool, &test_user.id).await.unwrap();
+        assert_eq!(orgs.len(), 2);
+        assert!(orgs.iter().any(|o| o.organization.id == org1.id && o.role == OrgRole::Owner));
+        assert!(orgs.iter().any(|o| o.organization.id == org2.id && o.role == OrgRole::Member));
+    }
+
+    #[tokio::test]
+    async fn test_get_all() {
+        let pool = get_test_pool().await;
+        let org1 = Organization::new("Org A").unwrap();
+        let org2 = Organization::new("Org B").unwrap();
+        let org3 = Organization::new("Org C").unwrap();
+
+        save(&pool, &org1).await.unwrap();
+        save(&pool, &org2).await.unwrap();
+        save(&pool, &org3).await.unwrap();
+
+        let all_orgs = get_all(&pool).await.unwrap();
+        // Should be ordered by name, verify all orgs are present
+        let org_names: Vec<String> = all_orgs.iter().map(|o| o.name.clone()).collect();
+        assert!(org_names.contains(&"Org A".to_string()));
+        assert!(org_names.contains(&"Org B".to_string()));
+        assert!(org_names.contains(&"Org C".to_string()));
+        // Verify ordering (alphabetical)
+        let org_a_idx = org_names.iter().position(|n| n == "Org A").unwrap();
+        let org_b_idx = org_names.iter().position(|n| n == "Org B").unwrap();
+        let org_c_idx = org_names.iter().position(|n| n == "Org C").unwrap();
+        assert!(org_a_idx < org_b_idx);
+        assert!(org_b_idx < org_c_idx);
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("To Delete").unwrap();
+
+        save(&pool, &org).await.unwrap();
+        assert!(get_by_id(&pool, &org.id).await.unwrap().is_some());
+
+        delete(&pool, &org.id).await.unwrap();
+        assert!(get_by_id(&pool, &org.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_user_has_access() {
+        let pool = get_test_pool().await;
+        let org = Organization::new("Test Org").unwrap();
+        let test_user = User::new("test@example.com", "password123", None).unwrap();
+
+        save(&pool, &org).await.unwrap();
+        user::save(&pool, &test_user).await.unwrap();
+
+        assert!(!user_has_access(&pool, &org.id, &test_user.id).await.unwrap());
+
+        let member = OrganizationMember::new(&org.id, &test_user.id, OrgRole::Member);
+        organization_member::save(&pool, &member).await.unwrap();
+
+        assert!(user_has_access(&pool, &org.id, &test_user.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_save_update_existing() {
+        let pool = get_test_pool().await;
+        let mut org = Organization::new("Original Name").unwrap();
+        let original_id = org.id.clone();
+
+        save(&pool, &org).await.unwrap();
+        org.update_name("Updated Name").unwrap();
+        save(&pool, &org).await.unwrap();
+
+        let retrieved = get_by_id(&pool, &original_id).await.unwrap().unwrap();
+        assert_eq!(retrieved.name, "Updated Name");
+        assert_eq!(retrieved.slug, "updated-name");
+    }
+}

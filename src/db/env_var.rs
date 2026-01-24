@@ -72,3 +72,106 @@ pub async fn delete_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<()> {
     .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::db::app;
+    use crate::models::{App, EnvVar};
+
+    #[tokio::test]
+    async fn test_save_and_get_by_app() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp", 8080).unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
+        let env_var2 = EnvVar::new(&app.id, "KEY2", "value2");
+
+        save(&pool, &env_var1).await.unwrap();
+        save(&pool, &env_var2).await.unwrap();
+
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(retrieved.len(), 2);
+        assert!(retrieved.iter().any(|e| e.key == "KEY1" && e.value == "value1"));
+        assert!(retrieved.iter().any(|e| e.key == "KEY2" && e.value == "value2"));
+    }
+
+    #[tokio::test]
+    async fn test_save_replace_existing() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp", 8080).unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
+        save(&pool, &env_var1).await.unwrap();
+
+        let env_var2 = EnvVar::new(&app.id, "KEY1", "updated_value");
+        save(&pool, &env_var2).await.unwrap();
+
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(retrieved.len(), 1);
+        assert_eq!(retrieved[0].key, "KEY1");
+        assert_eq!(retrieved[0].value, "updated_value");
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_key() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp", 8080).unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
+        let env_var2 = EnvVar::new(&app.id, "KEY2", "value2");
+        save(&pool, &env_var1).await.unwrap();
+        save(&pool, &env_var2).await.unwrap();
+
+        delete_by_key(&pool, &app.id, "KEY1").await.unwrap();
+
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(retrieved.len(), 1);
+        assert_eq!(retrieved[0].key, "KEY2");
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_app() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp", 8080).unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        let env_var1 = EnvVar::new(&app.id, "KEY1", "value1");
+        let env_var2 = EnvVar::new(&app.id, "KEY2", "value2");
+        let env_var3 = EnvVar::new(&app.id, "KEY3", "value3");
+        save(&pool, &env_var1).await.unwrap();
+        save(&pool, &env_var2).await.unwrap();
+        save(&pool, &env_var3).await.unwrap();
+
+        delete_by_app(&pool, &app.id).await.unwrap();
+
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(retrieved.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_apps_isolation() {
+        let pool = get_test_pool().await;
+        let app1 = App::new("app1", 8080).unwrap();
+        let app2 = App::new("app2", 8081).unwrap();
+        app::save(&pool, &app1).await.unwrap();
+        app::save(&pool, &app2).await.unwrap();
+
+        let env_var1 = EnvVar::new(&app1.id, "KEY1", "value1");
+        let env_var2 = EnvVar::new(&app2.id, "KEY1", "value2");
+        save(&pool, &env_var1).await.unwrap();
+        save(&pool, &env_var2).await.unwrap();
+
+        let app1_vars = get_by_app(&pool, &app1.id).await.unwrap();
+        let app2_vars = get_by_app(&pool, &app2.id).await.unwrap();
+
+        assert_eq!(app1_vars.len(), 1);
+        assert_eq!(app1_vars[0].value, "value1");
+        assert_eq!(app2_vars.len(), 1);
+        assert_eq!(app2_vars[0].value, "value2");
+    }
+}

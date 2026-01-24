@@ -273,8 +273,9 @@ mod tests {
     #[tokio::test]
     async fn test_build_app_not_found() {
         let pool = get_test_pool().await;
+        let sse_hub = Arc::new(crate::sse::SSEHub::new());
 
-        let result = execute(&pool, "nonexistent-app", None).await;
+        let result = execute(&pool, "nonexistent-app", None, sse_hub).await;
 
         assert!(matches!(result, Err(BuildError::AppNotFound(_))));
     }
@@ -282,13 +283,14 @@ mod tests {
     #[tokio::test]
     async fn test_build_already_building() {
         let pool = get_test_pool().await;
+        let sse_hub = Arc::new(crate::sse::SSEHub::new());
 
         // Create app in Building state
         let mut app = App::new("test-building-app", 8000).unwrap();
         app.state = AppState::Building;
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-building-app", None).await;
+        let result = execute(&pool, "test-building-app", None, sse_hub).await;
 
         assert!(matches!(result, Err(BuildError::AlreadyBuilding(_))));
     }
@@ -296,12 +298,13 @@ mod tests {
     #[tokio::test]
     async fn test_build_no_remote_configured() {
         let pool = get_test_pool().await;
+        let sse_hub = Arc::new(crate::sse::SSEHub::new());
 
         // Create app without remote
         let app = App::new("test-no-remote-app", 8001).unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-no-remote-app", None).await;
+        let result = execute(&pool, "test-no-remote-app", None, sse_hub).await;
 
         assert!(matches!(result, Err(BuildError::AppNotConfigured(_))));
     }
@@ -326,7 +329,8 @@ mod tests {
         db::remote::save(&pool, &remote).await.unwrap();
 
         // Execute build - this should start the build and return immediately
-        let result = execute(&pool, "test-build-app", None).await;
+        let sse_hub = Arc::new(crate::sse::SSEHub::new());
+        let result = execute(&pool, "test-build-app", None, sse_hub).await;
 
         // Build should start successfully (returns a build record)
         assert!(result.is_ok(), "Build should start: {:?}", result.err());

@@ -139,3 +139,143 @@ pub async fn get_all_with_ports(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
 
     Ok(apps)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::models::{App, AppState};
+
+    #[tokio::test]
+    async fn test_save_and_get_by_id() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp", 8080).unwrap();
+
+        save(&pool, &app).await.unwrap();
+        let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, app.id);
+        assert_eq!(retrieved.name, app.name);
+        assert_eq!(retrieved.port, app.port);
+        assert_eq!(retrieved.state, app.state);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_by_name() {
+        let pool = get_test_pool().await;
+        let app = App::new("myapp", 3000).unwrap();
+
+        save(&pool, &app).await.unwrap();
+        let retrieved = get_by_name(&pool, "myapp").await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, app.id);
+        assert_eq!(retrieved.name, "myapp");
+        assert_eq!(retrieved.port, Some(3000));
+    }
+
+    #[tokio::test]
+    async fn test_get_by_name_not_found() {
+        let pool = get_test_pool().await;
+        let result = get_by_name(&pool, "nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_by_state() {
+        let pool = get_test_pool().await;
+        let app1 = App::new("app1", 8080).unwrap();
+        let mut app2 = App::new("app2", 8081).unwrap();
+        app2.state = AppState::Running;
+
+        save(&pool, &app1).await.unwrap();
+        save(&pool, &app2).await.unwrap();
+
+        let stopped_apps = get_by_state(&pool, AppState::Stopped).await.unwrap();
+        assert_eq!(stopped_apps.len(), 1);
+        assert_eq!(stopped_apps[0].name, "app1");
+
+        let running_apps = get_by_state(&pool, AppState::Running).await.unwrap();
+        assert_eq!(running_apps.len(), 1);
+        assert_eq!(running_apps[0].name, "app2");
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_app_id() {
+        let pool = get_test_pool().await;
+        let app = App::new("todelete", 8080).unwrap();
+
+        save(&pool, &app).await.unwrap();
+        assert!(get_by_id(&pool, &app.id).await.unwrap().is_some());
+
+        delete_by_app_id(&pool, &app.id).await.unwrap();
+        assert!(get_by_id(&pool, &app.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_all() {
+        let pool = get_test_pool().await;
+        let app1 = App::new("app1", 8080).unwrap();
+        let app2 = App::new("app2", 8081).unwrap();
+        let app3 = App::new("app3", 8082).unwrap();
+
+        save(&pool, &app1).await.unwrap();
+        save(&pool, &app2).await.unwrap();
+        save(&pool, &app3).await.unwrap();
+
+        let all_apps = get_all(&pool).await.unwrap();
+        assert_eq!(all_apps.len(), 3);
+        assert_eq!(all_apps[0].name, "app1");
+        assert_eq!(all_apps[1].name, "app2");
+        assert_eq!(all_apps[2].name, "app3");
+    }
+
+    #[tokio::test]
+    async fn test_get_all_with_ports() {
+        let pool = get_test_pool().await;
+        let mut app1 = App::new("app1", 8080).unwrap();
+        let app2 = App::new("app2", 8081).unwrap();
+        app1.port = None;
+
+        save(&pool, &app1).await.unwrap();
+        save(&pool, &app2).await.unwrap();
+
+        let apps_with_ports = get_all_with_ports(&pool).await.unwrap();
+        assert_eq!(apps_with_ports.len(), 1);
+        assert_eq!(apps_with_ports[0].name, "app2");
+    }
+
+    #[tokio::test]
+    async fn test_save_update_existing() {
+        let pool = get_test_pool().await;
+        let mut app = App::new("updateapp", 8080).unwrap();
+        let original_id = app.id.clone();
+
+        save(&pool, &app).await.unwrap();
+        app.name = "updatedname".to_string();
+        app.port = Some(9000);
+        app.state = AppState::Running;
+
+        save(&pool, &app).await.unwrap();
+        let retrieved = get_by_id(&pool, &original_id).await.unwrap().unwrap();
+
+        assert_eq!(retrieved.id, original_id);
+        assert_eq!(retrieved.name, "updatedname");
+        assert_eq!(retrieved.port, Some(9000));
+        assert_eq!(retrieved.state, AppState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_app_with_organization() {
+        let pool = get_test_pool().await;
+        // Create organization first to satisfy foreign key constraint
+        let org = crate::models::Organization::new("Test Org").unwrap();
+        crate::db::organization::save(&pool, &org).await.unwrap();
+
+        let app = App::new_with_org("orgapp", 8080, &org.id).unwrap();
+
+        save(&pool, &app).await.unwrap();
+        let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
+
+        assert_eq!(retrieved.organization_id, Some(org.id));
+    }
+}
