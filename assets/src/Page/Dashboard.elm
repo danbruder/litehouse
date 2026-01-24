@@ -13,6 +13,10 @@ module Page.Dashboard exposing
     , load
     -- Exposed for testing
     , handleGotGitHubStatus
+    , handleBuildStatusEvent
+    , handleBuildLogsEvent
+    , AppAction(..)
+    , LogsView(..)
     )
 
 import Effect exposing (Effect)
@@ -962,7 +966,7 @@ handleGitHubOAuthEvent model shared eventType data =
 
 
 handleBuildLogsEvent : Model -> Shared.Model -> String -> String -> String -> String -> ( Model, Effect Msg )
-handleBuildLogsEvent model shared appName buildId eventType data =
+handleBuildLogsEvent model shared _ _ eventType data =
     case ( model.view, shared.token ) of
         ( AppDetailView detailState, Just token ) ->
             case eventType of
@@ -1002,7 +1006,8 @@ handleBuildLogsEvent model shared appName buildId eventType data =
                     )
 
                 "error" ->
-                    -- Error occurred
+                    -- Error occurred - clear action in progress and refresh app state
+                    -- token is already available from the outer case match
                     ( { model
                         | view =
                             AppDetailView
@@ -1013,7 +1018,10 @@ handleBuildLogsEvent model shared appName buildId eventType data =
                                     , error = Just ("Build error: " ++ data)
                                 }
                       }
-                    , Effect.none
+                    , Effect.batch
+                        [ Effect.FetchAppDetail token detailState.app.name GotAppDetail
+                        , Effect.FetchBuilds token detailState.app.name GotBuilds
+                        ]
                     )
 
                 _ ->
@@ -1024,10 +1032,139 @@ handleBuildLogsEvent model shared appName buildId eventType data =
 
 
 handleBuildStatusEvent : Model -> Shared.Model -> String -> String -> String -> ( Model, Effect Msg )
-handleBuildStatusEvent model shared appName buildId status =
+handleBuildStatusEvent model shared appName _ status =
     -- Handle build status changes (building, success, failed)
-    -- Could update UI to show build progress
-    ( model, Effect.none )
+    case status of
+        "failed" ->
+            -- Build failed - update state and clear action in progress
+            let
+                -- Update apps list immediately for responsive UI
+                updatedApps =
+                    List.map
+                        (\app ->
+                            if app.name == appName then
+                                { app | state = "failed" }
+                            else
+                                app
+                        )
+                        model.apps
+
+                -- Update app detail view if we're viewing this app
+                ( updatedView, refreshEffect ) =
+                    case model.view of
+                        AppDetailView detailState ->
+                            if detailState.app.name == appName then
+                                case shared.token of
+                                    Just token ->
+                                        ( AppDetailView
+                                            { detailState
+                                                | actionInProgress = Nothing
+                                            }
+                                        , Effect.batch
+                                            [ Effect.FetchAppDetail token appName GotAppDetail
+                                            , Effect.FetchBuilds token appName GotBuilds
+                                            ]
+                                        )
+
+                                    Nothing ->
+                                        ( AppDetailView
+                                            { detailState
+                                                | actionInProgress = Nothing
+                                            }
+                                        , Effect.none
+                                        )
+
+                            else
+                                ( model.view, Effect.none )
+
+                        AppsListView ->
+                            -- Refresh apps list to ensure we have latest state from server
+                            case shared.token of
+                                Just token ->
+                                    ( model.view
+                                    , Effect.FetchApps token GotApps
+                                    )
+
+                                Nothing ->
+                                    ( model.view, Effect.none )
+
+                        _ ->
+                            ( model.view, Effect.none )
+            in
+            ( { model
+                | apps = updatedApps
+                , view = updatedView
+              }
+            , refreshEffect
+            )
+
+        "success" ->
+            -- Build succeeded - update state and clear action in progress
+            let
+                -- Update apps list immediately for responsive UI
+                updatedApps =
+                    List.map
+                        (\app ->
+                            if app.name == appName then
+                                -- If app was in "building" state, it should now be "stopped" or previous state
+                                { app | state = if app.state == "building" then "stopped" else app.state }
+                            else
+                                app
+                        )
+                        model.apps
+
+                -- Update app detail view if we're viewing this app
+                ( updatedView, refreshEffect ) =
+                    case model.view of
+                        AppDetailView detailState ->
+                            if detailState.app.name == appName then
+                                case shared.token of
+                                    Just token ->
+                                        ( AppDetailView
+                                            { detailState
+                                                | actionInProgress = Nothing
+                                            }
+                                        , Effect.batch
+                                            [ Effect.FetchAppDetail token appName GotAppDetail
+                                            , Effect.FetchBuilds token appName GotBuilds
+                                            ]
+                                        )
+
+                                    Nothing ->
+                                        ( AppDetailView
+                                            { detailState
+                                                | actionInProgress = Nothing
+                                            }
+                                        , Effect.none
+                                        )
+
+                            else
+                                ( model.view, Effect.none )
+
+                        AppsListView ->
+                            -- Refresh apps list to ensure we have latest state from server
+                            case shared.token of
+                                Just token ->
+                                    ( model.view
+                                    , Effect.FetchApps token GotApps
+                                    )
+
+                                Nothing ->
+                                    ( model.view, Effect.none )
+
+                        _ ->
+                            ( model.view, Effect.none )
+            in
+            ( { model
+                | apps = updatedApps
+                , view = updatedView
+              }
+            , refreshEffect
+            )
+
+        _ ->
+            -- Other statuses (e.g., "building") - no action needed yet
+            ( model, Effect.none )
 
 
 -- TESTABLE HELPERS
