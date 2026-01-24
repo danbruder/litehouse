@@ -65,6 +65,7 @@ type Effect msg
     | BuildApp String String (Result String String -> msg)
     | DeleteApp String String (Result String String -> msg)
     | FetchLogs String String (Result String String -> msg)
+    | StartLogStreaming String String (Result String String -> msg)
     | FetchBuilds String String (Result String (List BuildInfo) -> msg)
     | FetchBuildLogs String String String (Result String String -> msg)
       -- HTTP Requests - GitHub
@@ -283,6 +284,9 @@ map fn effect =
 
         FetchLogs token appName toMsg ->
             FetchLogs token appName (toMsg >> fn)
+
+        StartLogStreaming token appName toMsg ->
+            StartLogStreaming token appName (toMsg >> fn)
 
         FetchBuilds token appName toMsg ->
             FetchBuilds token appName (toMsg >> fn)

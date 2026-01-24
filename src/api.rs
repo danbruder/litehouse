@@ -192,11 +192,11 @@ async fn stop_app(
     }
 }
 
-#[instrument(skip(name, _state))]
+#[instrument(skip(name, state))]
 async fn get_logs(
     Path(name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-    State(_state): State<Arc<RwLock<AppState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
 ) -> impl IntoResponse {
     let lines = params
         .get("lines")
@@ -208,14 +208,41 @@ async fn get_logs(
         .unwrap_or(false);
 
     if follow {
-        // Stream logs using podman-api
+        // Get message bus from state
+        let message_bus = {
+            let state_guard = state.read().await;
+            state_guard.message_bus.clone()
+        };
+
+        // Stream logs and publish to message bus
         match logs::execute(&name, lines, true).await {
             Ok(stream) => {
-                let sse_stream = stream.map(|result| match result {
-                    Ok(data) => Ok(Event::default().data(data)),
-                    Err(e) => Err(e),
+                let app_name = name.clone();
+                let message_bus_clone = message_bus.clone();
+                
+                // Spawn background task to publish logs to message bus
+                tokio::spawn(async move {
+                    let mut log_stream = stream;
+                    while let Some(result) = log_stream.next().await {
+                        match result {
+                            Ok(data) => {
+                                // Publish to message bus
+                                message_bus_clone.publish(Message::ContainerLogs {
+                                    app_name: app_name.clone(),
+                                    data: data.clone(),
+                                });
+                            }
+                            Err(e) => {
+                                tracing::warn!("Error reading log stream for {}: {}", app_name, e);
+                                break;
+                            }
+                        }
+                    }
+                    tracing::debug!("Log streaming task completed for {}", app_name);
                 });
-                Sse::new(sse_stream).into_response()
+
+                // Return a simple OK response since logs are now streamed via message bus
+                (StatusCode::OK, "Log streaming started").into_response()
             }
             Err(e) => (StatusCode::NOT_FOUND, format!("Failed to get logs: {}", e)).into_response(),
         }

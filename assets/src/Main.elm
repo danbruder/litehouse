@@ -759,6 +759,9 @@ performEffect navKey effect =
         Effect.FetchLogs token appName toMsg ->
             fetchLogsHttp token appName toMsg
 
+        Effect.StartLogStreaming token appName toMsg ->
+            startLogStreamingHttp token appName toMsg
+
         Effect.FetchBuilds token appName toMsg ->
             fetchBuildsHttp token appName toMsg
 
@@ -1032,6 +1035,19 @@ fetchLogsHttp token appName toMsg =
         { method = "GET"
         , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
         , url = "/api/apps/" ++ appName ++ "/logs?lines=100"
+        , body = Http.emptyBody
+        , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+startLogStreamingHttp : String -> String -> (Result String String -> msg) -> Cmd msg
+startLogStreamingHttp token appName toMsg =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/logs?lines=50&follow=true"
         , body = Http.emptyBody
         , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
         , timeout = Nothing

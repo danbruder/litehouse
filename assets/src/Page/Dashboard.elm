@@ -172,6 +172,7 @@ type Msg
     | GotAppStopped (Result String String)
     | GotAppBuilt (Result String String)
     | GotAppDeleted (Result String String)
+    | NoOp
     | FetchLogs
     | GotLogs (Result String String)
       -- Build logs
@@ -473,6 +474,18 @@ update shared msg model =
 
                                 _ ->
                                     ( Nothing, False, "" )
+                        
+                        -- Start log streaming if app is running
+                        logStreamingEffect =
+                            if app.state == "running" then
+                                case shared.token of
+                                    Just token ->
+                                        Effect.StartLogStreaming token app.name (\_ -> NoOp)
+                                    
+                                    Nothing ->
+                                        Effect.none
+                            else
+                                Effect.none
                     in
                     ( { model
                         | view =
@@ -491,7 +504,7 @@ update shared msg model =
                                 , buildLogsStreaming = buildLogsStreaming
                                 }
                       }
-                    , Effect.none
+                    , logStreamingEffect
                     )
 
                 Err err ->
@@ -711,6 +724,10 @@ update shared msg model =
                         _ ->
                             ( model, Effect.none )
 
+        NoOp ->
+            -- No operation, used for fire-and-forget effects
+            ( model, Effect.none )
+
         FetchLogs ->
             case ( model.view, shared.token ) of
                 ( AppDetailView detailState, Just token ) ->
@@ -877,6 +894,10 @@ update shared msg model =
                 Ok (BuildStatusMessage appName buildId status) ->
                     -- Route to build status handler
                     handleBuildStatusEvent model shared appName buildId status
+
+                Ok (ContainerLogsMessage appName data) ->
+                    -- Route to container logs handler
+                    handleContainerLogsEvent model shared appName data
 
                 Ok HeartbeatMessage ->
                     -- Heartbeat, no action needed
@@ -1165,6 +1186,36 @@ handleBuildStatusEvent model shared appName _ status =
 
         _ ->
             -- Other statuses (e.g., "building") - no action needed yet
+            ( model, Effect.none )
+
+
+handleContainerLogsEvent : Model -> Shared.Model navigationKey -> String -> String -> ( Model, Effect Msg )
+handleContainerLogsEvent model shared appName data =
+    case ( model.view, shared.token ) of
+        ( AppDetailView detailState, Just token ) ->
+            -- Only handle logs for the app we're currently viewing
+            if detailState.app.name == appName then
+                -- Append log line
+                let
+                    newLogs =
+                        if String.isEmpty detailState.logs then
+                            data
+
+                        else
+                            detailState.logs ++ "\n" ++ data
+                in
+                ( { model
+                    | view =
+                        AppDetailView
+                            { detailState | logs = newLogs }
+                  }
+                , Effect.none
+                )
+
+            else
+                ( model, Effect.none )
+
+        _ ->
             ( model, Effect.none )
 
 
