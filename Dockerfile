@@ -14,7 +14,8 @@ COPY assets/public ./public
 # Build Elm app
 RUN mkdir -p dist && \
     elm make src/Main.elm --optimize --output=dist/app.js && \
-    cp public/index.html dist/index.html
+    cp public/index.html dist/index.html && \
+    cp public/sse-manager.js dist/sse-manager.js
 
 # Backend build stage
 FROM rust:1.92-alpine AS builder

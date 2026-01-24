@@ -1,0 +1,246 @@
+/**
+ * SSEManager - Manages a single SSE connection with automatic reconnection
+ * and server-side filtering for real-time backend-to-frontend messaging.
+ */
+class SSEManager {
+  constructor(baseUrl, token, onMessage, onStateChange) {
+    this.baseUrl = baseUrl;
+    this.token = token;
+    this.onMessage = onMessage;
+    this.onStateChange = onStateChange;
+
+    this.state = 'disconnected'; // connecting | connected | disconnected | error
+    this.abortController = null;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = Infinity;
+    this.reconnectDelays = [1000, 2000, 4000, 8000, 30000]; // Exponential backoff with max 30s
+    this.reconnectTimeout = null;
+    this.heartbeatTimeout = null;
+    this.heartbeatInterval = 45000; // 45 seconds - disconnect if no message
+  }
+
+  /**
+   * Connect to the SSE endpoint with optional filters
+   * @param {Object} filters - Optional filters { message_types: ['Type1', 'Type2'], app_names: ['app1'] }
+   */
+  connect(filters = {}) {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+
+    this.abortController = new AbortController();
+    this.setState('connecting');
+
+    // Build query string from filters
+    const params = new URLSearchParams();
+    if (filters.message_types && filters.message_types.length > 0) {
+      params.append('message_types', filters.message_types.join(','));
+    }
+    if (filters.app_names && filters.app_names.length > 0) {
+      params.append('app_names', filters.app_names.join(','));
+    }
+
+    const url = `${this.baseUrl}/api/events/stream?${params.toString()}`;
+
+    fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${this.token}`,
+        'Accept': 'text/event-stream',
+      },
+      signal: this.abortController.signal,
+    })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`SSE connection failed: ${response.status} ${response.statusText}`);
+      }
+
+      this.setState('connected');
+      this.reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+      this.resetHeartbeatTimeout();
+
+      return response.body;
+    })
+    .then(body => {
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const processChunk = ({ done, value }) => {
+        if (done) {
+          console.log('SSE stream ended');
+          this.handleDisconnect();
+          return;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Keep incomplete line in buffer
+
+        let currentEvent = null;
+        let currentData = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            currentEvent = line.substring(6).trim();
+          } else if (line.startsWith('data:')) {
+            currentData = line.substring(5).trim();
+          } else if (line === '') {
+            // Empty line marks end of event
+            if (currentEvent && currentData) {
+              this.handleMessage(currentEvent, currentData);
+              currentEvent = null;
+              currentData = '';
+            }
+          } else if (line.startsWith(':')) {
+            // Comment line (keep-alive), ignore
+            this.resetHeartbeatTimeout();
+          }
+        }
+
+        return reader.read().then(processChunk);
+      };
+
+      return reader.read().then(processChunk);
+    })
+    .catch(error => {
+      if (error.name === 'AbortError') {
+        console.log('SSE connection aborted');
+        return;
+      }
+      console.error('SSE connection error:', error);
+      this.setState('error');
+      this.handleDisconnect();
+    });
+  }
+
+  /**
+   * Parse and handle an SSE message
+   */
+  handleMessage(eventType, data) {
+    this.resetHeartbeatTimeout();
+
+    try {
+      if (eventType === 'heartbeat' || eventType === 'keep-alive') {
+        // Just a heartbeat, don't send to onMessage
+        return;
+      }
+
+      // Parse JSON data
+      const parsedData = JSON.parse(data);
+
+      // Send to onMessage callback
+      this.onMessage({
+        type: eventType,
+        data: parsedData,
+      });
+    } catch (error) {
+      console.error('Failed to parse SSE message:', error, { eventType, data });
+    }
+  }
+
+  /**
+   * Disconnect and optionally reconnect
+   */
+  handleDisconnect() {
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+
+    if (this.state === 'disconnected') {
+      return; // Already disconnected
+    }
+
+    this.setState('disconnected');
+    this.handleReconnect();
+  }
+
+  /**
+   * Handle reconnection with exponential backoff
+   */
+  handleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      console.error('Max reconnect attempts reached');
+      this.setState('error');
+      return;
+    }
+
+    const delayIndex = Math.min(this.reconnectAttempts, this.reconnectDelays.length - 1);
+    const delay = this.reconnectDelays[delayIndex];
+
+    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts + 1})...`);
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectAttempts++;
+      this.connect(this.lastFilters || {});
+    }, delay);
+  }
+
+  /**
+   * Reset the heartbeat timeout
+   */
+  resetHeartbeatTimeout() {
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+    }
+
+    this.heartbeatTimeout = setTimeout(() => {
+      console.warn('No heartbeat received, disconnecting...');
+      this.handleDisconnect();
+    }, this.heartbeatInterval);
+  }
+
+  /**
+   * Disconnect from SSE
+   */
+  disconnect() {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
+    }
+
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
+    this.setState('disconnected');
+  }
+
+  /**
+   * Update connection state
+   */
+  setState(newState) {
+    if (this.state !== newState) {
+      this.state = newState;
+      console.log('SSE state:', newState);
+      if (this.onStateChange) {
+        this.onStateChange(newState);
+      }
+    }
+  }
+
+  /**
+   * Update token (e.g., after refresh)
+   */
+  updateToken(newToken) {
+    this.token = newToken;
+    // Reconnect with new token if currently connected
+    if (this.state === 'connected' || this.state === 'connecting') {
+      this.disconnect();
+      this.connect(this.lastFilters || {});
+    }
+  }
+}
+
+// Export for use in modules or global scope
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = SSEManager;
+} else {
+  window.SSEManager = SSEManager;
+}
