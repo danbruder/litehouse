@@ -46,7 +46,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.ensureViewHasText "admin@example.com"
                         |> ProgramTest.done
             , test "updates organization name field when typing" <|
@@ -62,7 +62,7 @@ suite =
                     Helpers.createTestProgram
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
-                        |> Helpers.fillIn "Password" "securepass123"
+                        |> Helpers.fillIn "password" "securepass123"
                         |> Helpers.ensureViewHasText "securepass123"
                         |> ProgramTest.done
             , test "updates confirm password field when typing" <|
@@ -81,7 +81,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "confirmPassword" "differentpass"
@@ -94,7 +94,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "short"
                         |> Helpers.fillIn "confirmPassword" "short"
@@ -118,7 +118,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"
@@ -142,7 +142,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"
@@ -166,7 +166,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson False "1.0.0")
                         |> Helpers.fillIn "fullName" "John Doe"
-                        |> Helpers.fillIn "Email" "admin@example.com"
+                        |> Helpers.fillIn "email" "admin@example.com"
                         |> Helpers.fillIn "orgName" "My Company"
                         |> Helpers.fillIn "Password" "password123"
                         |> Helpers.fillIn "Confirm Password" "password123"

@@ -579,14 +579,37 @@ clickButton buttonText programTest =
 
 {-| Fill in an input field with the given field ID.
 The fieldId should match the HTML id attribute of the input.
-ProgramTest.fillIn will find the input by ID, so we use fieldId for both parameters.
+We map common fieldIds to their label text for ProgramTest.fillIn.
 -}
 fillIn : String -> String -> ProgramTest model msg effect -> ProgramTest model msg effect
 fillIn fieldId value programTest =
     -- fillIn takes: fieldId, label, newContent, programTest
-    -- ProgramTest.fillIn can find inputs by ID, so we use fieldId for fieldId
-    -- and pass empty string for label since we're finding by ID
-    ProgramTest.fillIn fieldId "" value programTest
+    -- Map fieldIds to their label text
+    let
+        labelText =
+            case fieldId of
+                "appName" ->
+                    "App Name"
+
+                "email" ->
+                    "Email"
+
+                "password" ->
+                    "Password"
+
+                "fullName" ->
+                    "Full Name"
+
+                "orgName" ->
+                    "Organization Name"
+
+                "confirmPassword" ->
+                    "Confirm Password"
+
+                _ ->
+                    fieldId
+    in
+    ProgramTest.fillIn fieldId labelText value programTest
 
 
 {-| Submit a form by finding the form element and triggering submit.

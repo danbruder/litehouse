@@ -69,7 +69,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "email" "user@example.com"
-                        |> Helpers.fillIn "Password" "password123"
+                        |> Helpers.fillIn "password" "password123"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
                             "POST"
@@ -88,7 +88,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "email" "user@example.com"
-                        |> Helpers.fillIn "Password" "wrongpassword"
+                        |> Helpers.fillIn "password" "wrongpassword"
                         |> Helpers.submitForm
                         |> Helpers.ensureHttpRequestWithBody
                             "POST"
@@ -108,7 +108,7 @@ suite =
                         |> Helpers.ensureHttpRequest "GET" "/api/auth/status"
                         |> Helpers.simulateHttpOk "GET" "/api/auth/status" (Helpers.serverStatusJson True "1.0.0")
                         |> Helpers.fillIn "email" "user@example.com"
-                        |> Helpers.fillIn "Password" "password123"
+                        |> Helpers.fillIn "password" "password123"
                         |> Helpers.submitForm
                         |> Helpers.ensureViewHasText "Signing in..."
                         |> ProgramTest.done
