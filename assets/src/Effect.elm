@@ -40,6 +40,7 @@ type Effect msg
       -- Navigation
     | PushUrl String
     | ReplaceUrl String
+    | Load String
       -- Ports
     | SaveToken String
     | SaveRefreshToken String
@@ -52,7 +53,7 @@ type Effect msg
     | DisconnectSSE
       -- HTTP Requests - Auth
     | CheckServerStatus (Result String ServerStatus -> msg)
-    | VerifyToken String (Result String TokenVerificationResponse -> msg)
+    | VerifyToken String (Result String { user : UserInfo, token : String } -> msg)
     | RefreshAccessToken String (Result String TokenPair -> msg)
     | SubmitLogin LoginForm (Result String AuthResponse -> msg)
     | SubmitRegister SetupForm (Result String AuthResponse -> msg)
@@ -222,6 +223,9 @@ map fn effect =
 
         ReplaceUrl url ->
             ReplaceUrl url
+
+        Load href ->
+            Load href
 
         SaveToken token ->
             SaveToken token

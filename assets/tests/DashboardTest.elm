@@ -9,6 +9,7 @@ This test verifies the fix for bugs where:
 3. Build logs error events didn't clear actionInProgress
 -}
 
+import Browser.Navigation as Nav
 import Effect exposing (Effect)
 import Expect exposing (Expectation)
 import Page.Dashboard as Dashboard
@@ -22,8 +23,11 @@ The functions we're testing (handleBuildStatusEvent, handleBuildLogsEvent)
 only use shared.token, so navKey should never be evaluated in these tests.
 If tests fail with "TODO navKey", it means the code path is trying to use navKey.
 -}
-testSharedModel : Maybe String -> Shared.Model
+testSharedModel : Maybe String -> Shared.Model Nav.Key
 testSharedModel maybeToken =
+    -- For unit tests, we need a Nav.Key but it's opaque
+    -- Since these tests only test pure functions that don't use navKey,
+    -- we can use Debug.todo. For integration tests, use ProgramTest which handles this.
     { navKey = Debug.todo "navKey - should not be used in handleBuildStatusEvent/handleBuildLogsEvent tests"
     , currentRoute = Nothing
     , serverVersion = ""

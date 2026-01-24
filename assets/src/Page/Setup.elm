@@ -32,7 +32,7 @@ type alias Model =
 -- INIT
 
 
-init : Shared.Model -> ( Model, Effect Msg )
+init : Shared.Model navigationKey -> ( Model, Effect Msg )
 init shared =
     ( { email = ""
       , password = ""
@@ -59,7 +59,7 @@ type Msg
     | GotRegisterResponse (Result String Effect.AuthResponse)
 
 
-update : Shared.Model -> Msg -> Model -> ( Model, Effect Msg )
+update : Shared.Model navigationKey -> Msg -> Model -> ( Model, Effect Msg )
 update shared msg model =
     case msg of
         EmailChanged email ->
@@ -134,7 +134,7 @@ update shared msg model =
 -- VIEW
 
 
-view : Shared.Model -> Model -> Html Msg
+view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
     div [ class "min-h-screen bg-litehouse-bg flex items-center justify-center p-5" ]
         [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft p-10 w-full max-w-md text-center" ]
@@ -257,7 +257,7 @@ viewVersion version =
 
 {-| Save page state to global state when leaving the page
 -}
-save : Model -> Shared.Model -> Shared.Model
+save : Model -> Shared.Model navigationKey -> Shared.Model navigationKey
 save model shared =
     -- Nothing to save for setup page
     shared
@@ -265,7 +265,7 @@ save model shared =
 
 {-| Load data from global state when entering the page
 -}
-load : Shared.Model -> Model -> Model
+load : Shared.Model navigationKey -> Model -> Model
 load shared model =
     -- Nothing to load for setup page
     model

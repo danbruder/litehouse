@@ -115,7 +115,7 @@ emptyCreateAppState =
 -- INIT
 
 
-init : Shared.Model -> ( Model, Effect Msg )
+init : Shared.Model navigationKey -> ( Model, Effect Msg )
 init shared =
     let
         effects =
@@ -183,7 +183,7 @@ type Msg
     | HandleSSEEvent Decode.Value
 
 
-update : Shared.Model -> Msg -> Model -> ( Model, Effect Msg )
+update : Shared.Model navigationKey -> Msg -> Model -> ( Model, Effect Msg )
 update shared msg model =
     case msg of
         Logout ->
@@ -902,7 +902,7 @@ update shared msg model =
 -- SSE EVENT HANDLERS
 
 
-handleGitHubOAuthEvent : Model -> Shared.Model -> String -> String -> ( Model, Effect Msg )
+handleGitHubOAuthEvent : Model -> Shared.Model navigationKey -> String -> String -> ( Model, Effect Msg )
 handleGitHubOAuthEvent model shared eventType data =
     case ( model.view, shared.token ) of
         ( CreateAppView createState, Just token ) ->
@@ -965,7 +965,7 @@ handleGitHubOAuthEvent model shared eventType data =
             ( model, Effect.none )
 
 
-handleBuildLogsEvent : Model -> Shared.Model -> String -> String -> String -> String -> ( Model, Effect Msg )
+handleBuildLogsEvent : Model -> Shared.Model navigationKey -> String -> String -> String -> String -> ( Model, Effect Msg )
 handleBuildLogsEvent model shared _ _ eventType data =
     case ( model.view, shared.token ) of
         ( AppDetailView detailState, Just token ) ->
@@ -1031,7 +1031,7 @@ handleBuildLogsEvent model shared _ _ eventType data =
             ( model, Effect.none )
 
 
-handleBuildStatusEvent : Model -> Shared.Model -> String -> String -> String -> ( Model, Effect Msg )
+handleBuildStatusEvent : Model -> Shared.Model navigationKey -> String -> String -> String -> ( Model, Effect Msg )
 handleBuildStatusEvent model shared appName _ status =
     -- Handle build status changes (building, success, failed)
     case status of
@@ -1303,7 +1303,7 @@ unifiedSSEDecoder =
 -- VIEW
 
 
-view : Shared.Model -> Model -> Html Msg
+view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
     div [ class "min-h-screen bg-litehouse-bg flex flex-col" ]
         [ viewHeader shared model
@@ -1329,7 +1329,7 @@ view shared model =
         ]
 
 
-viewHeader : Shared.Model -> Model -> Html Msg
+viewHeader : Shared.Model navigationKey -> Model -> Html Msg
 viewHeader shared model =
     let
         userName =
@@ -1772,7 +1772,7 @@ formatBuildDate isoDate =
     String.left 10 isoDate
 
 
-viewCreateApp : Shared.Model -> Model -> CreateAppState -> Html Msg
+viewCreateApp : Shared.Model navigationKey -> Model -> CreateAppState -> Html Msg
 viewCreateApp shared model createState =
     div [ class "max-w-xl" ]
         [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
@@ -1991,7 +1991,7 @@ viewVersion version =
 
 {-| Save page state to global state when leaving the page
 -}
-save : Model -> Shared.Model -> Shared.Model
+save : Model -> Shared.Model navigationKey -> Shared.Model navigationKey
 save model shared =
     -- GitHub status is already saved in Shared via update messages
     shared
@@ -1999,7 +1999,7 @@ save model shared =
 
 {-| Load data from global state when entering the page
 -}
-load : Shared.Model -> Model -> Model
+load : Shared.Model navigationKey -> Model -> Model
 load shared model =
     -- Nothing specific to load, token and user come from Shared
     model

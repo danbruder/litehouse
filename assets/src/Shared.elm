@@ -14,8 +14,8 @@ import Route exposing (Route)
 -- MODEL
 
 
-type alias Model =
-    { navKey : Nav.Key
+type alias Model navigationKey =
+    { navKey : navigationKey
     , currentRoute : Maybe Route
     , serverVersion : String
     , user : Maybe UserInfo
@@ -41,7 +41,7 @@ type GitHubStatus
 -- INIT
 
 
-init : Nav.Key -> Model
+init : navigationKey -> Model navigationKey
 init navKey =
     { navKey = navKey
     , currentRoute = Nothing
@@ -67,7 +67,7 @@ type Msg
     | SetSSEConnectionState String
 
 
-update : Msg -> Model -> Model
+update : Msg -> Model navigationKey -> Model navigationKey
 update msg model =
     case msg of
         SetRoute route ->
