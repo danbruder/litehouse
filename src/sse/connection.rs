@@ -2,6 +2,7 @@ use super::message::SSEMessage;
 use crate::message_bus::{MessageBus, Message, SubscriptionFilter};
 use axum::response::sse::Event;
 use futures_util::stream::Stream;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,13 +14,22 @@ pub fn start_sse_stream(
     filter: SubscriptionFilter,
     _user_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
+    // Throttle configuration: process messages every 100ms (max 10 messages/second)
+    const THROTTLE_INTERVAL_MS: u64 = 100;
 
     let receiver = message_bus.subscribe();
 
     async_stream::stream! {
         let mut rx = receiver;
-        let mut interval = tokio::time::interval(Duration::from_secs(15));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(15));
+        heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        
+        // Throttle interval for processing queued messages
+        let mut throttle_interval = tokio::time::interval(Duration::from_millis(THROTTLE_INTERVAL_MS));
+        throttle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        
+        // Message queue for throttling (FIFO)
+        let mut message_queue: VecDeque<Event> = VecDeque::new();
 
         loop {
             tokio::select! {
@@ -32,12 +42,16 @@ pub fn start_sse_stream(
                                 // Convert Message to SSEMessage
                                 let sse_msg: SSEMessage = msg.into();
                                 match sse_msg.to_sse_event() {
-                                    Ok(event) => yield Ok(event),
+                                    Ok(event) => {
+                                        // Add to queue for throttled processing (FIFO)
+                                        message_queue.push_back(event);
+                                    }
                                     Err(e) => {
                                         warn!("Failed to serialize SSE message: {}", e);
-                                        yield Ok(Event::default()
+                                        let error_event = Event::default()
                                             .event("error")
-                                            .data(format!("Serialization error: {}", e)));
+                                            .data(format!("Serialization error: {}", e));
+                                        message_queue.push_back(error_event);
                                     }
                                 }
                             }
@@ -50,6 +64,7 @@ pub fn start_sse_stream(
                             };
                             let sse_msg: SSEMessage = msg.into();
                             if let Ok(event) = sse_msg.to_sse_event() {
+                                // System notifications bypass throttle (they're important)
                                 yield Ok(event);
                             }
                         }
@@ -60,8 +75,14 @@ pub fn start_sse_stream(
                         }
                     }
                 }
-                // Send heartbeat
-                _ = interval.tick() => {
+                // Process one message from queue per throttle interval (FIFO)
+                _ = throttle_interval.tick() => {
+                    if let Some(event) = message_queue.pop_front() {
+                        yield Ok(event);
+                    }
+                }
+                // Send heartbeat (not throttled)
+                _ = heartbeat_interval.tick() => {
                     let heartbeat: SSEMessage = Message::Heartbeat.into();
                     if let Ok(event) = heartbeat.to_sse_event() {
                         yield Ok(event);
