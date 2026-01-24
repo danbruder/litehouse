@@ -10,7 +10,7 @@ use tracing::warn;
 pub fn start_sse_stream(
     hub: Arc<SSEHub>,
     filter: SubscriptionFilter,
-    _user_id: i64,
+    _user_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
 
     let receiver = hub.subscribe();
@@ -70,14 +70,14 @@ pub fn start_sse_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_stream::StreamExt;
+    use futures_util::StreamExt;
 
     #[tokio::test]
     async fn test_stream_receives_messages() {
         let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new(1);
+        let filter = SubscriptionFilter::new("1".to_string());
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, 1));
+        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
 
         // Publish a message
         hub.publish(SSEMessage::SystemNotification {
@@ -98,9 +98,9 @@ mod tests {
     #[tokio::test]
     async fn test_stream_filters_by_app_name() {
         let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new(1).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, 1));
+        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
 
         // Publish a message for different app
         hub.publish(SSEMessage::BuildLogs {
@@ -133,9 +133,9 @@ mod tests {
     #[tokio::test]
     async fn test_heartbeat_sent() {
         let hub = Arc::new(SSEHub::new());
-        let filter = SubscriptionFilter::new(1);
+        let filter = SubscriptionFilter::new("1".to_string());
 
-        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, 1));
+        let mut stream = Box::pin(start_sse_stream(hub.clone(), filter, "1".to_string()));
 
         // Wait for heartbeat (should come within 15 seconds, but we'll wait up to 20)
         let event = tokio::time::timeout(Duration::from_secs(20), async {

@@ -1512,19 +1512,10 @@ async fn events_stream_handler(
     Query(params): Query<SSEQueryParams>,
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    // Parse user_id to i64
-    let user_id = match auth_user.user_id.parse::<i64>() {
-        Ok(id) => id,
-        Err(_) => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "Invalid user ID".to_string(),
-            ));
-        }
-    };
+    let user_id = auth_user.user_id.clone();
 
     // Build subscription filter from query params
-    let mut filter = SubscriptionFilter::new(user_id);
+    let mut filter = SubscriptionFilter::new(user_id.clone());
 
     if let Some(types) = params.message_types {
         let types_vec: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();

@@ -7,11 +7,11 @@ pub struct SubscriptionFilter {
     pub message_types: Option<Vec<String>>,
     #[serde(default)]
     pub app_names: Option<Vec<String>>,
-    pub user_id: i64,
+    pub user_id: String,
 }
 
 impl SubscriptionFilter {
-    pub fn new(user_id: i64) -> Self {
+    pub fn new(user_id: String) -> Self {
         Self {
             message_types: None,
             app_names: None,
@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_message_type() {
-        let filter = SubscriptionFilter::new(1).with_message_types(vec!["BuildLogs".to_string()]);
+        let filter = SubscriptionFilter::new("1".to_string()).with_message_types(vec!["BuildLogs".to_string()]);
 
         let build_log = SSEMessage::BuildLogs {
             app_name: "test".to_string(),
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_filter_by_app_name() {
-        let filter = SubscriptionFilter::new(1).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
 
         let matching = SSEMessage::BuildLogs {
             app_name: "myapp".to_string(),
@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn test_github_oauth_always_passes_app_filter() {
-        let filter = SubscriptionFilter::new(1).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new("1".to_string()).with_app_names(vec!["myapp".to_string()]);
 
         let oauth_msg = SSEMessage::GitHubOAuth {
             event_type: "success".to_string(),
