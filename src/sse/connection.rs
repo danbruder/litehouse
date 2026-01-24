@@ -165,4 +165,66 @@ mod tests {
         let event_str = format!("{:?}", event);
         assert!(event_str.contains("Heartbeat"));
     }
+
+    #[tokio::test]
+    async fn test_stream_receives_container_logs() {
+        use crate::message_bus::MessageBus;
+        let message_bus = Arc::new(MessageBus::new());
+        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
+
+        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+
+        // Publish a container logs message
+        message_bus.publish(Message::ContainerLogs {
+            app_name: "myapp".to_string(),
+            data: "container log line".to_string(),
+        });
+
+        // Should receive the message
+        let event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("Timeout waiting for event")
+            .expect("Stream ended");
+
+        let event = event.expect("Event error");
+        // Format event as SSE string to check its data
+        let event_str = format!("{:?}", event);
+        assert!(event_str.contains("ContainerLogs"));
+        assert!(event_str.contains("myapp"));
+        assert!(event_str.contains("container log line"));
+    }
+
+    #[tokio::test]
+    async fn test_stream_filters_container_logs_by_app_name() {
+        use crate::message_bus::MessageBus;
+        let message_bus = Arc::new(MessageBus::new());
+        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
+
+        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+
+        // Publish a message for different app
+        message_bus.publish(Message::ContainerLogs {
+            app_name: "otherapp".to_string(),
+            data: "should be filtered".to_string(),
+        });
+
+        // Publish a message for matching app
+        message_bus.publish(Message::ContainerLogs {
+            app_name: "myapp".to_string(),
+            data: "should be received".to_string(),
+        });
+
+        // Should only receive the matching message
+        let event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("Timeout waiting for event")
+            .expect("Stream ended");
+
+        let event = event.expect("Event error");
+        // Format event as SSE string to check its data
+        let event_str = format!("{:?}", event);
+        assert!(event_str.contains("myapp"));
+        assert!(event_str.contains("should be received"));
+        assert!(!event_str.contains("should be filtered"));
+    }
 }

@@ -15,6 +15,7 @@ module Page.Dashboard exposing
     , handleGotGitHubStatus
     , handleBuildStatusEvent
     , handleBuildLogsEvent
+    , handleContainerLogsEvent
     , AppAction(..)
     , LogsView(..)
     )

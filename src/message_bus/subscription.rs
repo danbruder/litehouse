@@ -123,4 +123,43 @@ mod tests {
 
         assert!(filter.matches(&oauth_msg));
     }
+
+    #[test]
+    fn test_filter_by_app_name_with_container_logs() {
+        let filter = SubscriptionFilter::new(None).with_app_names(vec!["myapp".to_string()]);
+
+        let matching = Message::ContainerLogs {
+            app_name: "myapp".to_string(),
+            data: "log line".to_string(),
+        };
+
+        let not_matching = Message::ContainerLogs {
+            app_name: "otherapp".to_string(),
+            data: "log line".to_string(),
+        };
+
+        assert!(filter.matches(&matching));
+        assert!(!filter.matches(&not_matching));
+    }
+
+    #[test]
+    fn test_filter_by_message_type_with_container_logs() {
+        let filter = SubscriptionFilter::new(None).with_message_types(vec!["ContainerLogs".to_string()]);
+
+        let container_log = Message::ContainerLogs {
+            app_name: "test".to_string(),
+            data: "log line".to_string(),
+        };
+
+        let build_log = Message::BuildLogs {
+            app_name: "test".to_string(),
+            build_id: "123".to_string(),
+            event_type: "message".to_string(),
+            data: "line".to_string(),
+        };
+
+        assert!(filter.matches(&container_log));
+        assert!(!filter.matches(&build_log));
+        assert!(filter.matches(&Message::Heartbeat)); // Heartbeats always pass
+    }
 }

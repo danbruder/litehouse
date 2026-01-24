@@ -686,6 +686,274 @@ suite =
                         ()
             ]
         ]
+    , describe "Page.Dashboard.handleContainerLogsEvent"
+        [ test "appends log line when viewing matching app" <|
+            \_ ->
+                let
+                    testApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    detailState =
+                        { app = testApp
+                        , logs = "existing log line"
+                        , logsLoading = False
+                        , logsView = Dashboard.RuntimeLogs
+                        , builds = []
+                        , selectedBuildId = Nothing
+                        , buildLogs = ""
+                        , buildLogsLoading = False
+                        , actionInProgress = Nothing
+                        , error = Nothing
+                        , streamingBuildId = Nothing
+                        , buildLogsStreaming = False
+                        }
+
+                    model =
+                        { view = Dashboard.AppDetailView detailState
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( updatedModel, _ ) =
+                        Dashboard.handleContainerLogsEvent model shared "my-app" "new log line"
+                in
+                case updatedModel.view of
+                    Dashboard.AppDetailView updatedDetailState ->
+                        Expect.equal "existing log line\nnew log line" updatedDetailState.logs
+
+                    _ ->
+                        Expect.fail "Expected AppDetailView"
+        , test "sets log line when logs are empty" <|
+            \_ ->
+                let
+                    testApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    detailState =
+                        { app = testApp
+                        , logs = ""
+                        , logsLoading = False
+                        , logsView = Dashboard.RuntimeLogs
+                        , builds = []
+                        , selectedBuildId = Nothing
+                        , buildLogs = ""
+                        , buildLogsLoading = False
+                        , actionInProgress = Nothing
+                        , error = Nothing
+                        , streamingBuildId = Nothing
+                        , buildLogsStreaming = False
+                        }
+
+                    model =
+                        { view = Dashboard.AppDetailView detailState
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( updatedModel, _ ) =
+                        Dashboard.handleContainerLogsEvent model shared "my-app" "first log line"
+                in
+                case updatedModel.view of
+                    Dashboard.AppDetailView updatedDetailState ->
+                        Expect.equal "first log line" updatedDetailState.logs
+
+                    _ ->
+                        Expect.fail "Expected AppDetailView"
+        , test "ignores logs for different app" <|
+            \_ ->
+                let
+                    testApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    detailState =
+                        { app = testApp
+                        , logs = "existing logs"
+                        , logsLoading = False
+                        , logsView = Dashboard.RuntimeLogs
+                        , builds = []
+                        , selectedBuildId = Nothing
+                        , buildLogs = ""
+                        , buildLogsLoading = False
+                        , actionInProgress = Nothing
+                        , error = Nothing
+                        , streamingBuildId = Nothing
+                        , buildLogsStreaming = False
+                        }
+
+                    model =
+                        { view = Dashboard.AppDetailView detailState
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( updatedModel, _ ) =
+                        Dashboard.handleContainerLogsEvent model shared "other-app" "should be ignored"
+                in
+                case updatedModel.view of
+                    Dashboard.AppDetailView updatedDetailState ->
+                        Expect.equal "existing logs" updatedDetailState.logs
+
+                    _ ->
+                        Expect.fail "Expected AppDetailView"
+        , test "returns no effect" <|
+            \_ ->
+                let
+                    testApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    detailState =
+                        { app = testApp
+                        , logs = ""
+                        , logsLoading = False
+                        , logsView = Dashboard.RuntimeLogs
+                        , builds = []
+                        , selectedBuildId = Nothing
+                        , buildLogs = ""
+                        , buildLogsLoading = False
+                        , actionInProgress = Nothing
+                        , error = Nothing
+                        , streamingBuildId = Nothing
+                        , buildLogsStreaming = False
+                        }
+
+                    model =
+                        { view = Dashboard.AppDetailView detailState
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( _, effect ) =
+                        Dashboard.handleContainerLogsEvent model shared "my-app" "log line"
+                in
+                Expect.true "Effect should be none" (effectIsNone effect)
+        ]
+    , describe "Page.Dashboard.GotAppDetail"
+        [ test "triggers StartLogStreaming when app is running" <|
+            \_ ->
+                let
+                    runningApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    model =
+                        { view = Dashboard.AppsListView
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( _, effect ) =
+                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok runningApp))
+                in
+                Expect.true "Should contain StartLogStreaming" (effectContainsStartLogStreaming effect)
+        , test "does not trigger StartLogStreaming when app is stopped" <|
+            \_ ->
+                let
+                    stoppedApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "stopped"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    model =
+                        { view = Dashboard.AppsListView
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel (Just "test-token")
+
+                    ( _, effect ) =
+                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok stoppedApp))
+                in
+                Expect.false "Should not contain StartLogStreaming" (effectContainsStartLogStreaming effect)
+        , test "does not trigger StartLogStreaming when no token" <|
+            \_ ->
+                let
+                    runningApp =
+                        { id = "app-1"
+                        , name = "my-app"
+                        , state = "running"
+                        , port_ = Just 8080
+                        , createdAt = "2024-01-01T00:00:00Z"
+                        , updatedAt = "2024-01-01T00:00:00Z"
+                        , remote = Nothing
+                        }
+
+                    model =
+                        { view = Dashboard.AppsListView
+                        , apps = []
+                        , appsLoading = False
+                        , activeSidebarItem = Dashboard.MyApps
+                        }
+
+                    shared =
+                        testSharedModel Nothing
+
+                    ( _, effect ) =
+                        Dashboard.update shared model (Dashboard.GotAppDetail (Ok runningApp))
+                in
+                Expect.false "Should not contain StartLogStreaming when no token" (effectContainsStartLogStreaming effect)
+        ]
     ]
 
 
@@ -729,6 +997,21 @@ effectContainsFetchApps effect =
 
         Effect.Batch effects ->
             List.any effectContainsFetchApps effects
+
+        _ ->
+            False
+
+
+{-| Helper to check if an effect contains StartLogStreaming.
+-}
+effectContainsStartLogStreaming : Effect msg -> Bool
+effectContainsStartLogStreaming effect =
+    case effect of
+        Effect.StartLogStreaming _ _ _ ->
+            True
+
+        Effect.Batch effects ->
+            List.any effectContainsStartLogStreaming effects
 
         _ ->
             False
