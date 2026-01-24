@@ -1,5 +1,6 @@
 use crate::config::ClientConfig;
 use crate::github::RepoInfo;
+use crate::models::{AuthResponse, AuthenticatedUser, LoginRequest, RegisterRequest, RefreshTokenRequest, TokenPair};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
@@ -37,69 +38,281 @@ impl ApiClient {
         }
     }
 
-    pub async fn create_app(&self, app_name: &str) -> Result<()> {
+    /// Get the current access token from config (reloads from disk)
+    fn get_access_token(&self) -> Result<Option<String>> {
+        let config = ClientConfig::load()?;
+        Ok(config.access_token)
+    }
+
+    /// Get the current refresh token from config (reloads from disk)
+    fn get_refresh_token(&self) -> Result<Option<String>> {
+        let config = ClientConfig::load()?;
+        Ok(config.refresh_token)
+    }
+
+    /// Update tokens in config file
+    fn update_tokens(&self, access_token: Option<String>, refresh_token: Option<String>) -> Result<()> {
+        let mut config = ClientConfig::load()?;
+        config.access_token = access_token;
+        config.refresh_token = refresh_token;
+        config.save()?;
+        Ok(())
+    }
+
+    /// Clear tokens from config file
+    fn clear_tokens(&self) -> Result<()> {
+        self.update_tokens(None, None)
+    }
+
+    /// Get Authorization header value if token exists
+    fn get_auth_header(&self) -> Result<Option<String>> {
+        if let Some(token) = self.get_access_token()? {
+            Ok(Some(format!("Bearer {}", token)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // ===== Auth Methods =====
+
+    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse> {
         let response = self
             .client
-            .post(&format!("{}/apps", self.config.base_url))
-            .json(&serde_json::json!({ "name": app_name }))
+            .post(&format!("{}/auth/login", self.config.base_url))
+            .json(&LoginRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+            })
             .send()
             .await?;
 
         if response.status().is_success() {
-            println!("App '{}' created successfully", app_name);
-            Ok(())
+            let auth_response: AuthResponse = response.json().await?;
+            Ok(auth_response)
         } else {
             let error = response.text().await?;
-            Err(anyhow!("Failed to create app: {}", error))
+            Err(anyhow!("Login failed: {}", error))
         }
+    }
+
+    pub async fn register(
+        &self,
+        email: &str,
+        password: &str,
+        full_name: Option<&str>,
+        organization_name: Option<&str>,
+    ) -> Result<AuthResponse> {
+        let response = self
+            .client
+            .post(&format!("{}/auth/register", self.config.base_url))
+            .json(&RegisterRequest {
+                email: email.to_string(),
+                password: password.to_string(),
+                full_name: full_name.map(|s| s.to_string()),
+                organization_name: organization_name.map(|s| s.to_string()),
+            })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let auth_response: AuthResponse = response.json().await?;
+            Ok(auth_response)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Registration failed: {}", error))
+        }
+    }
+
+    pub async fn refresh_token(&self) -> Result<TokenPair> {
+        let refresh_token = self
+            .get_refresh_token()?
+            .ok_or_else(|| anyhow!("No refresh token available"))?;
+
+        let response = self
+            .client
+            .post(&format!("{}/auth/refresh", self.config.base_url))
+            .json(&RefreshTokenRequest {
+                refresh_token: refresh_token.clone(),
+            })
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let tokens: TokenPair = response.json().await?;
+            // Update tokens in config
+            self.update_tokens(Some(tokens.access_token.clone()), Some(tokens.refresh_token.clone()))?;
+            Ok(tokens)
+        } else {
+            let error = response.text().await?;
+            // Clear tokens on refresh failure
+            self.clear_tokens()?;
+            Err(anyhow!("Token refresh failed: {}", error))
+        }
+    }
+
+    pub async fn logout(&self) -> Result<()> {
+        let refresh_token = self.get_refresh_token()?;
+        
+        if let Some(token) = refresh_token {
+            let _ = self
+                .client
+                .post(&format!("{}/auth/logout", self.config.base_url))
+                .json(&RefreshTokenRequest { refresh_token: token })
+                .send()
+                .await;
+        }
+
+        // Always clear local tokens
+        self.clear_tokens()?;
+        Ok(())
+    }
+
+    pub async fn get_current_user(&self) -> Result<AuthenticatedUser> {
+        let auth_header = self.get_auth_header()?;
+        let mut request = self
+            .client
+            .get(&format!("{}/auth/me", self.config.base_url));
+
+        if let Some(header) = auth_header {
+            request = request.header("Authorization", header);
+        }
+
+        let response = request.send().await?;
+
+        if response.status().is_success() {
+            let user: AuthenticatedUser = response.json().await?;
+            Ok(user)
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to get current user: {}", error))
+        }
+    }
+
+    /// Helper to execute a request with automatic auth header and token refresh
+    /// This handles 401 errors by attempting to refresh the token and retrying
+    async fn execute_request<F, T>(&self, build_request: F) -> Result<T>
+    where
+        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+        T: serde::de::DeserializeOwned,
+    {
+        self.execute_request_with_response(build_request, |r| {
+            Box::pin(async move {
+                r.json::<T>().await.map_err(|e| anyhow!("Failed to parse JSON: {}", e))
+            })
+        }).await
+    }
+
+    /// Helper to execute a request that returns text
+    async fn execute_request_text<F>(&self, build_request: F) -> Result<String>
+    where
+        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+    {
+        self.execute_request_with_response(build_request, |r| {
+            Box::pin(async move {
+                r.text().await.map_err(|e| anyhow!("Failed to read response: {}", e))
+            })
+        }).await
+    }
+
+    /// Generic helper to execute a request with automatic auth and refresh
+    async fn execute_request_with_response<F, G, T>(&self, build_request: F, process_response: G) -> Result<T>
+    where
+        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+        G: FnOnce(reqwest::Response) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send>>,
+    {
+        let auth_header = self.get_auth_header()?;
+        let request = build_request(&self.client, auth_header.clone());
+        let mut response = request.send().await?;
+
+        // If we get 401 and have a refresh token, try to refresh
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(_refresh_token) = self.get_refresh_token()? {
+                // Try to refresh token
+                if let Ok(new_tokens) = self.refresh_token().await {
+                    // Retry the request with new token
+                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
+                    let retry_request = build_request(&self.client, Some(new_auth_header));
+                    response = retry_request.send().await?;
+                } else {
+                    // Refresh failed, clear tokens and return error
+                    self.clear_tokens()?;
+                    let error = response.text().await.unwrap_or_else(|_| "Unauthorized".to_string());
+                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate. Error: {}", error));
+                }
+            } else {
+                // No refresh token, return error
+                let error = response.text().await.unwrap_or_else(|_| "Unauthorized".to_string());
+                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate. Error: {}", error));
+            }
+        }
+
+        if response.status().is_success() {
+            process_response(response).await
+        } else {
+            let error = response.text().await.unwrap_or_else(|_| "Request failed".to_string());
+            Err(anyhow!("Request failed: {}", error))
+        }
+    }
+
+    pub async fn create_app(&self, app_name: &str) -> Result<()> {
+        let url = format!("{}/apps", self.config.base_url);
+        let payload = serde_json::json!({ "name": app_name });
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        println!("App '{}' created successfully", app_name);
+        Ok(())
     }
 
     pub async fn start_app(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps/{}/start", self.config.base_url, app_name))
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}/start", self.config.base_url, app_name);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("App '{}' started successfully", app_name);
-            Ok(())
-        } else {
-            let err = response.text().await?;
-            Err(anyhow!("Failed to start app: {}", err))
-        }
+        println!("App '{}' started successfully", app_name);
+        Ok(())
     }
 
     pub async fn stop_app(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps/{}/stop", self.config.base_url, app_name))
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}/stop", self.config.base_url, app_name);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("App '{}' stopped successfully", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!(error))
-        }
+        println!("App '{}' stopped successfully", app_name);
+        Ok(())
     }
 
     pub async fn delete_app(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .delete(&format!("{}/apps/{}", self.config.base_url, app_name))
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}", self.config.base_url, app_name);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("App '{}' deleted successfully", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to delete app: {}", error))
-        }
+        println!("App '{}' deleted successfully", app_name);
+        Ok(())
     }
 
     pub async fn deploy_app(&self, app_name: &str, binary_path: &str) -> Result<()> {
@@ -109,15 +322,48 @@ impl ApiClient {
             .await
             .map_err(|e| anyhow!("Failed to create multipart form: {}", e))?;
 
-        let response = self
-            .client
-            .post(&format!(
-                "{}/apps/{}/deploy",
-                self.config.base_url, app_name
-            ))
-            .multipart(form)
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}/deploy", self.config.base_url, app_name);
+        let auth_header = self.get_auth_header()?;
+        
+        let mut request = self.client.post(&url).multipart(form);
+        if let Some(header) = auth_header {
+            request = request.header("Authorization", header);
+        }
+
+        let response = request.send().await?;
+
+        // Handle 401 with refresh for multipart requests
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(_refresh_token) = self.get_refresh_token()? {
+                if let Ok(new_tokens) = self.refresh_token().await {
+                    // Recreate form and retry
+                    let form = reqwest::multipart::Form::new()
+                        .file("binary", binary_path)
+                        .await
+                        .map_err(|e| anyhow!("Failed to create multipart form: {}", e))?;
+                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
+                    let retry_response = self.client
+                        .post(&url)
+                        .header("Authorization", new_auth_header)
+                        .multipart(form)
+                        .send()
+                        .await?;
+                    
+                    if retry_response.status().is_success() {
+                        println!("App '{}' deployed successfully", app_name);
+                        return Ok(());
+                    } else {
+                        let error = retry_response.text().await.unwrap_or_else(|_| "Deploy failed".to_string());
+                        return Err(anyhow!("Failed to deploy app: {}", error));
+                    }
+                } else {
+                    self.clear_tokens()?;
+                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
+                }
+            } else {
+                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
+            }
+        }
 
         if response.status().is_success() {
             println!("App '{}' deployed successfully", app_name);
@@ -135,20 +381,19 @@ impl ApiClient {
         value: &str,
         delete: bool,
     ) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps/{}/env", self.config.base_url, app_name))
-            .json(&serde_json::json!({ "key": key, "value": value, "delete": delete }))
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}/env", self.config.base_url, app_name);
+        let payload = serde_json::json!({ "key": key, "value": value, "delete": delete });
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("Environment variable set for app '{}'", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to set environment variable: {}", error))
-        }
+        println!("Environment variable set for app '{}'", app_name);
+        Ok(())
     }
 
     pub async fn get_status(&self, app_name: Option<&str>) -> Result<()> {
@@ -157,16 +402,16 @@ impl ApiClient {
             None => format!("{}/apps", self.config.base_url),
         };
 
-        let response = self.client.get(&url).send().await?;
+        let status = self.execute_request_text(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            let status = response.text().await?;
-            println!("Status: {}", status);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to get status: {}", error))
-        }
+        println!("Status: {}", status);
+        Ok(())
     }
 
     pub async fn get_logs(&self, app_name: &str, lines: usize, follow: bool) -> Result<LogStream> {
@@ -174,7 +419,32 @@ impl ApiClient {
             "{}/apps/{}/logs?lines={}&follow={}",
             self.config.base_url, app_name, lines, follow
         );
-        let response = self.client.get(&url).send().await?;
+        
+        let auth_header = self.get_auth_header()?;
+        let mut request = self.client.get(&url);
+        if let Some(header) = &auth_header {
+            request = request.header("Authorization", header);
+        }
+        
+        let mut response = request.send().await?;
+
+        // Handle 401 with refresh
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(_refresh_token) = self.get_refresh_token()? {
+                if let Ok(new_tokens) = self.refresh_token().await {
+                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
+                    let retry_request = self.client.get(&url)
+                        .header("Authorization", new_auth_header);
+                    response = retry_request.send().await?;
+                } else {
+                    self.clear_tokens()?;
+                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
+                }
+            } else {
+                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
+            }
+        }
+
         if response.status().is_success() {
             if follow {
                 let stream = response
@@ -199,77 +469,73 @@ impl ApiClient {
 
     pub async fn get_app_info(&self, app_name: &str) -> Result<AppInfo> {
         let url = format!("{}/apps/{}", self.config.base_url, app_name);
-        let response = self.client.get(&url).send().await?;
-        if response.status().is_success() {
-            let app_info: AppInfo = response.json().await?;
-            Ok(app_info)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to get app info: {}", error))
-        }
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn get_docker_version(&self) -> Result<()> {
-        let response = self
-            .client
-            .get(&format!("{}/docker/version", self.config.base_url))
-            .send()
-            .await?;
-        if response.status().is_success() {
-            let version = response.text().await?;
-            println!("Docker version: {}", version);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to get docker version: {}", error))
-        }
+        let url = format!("{}/docker/version", self.config.base_url);
+        let version = self.execute_request_text(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+        
+        println!("Docker version: {}", version);
+        Ok(())
     }
 
     pub async fn remote_add(&self, app_name: &str, remote: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps/{}/remote", self.config.base_url, app_name))
-            .json(&serde_json::json!({ "remote": remote }))
-            .send()
-            .await?;
-        if response.status().is_success() {
-            println!("Remote configured for app '{}'", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to configure remote: {}", error))
-        }
+        let url = format!("{}/apps/{}/remote", self.config.base_url, app_name);
+        let payload = serde_json::json!({ "remote": remote });
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        println!("Remote configured for app '{}'", app_name);
+        Ok(())
     }
 
     pub async fn remote_remove(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .delete(&format!("{}/apps/{}/remote", self.config.base_url, app_name))
-            .send()
-            .await?;
+        let url = format!("{}/apps/{}/remote", self.config.base_url, app_name);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("Remote removed for app '{}'", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to remove remote: {}", error))
-        }
+        println!("Remote removed for app '{}'", app_name);
+        Ok(())
     }
 
     pub async fn build(&self, app_name: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps/{}/build", self.config.base_url, app_name))
-            .send()
-            .await?;
-        if response.status().is_success() {
-            println!("App '{}' built successfully", app_name);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to build app: {}", error))
-        }
+        let url = format!("{}/apps/{}/build", self.config.base_url, app_name);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        println!("App '{}' built successfully", app_name);
+        Ok(())
     }
 
     pub async fn set_s3_config(
@@ -281,36 +547,57 @@ impl ApiClient {
         endpoint: Option<&str>,
         path_prefix: Option<&str>,
     ) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/config/s3", self.config.base_url))
-            .json(&serde_json::json!({
-                "access_key_id": access_key_id,
-                "secret_access_key": secret_access_key,
-                "bucket": bucket,
-                "region": region,
-                "endpoint": endpoint,
-                "path_prefix": path_prefix,
-            }))
-            .send()
-            .await?;
+        let url = format!("{}/config/s3", self.config.base_url);
+        let payload = serde_json::json!({
+            "access_key_id": access_key_id,
+            "secret_access_key": secret_access_key,
+            "bucket": bucket,
+            "region": region,
+            "endpoint": endpoint,
+            "path_prefix": path_prefix,
+        });
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("S3 configuration saved successfully");
-            println!("Litestream will now back up all databases to S3 bucket: {}", bucket);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to set S3 config: {}", error))
-        }
+        println!("S3 configuration saved successfully");
+        println!("Litestream will now back up all databases to S3 bucket: {}", bucket);
+        Ok(())
     }
 
     pub async fn get_s3_config(&self) -> Result<()> {
-        let response = self
-            .client
-            .get(&format!("{}/config/s3", self.config.base_url))
-            .send()
-            .await?;
+        let url = format!("{}/config/s3", self.config.base_url);
+        
+        let auth_header = self.get_auth_header()?;
+        let mut request = self.client.get(&url);
+        if let Some(header) = &auth_header {
+            request = request.header("Authorization", header);
+        }
+        
+        let mut response = request.send().await?;
+
+        // Handle 401 with refresh
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(_refresh_token) = self.get_refresh_token()? {
+                if let Ok(new_tokens) = self.refresh_token().await {
+                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
+                    response = self.client.get(&url)
+                        .header("Authorization", new_auth_header)
+                        .send()
+                        .await?;
+                } else {
+                    self.clear_tokens()?;
+                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
+                }
+            } else {
+                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
+            }
+        }
 
         if response.status().is_success() {
             let config: serde_json::Value = response.json().await?;
@@ -327,37 +614,31 @@ impl ApiClient {
     }
 
     pub async fn delete_s3_config(&self) -> Result<()> {
-        let response = self
-            .client
-            .delete(&format!("{}/config/s3", self.config.base_url))
-            .send()
-            .await?;
+        let url = format!("{}/config/s3", self.config.base_url);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("S3 configuration deleted successfully");
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to delete S3 config: {}", error))
-        }
+        println!("S3 configuration deleted successfully");
+        Ok(())
     }
 
     // ===== GitHub Methods =====
 
     pub async fn github_connect_start(&self) -> Result<DeviceFlowStartResponse> {
-        let response = self
-            .client
-            .post(&format!("{}/github/connect/start", self.config.base_url))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let data: DeviceFlowStartResponse = response.json().await?;
-            Ok(data)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to start GitHub connection: {}", error))
-        }
+        let url = format!("{}/github/connect/start", self.config.base_url);
+        self.execute_request(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn github_connect_poll(
@@ -366,16 +647,39 @@ impl ApiClient {
         interval: u64,
         expires_in: u64,
     ) -> Result<GitHubConnectResponse> {
-        let response = self
-            .client
-            .post(&format!("{}/github/connect/poll", self.config.base_url))
-            .json(&serde_json::json!({
-                "device_code": device_code,
-                "interval": interval,
-                "expires_in": expires_in
-            }))
-            .send()
-            .await?;
+        let url = format!("{}/github/connect/poll", self.config.base_url);
+        let payload = serde_json::json!({
+            "device_code": device_code,
+            "interval": interval,
+            "expires_in": expires_in
+        });
+        
+        let auth_header = self.get_auth_header()?;
+        let mut request = self.client.post(&url).json(&payload);
+        if let Some(header) = &auth_header {
+            request = request.header("Authorization", header);
+        }
+        
+        let mut response = request.send().await?;
+
+        // Handle 401 with refresh
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(_refresh_token) = self.get_refresh_token()? {
+                if let Ok(new_tokens) = self.refresh_token().await {
+                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
+                    response = self.client.post(&url)
+                        .header("Authorization", new_auth_header)
+                        .json(&payload)
+                        .send()
+                        .await?;
+                } else {
+                    self.clear_tokens()?;
+                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
+                }
+            } else {
+                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
+            }
+        }
 
         if response.status().is_success() {
             let data: GitHubConnectResponse = response.json().await?;
@@ -394,93 +698,73 @@ impl ApiClient {
     }
 
     pub async fn github_disconnect(&self) -> Result<()> {
-        let response = self
-            .client
-            .delete(&format!("{}/github/connection", self.config.base_url))
-            .send()
-            .await?;
+        let url = format!("{}/github/connection", self.config.base_url);
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to disconnect GitHub: {}", error))
-        }
+        Ok(())
     }
 
     pub async fn github_status(&self) -> Result<GitHubStatusResponse> {
-        let response = self
-            .client
-            .get(&format!("{}/github/status", self.config.base_url))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let data: GitHubStatusResponse = response.json().await?;
-            Ok(data)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to get GitHub status: {}", error))
-        }
+        let url = format!("{}/github/status", self.config.base_url);
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn github_list_repos(&self, limit: u32) -> Result<Vec<RepoInfo>> {
-        let response = self
-            .client
-            .get(&format!(
-                "{}/github/repos?limit={}",
-                self.config.base_url, limit
-            ))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let repos: Vec<RepoInfo> = response.json().await?;
-            Ok(repos)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to list GitHub repos: {}", error))
-        }
+        let url = format!("{}/github/repos?limit={}", self.config.base_url, limit);
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn github_search_repos(&self, query: &str) -> Result<Vec<RepoInfo>> {
-        let response = self
-            .client
-            .get(&format!(
-                "{}/github/repos/search?q={}",
-                self.config.base_url,
-                urlencoding::encode(query)
-            ))
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let repos: Vec<RepoInfo> = response.json().await?;
-            Ok(repos)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to search GitHub repos: {}", error))
-        }
+        let url = format!(
+            "{}/github/repos/search?q={}",
+            self.config.base_url,
+            urlencoding::encode(query)
+        );
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn create_app_from_github(&self, app_name: &str, github_repo: &str) -> Result<()> {
-        let response = self
-            .client
-            .post(&format!("{}/apps", self.config.base_url))
-            .json(&serde_json::json!({
-                "name": app_name,
-                "from_github": github_repo
-            }))
-            .send()
-            .await?;
+        let url = format!("{}/apps", self.config.base_url);
+        let payload = serde_json::json!({
+            "name": app_name,
+            "from_github": github_repo
+        });
+        
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
 
-        if response.status().is_success() {
-            println!("App '{}' created from GitHub repo '{}'", app_name, github_repo);
-            Ok(())
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to create app from GitHub: {}", error))
-        }
+        println!("App '{}' created from GitHub repo '{}'", app_name, github_repo);
+        Ok(())
     }
 }
 

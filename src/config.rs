@@ -38,6 +38,10 @@ fn default_reconcile_interval() -> u64 {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -57,6 +61,8 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             base_url: "http://localhost:3030/api".to_string(),
+            access_token: None,
+            refresh_token: None,
         }
     }
 }

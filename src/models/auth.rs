@@ -65,14 +65,14 @@ pub struct OrganizationWithRole {
 }
 
 /// Login request
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
     pub email: String,
     pub password: String,
 }
 
 /// Registration request
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
     pub password: String,
@@ -81,7 +81,7 @@ pub struct RegisterRequest {
 }
 
 /// Refresh token request
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
 }

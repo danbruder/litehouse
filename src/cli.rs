@@ -146,6 +146,12 @@ enum Commands {
         #[command(subcommand)]
         command: GithubCmd,
     },
+
+    /// Authentication commands
+    Auth {
+        #[command(subcommand)]
+        command: AuthCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -191,6 +197,34 @@ enum ConfigCmd {
         #[command(subcommand)]
         command: S3Cmd,
     },
+}
+
+#[derive(Subcommand)]
+enum AuthCmd {
+    /// Login with email and password
+    Login {
+        /// Email address
+        email: String,
+        /// Password
+        password: String,
+    },
+    /// Register a new account
+    Register {
+        /// Email address
+        email: String,
+        /// Password
+        password: String,
+        /// Full name (optional)
+        #[arg(long)]
+        full_name: Option<String>,
+        /// Organization name (optional)
+        #[arg(long)]
+        organization_name: Option<String>,
+    },
+    /// Logout and clear stored tokens
+    Logout,
+    /// Check authentication status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -376,6 +410,32 @@ pub async fn run() -> Result<()> {
                     }
                     GithubCmd::Search { query } => {
                         crate::commands::github::search::execute(&api_client, &query).await
+                    }
+                },
+                Commands::Auth { command } => match command {
+                    AuthCmd::Login { email, password } => {
+                        crate::commands::auth::cli::login::execute(&api_client, &email, &password).await
+                    }
+                    AuthCmd::Register {
+                        email,
+                        password,
+                        full_name,
+                        organization_name,
+                    } => {
+                        crate::commands::auth::cli::register::execute(
+                            &api_client,
+                            &email,
+                            &password,
+                            full_name.as_deref(),
+                            organization_name.as_deref(),
+                        )
+                        .await
+                    }
+                    AuthCmd::Logout => {
+                        crate::commands::auth::cli::logout::execute(&api_client).await
+                    }
+                    AuthCmd::Status => {
+                        crate::commands::auth::cli::status::execute(&api_client).await
                     }
                 },
                 Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => {
