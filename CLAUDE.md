@@ -31,8 +31,8 @@ cargo test test_run_function_happy_path
 # Build for production (Linux musl target)
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 
-# Deploy to server (use deploy.sh)
-./deploy.sh
+# Deploy to server (use dev-deploy.sh)
+./dev-deploy.sh
 ```
 
 ## Architecture Overview
