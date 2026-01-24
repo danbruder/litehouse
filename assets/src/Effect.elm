@@ -69,6 +69,7 @@ type Effect msg
       -- HTTP Requests - GitHub
     | FetchGitHubStatus String (Result String GitHubStatusResponse -> msg)
     | StartDeviceFlow String (Result String DeviceFlowStartResponse -> msg)
+    | StartGitHubPolling String String Int Int  -- token, deviceCode, interval, expiresIn
     | FetchRepos String (Result String (List RepoInfo) -> msg)
     | CreateApp String String (Result String AppInfo -> msg)
     | CreateAppWithRepo String String String (Result String AppInfo -> msg)
@@ -234,14 +235,14 @@ map fn effect =
         GetRefreshToken ->
             GetRefreshToken
 
-        StartGitHubSSE config ->
-            StartGitHubSSE config
+        ConnectSSE config ->
+            ConnectSSE config
 
-        StartBuildLogsSSE config ->
-            StartBuildLogsSSE config
+        DisconnectSSE ->
+            DisconnectSSE
 
-        StopBuildLogsSSE ->
-            StopBuildLogsSSE
+        StartGitHubPolling token deviceCode interval expiresIn ->
+            StartGitHubPolling token deviceCode interval expiresIn
 
         CheckServerStatus toMsg ->
             CheckServerStatus (toMsg >> fn)

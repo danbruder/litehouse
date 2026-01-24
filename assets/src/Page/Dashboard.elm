@@ -322,12 +322,11 @@ update shared msg model =
                                             , error = Nothing
                                         }
                               }
-                            , Effect.StartGitHubSSE
-                                { token = token
-                                , deviceCode = response.deviceCode
-                                , interval = response.interval
-                                , expiresIn = response.expiresIn
-                                }
+                            , Effect.StartGitHubPolling
+                                token
+                                response.deviceCode
+                                response.interval
+                                response.expiresIn
                             )
 
                         Err err ->
@@ -340,72 +339,6 @@ update shared msg model =
                 _ ->
                     ( model, Effect.none )
 
-        GotGitHubSSEEvent value ->
-            case ( model.view, shared.token ) of
-                ( CreateAppView createState, Just token ) ->
-                    case Decode.decodeValue sseEventDecoder value of
-                        Ok event ->
-                            case event.eventType of
-                                "success" ->
-                                    -- Parse the data as JSON to get username
-                                    case Decode.decodeString (Decode.field "username" Decode.string) event.data of
-                                        Ok username ->
-                                            ( { model
-                                                | view =
-                                                    CreateAppView
-                                                        { createState
-                                                            | step = SelectRepo [] ""
-                                                            , error = Nothing
-                                                        }
-                                              }
-                                            , Effect.FetchRepos token GotRepoList
-                                            )
-
-                                        Err _ ->
-                                            -- Fallback: still a success, just no username parsed
-                                            ( { model
-                                                | view =
-                                                    CreateAppView
-                                                        { createState
-                                                            | step = SelectRepo [] ""
-                                                            , error = Nothing
-                                                        }
-                                              }
-                                            , Effect.FetchRepos token GotRepoList
-                                            )
-
-                                "error" ->
-                                    -- Stop polling and show error
-                                    case createState.step of
-                                        ConnectGitHub ghState ->
-                                            ( { model
-                                                | view =
-                                                    CreateAppView
-                                                        { createState
-                                                            | step = ConnectGitHub { ghState | polling = False }
-                                                            , error = Just event.data
-                                                        }
-                                              }
-                                            , Effect.none
-                                            )
-
-                                        _ ->
-                                            ( model, Effect.none )
-
-                                "pending" ->
-                                    -- Still waiting, keep polling (subscription handles this)
-                                    ( model, Effect.none )
-
-                                _ ->
-                                    -- Unknown event type, ignore
-                                    ( model, Effect.none )
-
-                        Err _ ->
-                            -- Failed to decode event, ignore
-                            ( model, Effect.none )
-
-                _ ->
-                    ( model, Effect.none )
 
         GotRepoList result ->
             case model.view of
@@ -564,16 +497,7 @@ update shared msg model =
             -- Stop any streaming when navigating away
             let
                 stopStreamEffect =
-                    case model.view of
-                        AppDetailView detailState ->
-                            if detailState.buildLogsStreaming then
-                                Effect.StopBuildLogsSSE
-
-                            else
-                                Effect.none
-
-                        _ ->
-                            Effect.none
+                    Effect.none
             in
             ( { model | view = AppsListView }
             , Effect.batch [ stopStreamEffect, Effect.PushUrl "/dashboard" ]
@@ -715,7 +639,7 @@ update shared msg model =
                             -- Parse build_id from JSON response: {"message": "...", "build_id": "..."}
                             case Decode.decodeString (Decode.field "build_id" Decode.string) responseJson of
                                 Ok buildId ->
-                                    -- Start streaming build logs
+                                    -- Build logs will stream automatically via unified SSE
                                     ( { model
                                         | view =
                                             AppDetailView
@@ -728,11 +652,7 @@ update shared msg model =
                                                     , selectedBuildId = Just buildId
                                                 }
                                       }
-                                    , Effect.StartBuildLogsSSE
-                                        { token = token
-                                        , appName = detailState.app.name
-                                        , buildId = buildId
-                                        }
+                                    , Effect.none
                                     )
 
                                 Err _ ->
@@ -937,78 +857,177 @@ update shared msg model =
                 _ ->
                     ( model, Effect.none )
 
-        GotBuildLogsSSEEvent value ->
-            case ( model.view, shared.token ) of
-                ( AppDetailView detailState, Just token ) ->
-                    case Decode.decodeValue sseEventDecoder value of
-                        Ok event ->
-                            case event.eventType of
-                                "message" ->
-                                    -- Append log line
-                                    let
-                                        newLogs =
-                                            if String.isEmpty detailState.buildLogs then
-                                                event.data
 
-                                            else
-                                                detailState.buildLogs ++ "\n" ++ event.data
-                                    in
-                                    ( { model
-                                        | view =
-                                            AppDetailView
-                                                { detailState | buildLogs = newLogs }
-                                      }
-                                    , Effect.none
-                                    )
+        HandleSSEEvent value ->
+            -- Decode the unified SSE message and route to appropriate handler
+            case Decode.decodeValue unifiedSSEDecoder value of
+                Ok (GitHubOAuthMessage eventType data) ->
+                    -- Route to GitHub OAuth handler
+                    handleGitHubOAuthEvent model shared eventType data
 
-                                "done" ->
-                                    -- Build completed, stop streaming and refresh
-                                    ( { model
-                                        | view =
-                                            AppDetailView
-                                                { detailState
-                                                    | actionInProgress = Nothing
-                                                    , buildLogsStreaming = False
-                                                    , streamingBuildId = Nothing
-                                                }
-                                      }
-                                    , Effect.batch
-                                        [ Effect.StopBuildLogsSSE
-                                        , Effect.FetchAppDetail token detailState.app.name GotAppDetail
-                                        , Effect.FetchBuilds token detailState.app.name GotBuilds
-                                        ]
-                                    )
+                Ok (BuildLogsMessage appName buildId eventType data) ->
+                    -- Route to build logs handler
+                    handleBuildLogsEvent model shared appName buildId eventType data
 
-                                "error" ->
-                                    -- Error occurred, stop streaming
-                                    ( { model
-                                        | view =
-                                            AppDetailView
-                                                { detailState
-                                                    | actionInProgress = Nothing
-                                                    , buildLogsStreaming = False
-                                                    , streamingBuildId = Nothing
-                                                    , error = Just ("Build error: " ++ event.data)
-                                                }
-                                      }
-                                    , Effect.StopBuildLogsSSE
-                                    )
+                Ok (BuildStatusMessage appName buildId status) ->
+                    -- Route to build status handler
+                    handleBuildStatusEvent model shared appName buildId status
 
-                                _ ->
-                                    -- Unknown event type, ignore
-                                    ( model, Effect.none )
+                Ok HeartbeatMessage ->
+                    -- Heartbeat, no action needed
+                    ( model, Effect.none )
 
-                        Err _ ->
-                            -- Failed to decode event, ignore
-                            ( model, Effect.none )
+                Ok (SystemNotificationMessage level message) ->
+                    -- Could display a toast notification
+                    ( model, Effect.none )
 
-                _ ->
+                Ok _ ->
+                    -- Other message types not yet handled
+                    ( model, Effect.none )
+
+                Err _ ->
+                    -- Failed to decode, ignore
                     ( model, Effect.none )
 
 
 -- Note: GitHub SSE subscription is handled by Main.elm
--- Main subscribes to the gitHubSSEEvent port and forwards events
--- to the Dashboard's GotGitHubSSEEvent message when appropriate
+-- Main subscribes to the sseEvent port and forwards events
+-- to the Dashboard's HandleSSEEvent message when appropriate
+
+
+-- SSE EVENT HANDLERS
+
+
+handleGitHubOAuthEvent : Model -> Shared.Model -> String -> String -> ( Model, Effect Msg )
+handleGitHubOAuthEvent model shared eventType data =
+    case ( model.view, shared.token ) of
+        ( CreateAppView createState, Just token ) ->
+            case eventType of
+                "success" ->
+                    -- Parse the data as JSON to get username
+                    case Decode.decodeString (Decode.field "username" Decode.string) data of
+                        Ok username ->
+                            ( { model
+                                | view =
+                                    CreateAppView
+                                        { createState
+                                            | step = SelectRepo [] ""
+                                            , error = Nothing
+                                        }
+                              }
+                            , Effect.FetchRepos token GotRepoList
+                            )
+
+                        Err _ ->
+                            -- Fallback: still a success, just no username parsed
+                            ( { model
+                                | view =
+                                    CreateAppView
+                                        { createState
+                                            | step = SelectRepo [] ""
+                                            , error = Nothing
+                                        }
+                              }
+                            , Effect.FetchRepos token GotRepoList
+                            )
+
+                "error" ->
+                    -- Stop polling and show error
+                    case createState.step of
+                        ConnectGitHub ghState ->
+                            ( { model
+                                | view =
+                                    CreateAppView
+                                        { createState
+                                            | step = ConnectGitHub { ghState | polling = False }
+                                            , error = Just data
+                                        }
+                              }
+                            , Effect.none
+                            )
+
+                        _ ->
+                            ( model, Effect.none )
+
+                "pending" ->
+                    -- Still waiting, keep polling
+                    ( model, Effect.none )
+
+                _ ->
+                    -- Unknown event type, ignore
+                    ( model, Effect.none )
+
+        _ ->
+            ( model, Effect.none )
+
+
+handleBuildLogsEvent : Model -> Shared.Model -> String -> String -> String -> String -> ( Model, Effect Msg )
+handleBuildLogsEvent model shared appName buildId eventType data =
+    case ( model.view, shared.token ) of
+        ( AppDetailView detailState, Just token ) ->
+            case eventType of
+                "message" ->
+                    -- Append log line
+                    let
+                        newLogs =
+                            if String.isEmpty detailState.buildLogs then
+                                data
+
+                            else
+                                detailState.buildLogs ++ "\n" ++ data
+                    in
+                    ( { model
+                        | view =
+                            AppDetailView
+                                { detailState | buildLogs = newLogs }
+                      }
+                    , Effect.none
+                    )
+
+                "done" ->
+                    -- Build completed, refresh
+                    ( { model
+                        | view =
+                            AppDetailView
+                                { detailState
+                                    | actionInProgress = Nothing
+                                    , buildLogsStreaming = False
+                                    , streamingBuildId = Nothing
+                                }
+                      }
+                    , Effect.batch
+                        [ Effect.FetchAppDetail token detailState.app.name GotAppDetail
+                        , Effect.FetchBuilds token detailState.app.name GotBuilds
+                        ]
+                    )
+
+                "error" ->
+                    -- Error occurred
+                    ( { model
+                        | view =
+                            AppDetailView
+                                { detailState
+                                    | actionInProgress = Nothing
+                                    , buildLogsStreaming = False
+                                    , streamingBuildId = Nothing
+                                    , error = Just ("Build error: " ++ data)
+                                }
+                      }
+                    , Effect.none
+                    )
+
+                _ ->
+                    ( model, Effect.none )
+
+        _ ->
+            ( model, Effect.none )
+
+
+handleBuildStatusEvent : Model -> Shared.Model -> String -> String -> String -> ( Model, Effect Msg )
+handleBuildStatusEvent model shared appName buildId status =
+    -- Handle build status changes (building, success, failed)
+    -- Could update UI to show build progress
+    ( model, Effect.none )
 
 
 -- TESTABLE HELPERS
@@ -1083,6 +1102,65 @@ sseEventDecoder =
     Decode.map2 SSEEvent
         (Decode.field "type" Decode.string)
         (Decode.field "data" Decode.string)
+
+
+-- Unified SSE Message Types
+type UnifiedSSEMessage
+    = GitHubOAuthMessage String String  -- eventType, data
+    | BuildLogsMessage String String String String  -- appName, buildId, eventType, data
+    | BuildStatusMessage String String String  -- appName, buildId, status
+    | ContainerLogsMessage String String  -- appName, data
+    | AppStateMessage String String  -- appName, state
+    | SystemNotificationMessage String String  -- level, message
+    | HeartbeatMessage
+
+
+-- Unified SSE Decoder
+unifiedSSEDecoder : Decode.Decoder UnifiedSSEMessage
+unifiedSSEDecoder =
+    Decode.field "type" Decode.string
+        |> Decode.andThen
+            (\msgType ->
+                case msgType of
+                    "github_oauth" ->
+                        Decode.map2 GitHubOAuthMessage
+                            (Decode.at [ "data", "payload", "event_type" ] Decode.string)
+                            (Decode.at [ "data", "payload", "data" ] Decode.string)
+
+                    "build_logs" ->
+                        Decode.map4 BuildLogsMessage
+                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
+                            (Decode.at [ "data", "payload", "build_id" ] Decode.string)
+                            (Decode.at [ "data", "payload", "event_type" ] Decode.string)
+                            (Decode.at [ "data", "payload", "data" ] Decode.string)
+
+                    "build_status" ->
+                        Decode.map3 BuildStatusMessage
+                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
+                            (Decode.at [ "data", "payload", "build_id" ] Decode.string)
+                            (Decode.at [ "data", "payload", "status" ] Decode.string)
+
+                    "container_logs" ->
+                        Decode.map2 ContainerLogsMessage
+                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
+                            (Decode.at [ "data", "payload", "data" ] Decode.string)
+
+                    "app_state" ->
+                        Decode.map2 AppStateMessage
+                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
+                            (Decode.at [ "data", "payload", "state" ] Decode.string)
+
+                    "system_notification" ->
+                        Decode.map2 SystemNotificationMessage
+                            (Decode.at [ "data", "payload", "level" ] Decode.string)
+                            (Decode.at [ "data", "payload", "message" ] Decode.string)
+
+                    "heartbeat" ->
+                        Decode.succeed HeartbeatMessage
+
+                    _ ->
+                        Decode.fail ("Unknown SSE message type: " ++ msgType)
+            )
 
 
 -- VIEW

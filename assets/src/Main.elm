@@ -141,6 +141,7 @@ type Msg
     | GotTokenVerification (Result Http.Error TokenVerificationResponse)
     | RefreshTokenReceived (Maybe String)
     | GotTokenRefresh (Result Http.Error TokenPair)
+    | GotGitHubPollingStarted (Result Http.Error ())
     | SSEEvent Decode.Value
     | SSEConnectionStateChanged String
 
@@ -360,7 +361,7 @@ update msg model =
                 Just refreshToken ->
                     case ( model.shared.token, model.shared.user ) of
                         ( Just token, Just user ) ->
-                            -- We have both token and user, set up dashboard
+                            -- We have both token and user, set up dashboard and connect SSE
                             let
                                 newShared =
                                     Shared.update (Shared.SetTokens token refreshToken) model.shared
@@ -375,6 +376,7 @@ update msg model =
                             , Cmd.batch
                                 [ Nav.pushUrl model.shared.navKey "/dashboard"
                                 , saveRefreshToken refreshToken
+                                , connectSSE { token = token, filters = Nothing }
                                 , performEffect model.shared.navKey (Effect.map DashboardMsg effect)
                                 ]
                             )
@@ -390,6 +392,7 @@ update msg model =
                     ( { model | shared = Shared.update Shared.ClearAuth model.shared }
                     , Cmd.batch
                         [ clearToken ()
+                        , disconnectSSE ()
                         , checkServerStatusHttp
                         ]
                     )
@@ -422,6 +425,7 @@ update msg model =
                     , Cmd.batch
                         [ Nav.pushUrl model.shared.navKey "/login"
                         , clearToken ()
+                        , disconnectSSE ()
                         , performEffect model.shared.navKey (Effect.map LoginMsg effect)
                         ]
                     )
@@ -442,6 +446,10 @@ update msg model =
                 _ ->
                     -- TODO: Handle SSE events on other pages or update global state
                     ( model, Cmd.none )
+
+        GotGitHubPollingStarted _ ->
+            -- Polling started, events will come via SSE
+            ( model, Cmd.none )
 
         SSEConnectionStateChanged state ->
             let
@@ -627,7 +635,7 @@ performEffect navKey effect =
             saveRefreshToken token
 
         Effect.ClearToken ->
-            clearToken ()
+            Cmd.batch [ clearToken (), disconnectSSE () ]
 
         Effect.GetRefreshToken ->
             getRefreshToken ()
@@ -685,6 +693,9 @@ performEffect navKey effect =
 
         Effect.StartDeviceFlow token toMsg ->
             startDeviceFlowHttp token toMsg
+
+        Effect.StartGitHubPolling token deviceCode interval expiresIn ->
+            startGitHubPollingHttp token deviceCode interval expiresIn
 
         Effect.FetchRepos token toMsg ->
             fetchReposHttp token toMsg
@@ -805,6 +816,19 @@ startDeviceFlowHttp token toMsg =
         , url = "/api/github/connect/start"
         , body = Http.emptyBody
         , expect = Http.expectJson (toMsg << Result.mapError httpErrorToString) deviceFlowStartDecoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+startGitHubPollingHttp : String -> String -> Int -> Int -> Cmd Msg
+startGitHubPollingHttp token deviceCode interval expiresIn =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/github/connect/stream?device_code=" ++ deviceCode ++ "&interval=" ++ String.fromInt interval ++ "&expires_in=" ++ String.fromInt expiresIn
+        , body = Http.emptyBody
+        , expect = Http.expectWhatever GotGitHubPollingStarted
         , timeout = Nothing
         , tracker = Nothing
         }

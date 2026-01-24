@@ -3,6 +3,13 @@ set -e
 
 SERVER="${SERVER:-root@104.248.15.20}"
 
+echo "==> Building frontend..."
+cd assets
+npm run build:css
+elm make src/Main.elm --optimize --output=dist/app.js
+cp public/index.html dist/index.html
+cd ..
+
 echo "==> Building static binary..."
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 
