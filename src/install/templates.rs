@@ -266,6 +266,15 @@ docker network create litehouse-network 2>/dev/null || true
 docker volume create litehouse_config 2>/dev/null || true
 docker volume create litehouse_data 2>/dev/null || true
 
+# Fix volume ownership for litehouse user (UID 1000)
+# Docker creates volumes as root by default, but container runs as litehouse (UID 1000)
+echo "Setting correct ownership on Docker volumes..."
+docker run --rm \
+  -v litehouse_config:/config \
+  -v litehouse_data:/data \
+  alpine:latest \
+  sh -c 'chown -R 1000:1000 /config /data && chmod 755 /config /data'
+
 # Copy server-config.toml from host into the Docker volume
 # This ensures the container sees the production configuration
 echo "Copying server-config.toml into Docker volume..."
