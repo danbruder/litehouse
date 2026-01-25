@@ -266,6 +266,20 @@ docker network create litehouse-network 2>/dev/null || true
 docker volume create litehouse_config 2>/dev/null || true
 docker volume create litehouse_data 2>/dev/null || true
 
+# Copy server-config.toml from host into the Docker volume
+# This ensures the container sees the production configuration
+echo "Copying server-config.toml into Docker volume..."
+if [ -f /opt/litehouse/config/server-config.toml ]; then
+  docker run --rm \
+    -v litehouse_config:/target \
+    -v /opt/litehouse/config/server-config.toml:/source/server-config.toml:ro \
+    alpine:latest \
+    sh -c 'cp /source/server-config.toml /target/server-config.toml && chown 1000:1000 /target/server-config.toml'
+  echo "Server config copied successfully"
+else
+  echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
+fi
+
 # Get Docker socket group ID for permissions
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
 

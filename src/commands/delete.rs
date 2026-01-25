@@ -58,6 +58,11 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         }
     }
 
+    // Delete app volume
+    if let Err(e) = crate::volume::delete_app_volume(&docker_conn, &app.id).await {
+        tracing::warn!("Failed to delete app volume: {}. Continuing with delete.", e);
+    }
+
     // Delete environment variables
     tracing::info!("Deleting environment variables for app {}", app.id);
     db::env_var::delete_by_app(pool, &app.id).await?;
@@ -79,6 +84,11 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
             e
         );
         // Don't fail the stop operation if Caddy sync fails
+    }
+
+    // Sync Litestream to remove app from config
+    if let Err(e) = crate::litestream::sync_configuration(&docker_conn, &pool).await {
+        tracing::warn!("Failed to sync Litestream after deleting app: {}", e);
     }
 
     Ok(())

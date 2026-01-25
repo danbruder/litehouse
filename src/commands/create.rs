@@ -3,6 +3,7 @@ use tracing::{info, instrument};
 
 use crate::config;
 use crate::db;
+use crate::docker;
 use crate::models::App;
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +16,8 @@ pub enum AppCreateError {
     DatabaseError(#[from] crate::db::DatabaseError),
     #[error("Config error: {0}")]
     ConfigError(#[from] crate::config::ConfigError),
+    #[error("Docker error: {0}")]
+    DockerError(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppCreateError>;
@@ -33,7 +36,13 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     // Initialize SQLite database for the app
     config::init_app_database(app_name)?;
 
-    info!("Created app '{}' with SQLite database", app.name);
+    // Create dedicated volume for app database
+    let docker = docker::connect().await
+        .map_err(|e| AppCreateError::DockerError(e.to_string()))?;
+    crate::volume::create_app_volume(&docker, &app.id).await
+        .map_err(|e| AppCreateError::DockerError(format!("Failed to create app volume: {}", e)))?;
+
+    info!("Created app '{}' with SQLite database and volume litehouse-db-{}", app.name, app.id);
 
     Ok(())
 }

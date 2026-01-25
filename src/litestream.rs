@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Pool;
 use sqlx::Sqlite;
 use std::fs;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LitestreamError {
@@ -175,6 +175,237 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     Ok(())
 }
 
+/// Check if database exists, restore from S3 if missing
+#[instrument]
+pub async fn restore_if_needed(
+    docker: &Docker,
+    db_pool: &Pool<Sqlite>,
+    app_id: &str,
+    volume_name: &str,
+) -> Result<()> {
+    info!("Checking if database restore is needed for app {}", app_id);
+
+    // Check if database already exists in the volume
+    let db_exists = check_db_exists(docker, volume_name).await?;
+
+    if db_exists {
+        info!("Database already exists in volume, skipping restore");
+        return Ok(());
+    }
+
+    info!("Database does not exist, attempting restore from S3");
+
+    // Get S3 config from database
+    let s3_config = db_system_config::get_s3_config(db_pool).await?;
+
+    if s3_config.is_none() {
+        info!("No S3 config found, skipping restore (fresh database)");
+        return Ok(());
+    }
+
+    let s3_config = s3_config.unwrap();
+
+    // Attempt to restore the database
+    match restore_database(docker, app_id, volume_name, &s3_config).await {
+        Ok(_) => {
+            info!("Database restored successfully from S3");
+            Ok(())
+        }
+        Err(e) => {
+            // If restore fails (e.g., no backup exists), log warning but continue
+            // This allows new apps to start without a backup
+            warn!("Database restore failed (this is OK for new apps): {}", e);
+            Ok(())
+        }
+    }
+}
+
+/// Check if app.db exists in volume using Alpine test container
+async fn check_db_exists(docker: &Docker, volume_name: &str) -> Result<bool> {
+    info!("Checking if database exists in volume: {}", volume_name);
+
+    let container_name = format!("litehouse-check-db-{}", volume_name);
+
+    let container_config = Config {
+        image: Some("alpine:latest".to_string()),
+        cmd: Some(vec![
+            "test".to_string(),
+            "-f".to_string(),
+            "/data/app.db".to_string(),
+        ]),
+        host_config: Some(HostConfig {
+            binds: Some(vec![format!("{}:/data:ro", volume_name)]),
+            auto_remove: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // Create the container
+    let create_options = bollard::container::CreateContainerOptions {
+        name: container_name.clone(),
+        ..Default::default()
+    };
+
+    let container_info = docker
+        .create_container(Some(create_options), container_config)
+        .await?;
+
+    // Start the container
+    docker
+        .start_container::<String>(&container_info.id, None)
+        .await?;
+
+    // Wait for container to finish
+    let timeout = tokio::time::Duration::from_secs(10);
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout {
+            return Err(anyhow::anyhow!("Check DB container timed out"));
+        }
+
+        let container = docker.inspect_container(&container_info.id, None).await?;
+
+        if let Some(state) = container.state {
+            if let Some(running) = state.running {
+                if !running {
+                    // Container has finished
+                    if let Some(exit_code) = state.exit_code {
+                        // Exit code 0 means file exists, 1 means it doesn't
+                        return Ok(exit_code == 0);
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Run one-shot Litestream restore: litestream restore -replica <s3_url> /data/app.db
+async fn restore_database(
+    docker: &Docker,
+    app_id: &str,
+    volume_name: &str,
+    s3_config: &S3Config,
+) -> Result<()> {
+    info!("Restoring database for app {} from S3", app_id);
+
+    // Build S3 URL for the app database
+    let path_prefix = s3_config.path_prefix.as_deref().unwrap_or("litehouse");
+    let s3_url = build_s3_url(s3_config, &format!("{}/apps/{}/app.db", path_prefix, app_id));
+
+    info!("Restoring from S3 URL: {}", s3_url);
+
+    let container_name = format!("litehouse-restore-{}", app_id);
+
+    // Prepare environment variables for S3 configuration
+    let mut env_vars = vec![
+        format!("LITESTREAM_ACCESS_KEY_ID={}", s3_config.access_key_id),
+        format!("LITESTREAM_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
+        format!("AWS_ACCESS_KEY_ID={}", s3_config.access_key_id),
+        format!("AWS_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
+        format!("AWS_REGION={}", s3_config.region),
+    ];
+
+    if let Some(endpoint) = &s3_config.endpoint {
+        env_vars.push(format!("AWS_ENDPOINT_URL={}", endpoint));
+    }
+
+    let container_config = Config {
+        image: Some("litestream/litestream:latest".to_string()),
+        cmd: Some(vec![
+            "restore".to_string(),
+            "-replica".to_string(),
+            s3_url,
+            "/data/app.db".to_string(),
+        ]),
+        env: Some(env_vars),
+        host_config: Some(HostConfig {
+            binds: Some(vec![format!("{}:/data", volume_name)]),
+            auto_remove: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // Ensure Litestream image exists
+    ensure_image_exists(docker, "litestream/litestream").await?;
+
+    // Create the container
+    let create_options = bollard::container::CreateContainerOptions {
+        name: container_name.clone(),
+        ..Default::default()
+    };
+
+    let container_info = docker
+        .create_container(Some(create_options), container_config)
+        .await?;
+
+    info!("Created restore container: {}", container_info.id);
+
+    // Start the container
+    docker
+        .start_container::<String>(&container_info.id, None)
+        .await?;
+
+    // Wait for container to finish (with timeout)
+    let timeout = tokio::time::Duration::from_secs(300); // 5 minutes
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout {
+            return Err(anyhow::anyhow!("Restore container timed out after 5 minutes"));
+        }
+
+        let container = docker.inspect_container(&container_info.id, None).await?;
+
+        if let Some(state) = container.state {
+            if let Some(running) = state.running {
+                if !running {
+                    // Container has finished
+                    if let Some(exit_code) = state.exit_code {
+                        if exit_code == 0 {
+                            info!("Database restored successfully");
+                            return Ok(());
+                        } else {
+                            // Get container logs for error details
+                            let logs = docker
+                                .logs::<String>(
+                                    &container_info.id,
+                                    Some(bollard::container::LogsOptions {
+                                        stdout: true,
+                                        stderr: true,
+                                        tail: "all".to_string(),
+                                        ..Default::default()
+                                    }),
+                                )
+                                .collect::<Vec<_>>()
+                                .await;
+
+                            let log_output: String = logs
+                                .into_iter()
+                                .filter_map(|r| r.ok())
+                                .map(|log| log.to_string())
+                                .collect::<Vec<_>>()
+                                .join("");
+
+                            return Err(anyhow::anyhow!(
+                                "Restore container failed with exit code {}: {}",
+                                exit_code,
+                                log_output
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+}
+
 fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) -> Result<LitestreamConfig> {
     let data_dir = config::get_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get data directory: {}", e))?;
@@ -211,12 +442,12 @@ fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) ->
         replicas: main_replicas,
     });
 
-    // Add app databases
-    // App databases are stored in the shared litehouse_data volume at /data/apps/{name}/data/app.db
+    // Add app databases - UPDATED for per-app volumes
     for app in apps {
-        // Database path inside the litestream container (mounted from litehouse_data volume)
-        let db_path = format!("/data/apps/{}/data/app.db", app.name);
-        let replica_path = format!("/data/litestream-replicas/{}", app.name);
+        // Database path inside the litestream container
+        // Volume mounted at /apps/{app_id} read-only
+        let db_path = format!("/apps/{}/app.db", app.id);
+        let replica_path = format!("/data/litestream-replicas/{}", app.id);
 
         let mut replicas = vec![ReplicaConfig {
             path: Some(replica_path),
@@ -226,7 +457,8 @@ fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) ->
         // Add S3 replica if configured
         if let Some(s3) = s3_config {
             let path_prefix = s3.path_prefix.as_deref().unwrap_or("litehouse");
-            let s3_url = build_s3_url(s3, &format!("{}/{}/db", path_prefix, app.name));
+            // Use app.id for consistent paths
+            let s3_url = build_s3_url(s3, &format!("{}/apps/{}/app.db", path_prefix, app.id));
             replicas.push(ReplicaConfig {
                 path: None,
                 url: Some(s3_url),
@@ -431,6 +663,22 @@ async fn create_and_start_container(
         info!("Configuring Litestream with S3 backup to bucket: {}", s3.bucket);
     }
 
+    // Get all app volumes to mount dynamically
+    let app_volumes = crate::volume::list_app_volumes(docker).await?;
+
+    let mut binds = vec![
+        "litehouse_data:/data".to_string(),  // Keep for replicas directory
+        "litehouse_config:/config".to_string(),
+        format!("{}:/etc/litestream.yml:ro", config_file_path.display()),
+    ];
+
+    // Mount each app volume read-only at /apps/{app_id}
+    for (volume_name, app_id) in app_volumes {
+        binds.push(format!("{}:/apps/{}:ro", volume_name, app_id));
+    }
+
+    info!("Mounting {} app volumes to Litestream container", binds.len() - 3);
+
     let container_config = Config {
         image: Some(image_name.to_string()),
         hostname: Some(container_name.to_string()),
@@ -445,12 +693,7 @@ async fn create_and_start_container(
                 name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
                 maximum_retry_count: None,
             }),
-            // Use Docker volumes instead of bind mounts
-            binds: Some(vec![
-                "litehouse_data:/data".to_string(),
-                "litehouse_config:/config".to_string(),
-                format!("{}:/etc/litestream.yml:ro", config_file_path.display()),
-            ]),
+            binds: Some(binds),  // Updated binds with all app volumes
             ..Default::default()
         }),
         ..Default::default()

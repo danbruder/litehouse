@@ -66,22 +66,41 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
 
     tracing::info!("Found {} environment variables", env_vars.len());
 
-    // Ensure litehouse volumes exist (they're shared across containers)
-    crate::litestream::ensure_litehouse_volumes_exist(docker)
-        .await
-        .map_err(|e| StartError::AppStartFailed(format!("Failed to ensure volumes exist: {}", e)))?;
-
-    // Use shared litehouse_data volume, but mount app-specific subdirectory
-    // App databases are stored at /data/apps/{app_name}/data/app.db in the shared volume
-    let volume_binds = vec![
-        "litehouse_data:/app/data".to_string()
-    ];
-
-    tracing::info!("Mounting app data from shared Docker volume: litehouse_data -> /app/data");
-
-    // Start the app with docker
+    // Get image tag for permission discovery
     let image_tag = build.image_tag.as_ref()
         .ok_or_else(|| StartError::AppBuildMissing(format!("Build {} has no image tag", build.id)))?;
+
+    // Create app volume if it doesn't exist (idempotent)
+    let volume_name = crate::volume::create_app_volume(docker, &app.id)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Failed to create volume: {}", e)))?;
+
+    // Discover UID/GID from image
+    let uid_gid = crate::volume::discover_image_user(docker, image_tag)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Failed to discover image user: {}", e)))?;
+
+    // Initialize volume with correct permissions
+    crate::volume::init_app_volume(docker, &app.id, &volume_name, uid_gid)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Failed to initialize volume: {}", e)))?;
+
+    // Check if database needs restore
+    crate::litestream::restore_if_needed(docker, pool, &app.id, &volume_name)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Failed to restore database: {}", e)))?;
+
+    // Verify no other container is using this volume (single-writer guarantee)
+    crate::volume::verify_volume_single_writer(docker, &app.id, &volume_name)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Volume already in use: {}", e)))?;
+
+    // Mount app volume at /data
+    let volume_binds = vec![format!("{}:/data", volume_name)];
+
+    tracing::info!("Mounting app data volume: {} -> /data", volume_name);
+
+    // Start the app container
     tracing::info!("Running {} with image {}", &app.name, image_tag);
     docker::run(&app.name, image_tag, env_vars, volume_binds)
         .await
@@ -104,6 +123,15 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
             e
         );
         // Don't fail the start operation if Caddy sync fails
+    }
+
+    // Sync Litestream configuration to include new app
+    if let Err(e) = crate::litestream::sync_configuration(docker, pool).await {
+        tracing::warn!(
+            "Failed to sync Litestream configuration after starting app '{}': {}",
+            app_name,
+            e
+        );
     }
 
     Ok(())
