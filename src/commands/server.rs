@@ -4,10 +4,12 @@ use crate::reconciler::Reconciler;
 use anyhow::{Context, Result};
 use axum::Router;
 use bollard::Docker;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, oneshot};
+use tokio::task::JoinHandle;
 use tracing::{info, instrument};
 
 use crate::admin_spa;
@@ -22,6 +24,8 @@ pub struct AppState {
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
     pub message_bus: Arc<MessageBus>,
+    /// Track active log streaming tasks per app name
+    pub log_streaming_tasks: Arc<RwLock<HashMap<String, (JoinHandle<()>, oneshot::Sender<()>)>>>,
 }
 
 /// Start the Litehouse server
@@ -91,6 +95,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         jwt_secret,
         github_client_id,
         message_bus,
+        log_streaming_tasks: Arc::new(RwLock::new(HashMap::new())),
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else

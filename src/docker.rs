@@ -4,7 +4,7 @@ use bollard::Docker;
 use bollard::image::BuildImageOptions;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use futures_util::{StreamExt, stream::unfold};
+use futures_util::StreamExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -429,46 +429,42 @@ pub async fn logs_stream(
         )));
     }
 
-    // Create a stream that owns all the necessary data
-    let stream = unfold(
-        (docker, container_name, follow),
-        |(docker, container_name, follow)| async move {
-            let logs_opts = bollard::container::LogsOptions::<String> {
-                stdout: true,
-                stderr: true,
-                follow: follow,
-                ..Default::default()
-            };
+    // Create logs options
+    let mut logs_opts = bollard::container::LogsOptions::<String> {
+        stdout: true,
+        stderr: true,
+        follow: follow,
+        ..Default::default()
+    };
+    
+    // Set tail if lines > 0 (tail expects a String, not Option<String>)
+    if lines > 0 {
+        logs_opts.tail = lines.to_string();
+    }
 
-            let mut logs_stream = docker.logs::<String>(&container_name, Some(logs_opts));
+    // Create the Docker logs stream once
+    let logs_stream = docker.logs::<String>(&container_name, Some(logs_opts));
 
-            match logs_stream.next().await {
-                Some(result) => {
-                    let log_string = match result {
-                        Ok(log_result) => match log_result {
-                            bollard::container::LogOutput::StdOut { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            bollard::container::LogOutput::StdErr { message } => {
-                                String::from_utf8_lossy(&message).to_string()
-                            }
-                            _ => String::new(),
-                        },
-                        Err(e) => {
-                            return Some((
-                                Err(DockerError::BollardError(e)),
-                                (docker, container_name, follow),
-                            ));
-                        }
-                    };
-                    Some((Ok(log_string), (docker, container_name, follow)))
-                }
-                None => None,
+    // Map the stream to extract log messages
+    let mapped_stream = logs_stream.map(|result| {
+        match result {
+            Ok(log_result) => {
+                let log_string = match log_result {
+                    bollard::container::LogOutput::StdOut { message } => {
+                        String::from_utf8_lossy(&message).to_string()
+                    }
+                    bollard::container::LogOutput::StdErr { message } => {
+                        String::from_utf8_lossy(&message).to_string()
+                    }
+                    _ => String::new(),
+                };
+                Ok(log_string)
             }
-        },
-    );
+            Err(e) => Err(DockerError::BollardError(e)),
+        }
+    });
 
-    Ok(Box::pin(stream))
+    Ok(Box::pin(mapped_stream))
 }
 
 #[instrument]
@@ -1140,5 +1136,122 @@ RUN echo "Test image for removal"
         }
 
         Ok(())
+    }
+
+    // Test that logs_stream doesn't repeat logs (fixes the unfold bug)
+    #[tokio::test]
+    async fn test_logs_stream_no_duplicates() -> Result<()> {
+        use futures_util::StreamExt;
+        use std::collections::HashSet;
+        use std::time::Duration;
+        use tokio::time::timeout;
+
+        let app_name = "test-logs-app";
+        let image_tag = "alpine:latest";
+        let container_name = format!("{}-container", app_name);
+
+        // Clean up any existing test container first
+        let _ = cleanup_container(&container_name);
+
+        // Create and start a container that will produce some logs
+        run(app_name, image_tag, vec![], vec![]).await?;
+
+        // Wait a moment for container to start
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Generate some unique log lines by running commands in the container
+        let docker = connect().await?;
+        let exec_config = bollard::exec::CreateExecOptions {
+            cmd: Some(vec!["sh", "-c", "echo 'log-line-1'; echo 'log-line-2'; echo 'log-line-3'"]),
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            ..Default::default()
+        };
+
+        // Execute commands to generate logs
+        let exec_id = docker
+            .create_exec(&container_name, exec_config)
+            .await?
+            .id;
+        docker.start_exec(&exec_id, None).await?;
+
+        // Wait for logs to be written
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Get logs stream
+        let mut stream = logs_stream(app_name, 10, false).await?;
+
+        // Collect all log lines
+        let mut log_lines = Vec::new();
+        let mut seen_lines = HashSet::new();
+
+        // Read logs with timeout to avoid hanging
+        let timeout_duration = Duration::from_secs(5);
+        loop {
+            match timeout(timeout_duration, stream.next()).await {
+                Ok(Some(Ok(line))) => {
+                    let trimmed = line.trim().to_string();
+                    if !trimmed.is_empty() {
+                        log_lines.push(trimmed.clone());
+                        seen_lines.insert(trimmed);
+                    }
+                }
+                Ok(Some(Err(e))) => {
+                    // Log error but continue - might be end of stream
+                    tracing::debug!("Log stream error: {}", e);
+                    break;
+                }
+                Ok(None) => {
+                    // Stream ended
+                    break;
+                }
+                Err(_) => {
+                    // Timeout - assume stream is done
+                    break;
+                }
+            }
+        }
+
+        // Verify we got some logs
+        assert!(!log_lines.is_empty(), "Should receive at least some log lines");
+
+        // Verify no duplicates: each line should only appear once
+        let unique_lines: HashSet<String> = log_lines.iter().cloned().collect();
+        assert_eq!(
+            log_lines.len(),
+            unique_lines.len(),
+            "Log stream should not contain duplicates. Got {} total lines but only {} unique lines. Logs: {:?}",
+            log_lines.len(),
+            unique_lines.len(),
+            log_lines
+        );
+
+        // Verify each line in seen_lines appears exactly once in log_lines
+        for line in &seen_lines {
+            let count = log_lines.iter().filter(|l| l.as_str() == line.as_str()).count();
+            assert_eq!(
+                count, 1,
+                "Log line '{}' should appear exactly once, but appeared {} times",
+                line, count
+            );
+        }
+
+        // Clean up
+        cleanup_container(&container_name)?;
+
+        Ok(())
+    }
+
+    // Test that logs_stream handles non-existent container gracefully
+    #[tokio::test]
+    async fn test_logs_stream_nonexistent_container() {
+        let result = logs_stream("nonexistent-app", 10, false).await;
+        assert!(result.is_err(), "Should return error for non-existent container");
+        
+        if let Err(DockerError::LogError(msg)) = result {
+            assert!(msg.contains("not found"), "Error message should mention 'not found', got: {}", msg);
+        } else {
+            panic!("Expected LogError for non-existent container");
+        }
     }
 }

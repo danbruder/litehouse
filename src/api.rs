@@ -208,38 +208,75 @@ async fn get_logs(
         .unwrap_or(false);
 
     if follow {
-        // Get message bus from state
-        let message_bus = {
+        // Get message bus and log streaming tasks from state
+        let (message_bus, log_streaming_tasks) = {
             let state_guard = state.read().await;
-            state_guard.message_bus.clone()
+            (state_guard.message_bus.clone(), state_guard.log_streaming_tasks.clone())
         };
+
+        // Cancel any existing log streaming task for this app
+        {
+            let mut tasks = log_streaming_tasks.write().await;
+            if let Some((handle, cancel_tx)) = tasks.remove(&name) {
+                tracing::info!("Stopping existing log streaming task for app '{}'", name);
+                // Send cancellation signal
+                let _ = cancel_tx.send(());
+                // Abort the task if it's still running
+                handle.abort();
+            }
+        }
 
         // Stream logs and publish to message bus
         match logs::execute(&name, lines, true).await {
             Ok(stream) => {
                 let app_name = name.clone();
                 let message_bus_clone = message_bus.clone();
+                let log_streaming_tasks_clone = log_streaming_tasks.clone();
+                
+                // Create cancellation channel
+                let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
                 
                 // Spawn background task to publish logs to message bus
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     let mut log_stream = stream;
-                    while let Some(result) = log_stream.next().await {
-                        match result {
-                            Ok(data) => {
-                                // Publish to message bus
-                                message_bus_clone.publish(Message::ContainerLogs {
-                                    app_name: app_name.clone(),
-                                    data: data.clone(),
-                                });
+                    loop {
+                        tokio::select! {
+                            result = log_stream.next() => {
+                                match result {
+                                    Some(Ok(data)) => {
+                                        // Publish to message bus
+                                        message_bus_clone.publish(Message::ContainerLogs {
+                                            app_name: app_name.clone(),
+                                            data: data.clone(),
+                                        });
+                                    }
+                                    Some(Err(e)) => {
+                                        tracing::warn!("Error reading log stream for {}: {}", app_name, e);
+                                        break;
+                                    }
+                                    None => {
+                                        tracing::debug!("Log stream ended for {}", app_name);
+                                        break;
+                                    }
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!("Error reading log stream for {}: {}", app_name, e);
+                            _ = &mut cancel_rx => {
+                                tracing::debug!("Log streaming cancelled for {}", app_name);
                                 break;
                             }
                         }
                     }
+                    // Clean up task from tracking map when done
+                    let mut tasks = log_streaming_tasks_clone.write().await;
+                    tasks.remove(&app_name);
                     tracing::debug!("Log streaming task completed for {}", app_name);
                 });
+
+                // Store the task handle and cancellation sender
+                {
+                    let mut tasks = log_streaming_tasks.write().await;
+                    tasks.insert(name.clone(), (handle, cancel_tx));
+                }
 
                 // Return a simple OK response since logs are now streamed via message bus
                 (StatusCode::OK, "Log streaming started").into_response()
