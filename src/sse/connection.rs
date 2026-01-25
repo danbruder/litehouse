@@ -1,5 +1,5 @@
 use super::message::SSEMessage;
-use crate::message_bus::{MessageBus, Message, SubscriptionFilter};
+use crate::message_bus::{Message, MessageBus, SubscriptionFilter};
 use axum::response::sse::Event;
 use futures_util::stream::Stream;
 use std::collections::VecDeque;
@@ -15,7 +15,7 @@ pub fn start_sse_stream(
     _user_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     // Throttle configuration: process messages every 100ms (max 10 messages/second)
-    const THROTTLE_INTERVAL_MS: u64 = 100;
+    const THROTTLE_INTERVAL_MS: u64 = 1000;
 
     let receiver = message_bus.subscribe();
 
@@ -23,11 +23,11 @@ pub fn start_sse_stream(
         let mut rx = receiver;
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(15));
         heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        
+
         // Throttle interval for processing queued messages
         let mut throttle_interval = tokio::time::interval(Duration::from_millis(THROTTLE_INTERVAL_MS));
         throttle_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        
+
         // Message queue for throttling (FIFO)
         let mut message_queue: VecDeque<Event> = VecDeque::new();
 
@@ -104,7 +104,11 @@ mod tests {
         let message_bus = Arc::new(MessageBus::new());
         let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish a message
         message_bus.publish(Message::SystemNotification {
@@ -128,9 +132,14 @@ mod tests {
     async fn test_stream_filters_by_app_name() {
         use crate::message_bus::MessageBus;
         let message_bus = Arc::new(MessageBus::new());
-        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new(Some("1".to_string()))
+            .with_app_names(vec!["myapp".to_string()]);
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish a message for different app
         message_bus.publish(Message::BuildLogs {
@@ -174,7 +183,11 @@ mod tests {
         let message_bus = Arc::new(MessageBus::new());
         let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Wait for heartbeat (should come within 15 seconds, but we'll wait up to 20)
         let event = tokio::time::timeout(Duration::from_secs(20), async {
@@ -198,9 +211,14 @@ mod tests {
     async fn test_stream_receives_container_logs() {
         use crate::message_bus::MessageBus;
         let message_bus = Arc::new(MessageBus::new());
-        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new(Some("1".to_string()))
+            .with_app_names(vec!["myapp".to_string()]);
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish a container logs message
         message_bus.publish(Message::ContainerLogs {
@@ -234,9 +252,14 @@ mod tests {
     async fn test_stream_filters_container_logs_by_app_name() {
         use crate::message_bus::MessageBus;
         let message_bus = Arc::new(MessageBus::new());
-        let filter = SubscriptionFilter::new(Some("1".to_string())).with_app_names(vec!["myapp".to_string()]);
+        let filter = SubscriptionFilter::new(Some("1".to_string()))
+            .with_app_names(vec!["myapp".to_string()]);
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish a message for different app
         message_bus.publish(Message::ContainerLogs {
@@ -270,7 +293,11 @@ mod tests {
         let message_bus = Arc::new(MessageBus::new());
         let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish 5 messages rapidly (all at once)
         for i in 0..5 {
@@ -286,16 +313,21 @@ mod tests {
         // Collect first 3 non-heartbeat messages with timeouts
         // With throttling at 100ms, these should take at least 200ms total
         let start = std::time::Instant::now();
-        
+
         while events.len() < 3 {
-            if let Ok(Some(Ok(event))) = tokio::time::timeout(Duration::from_millis(500), stream.next()).await {
+            if let Ok(Some(Ok(event))) =
+                tokio::time::timeout(Duration::from_millis(500), stream.next()).await
+            {
                 let event_str = format!("{:?}", event);
                 // Skip heartbeats
                 if !event_str.contains("Heartbeat") {
                     events.push(event);
                 }
             } else {
-                panic!("Expected to receive 3 messages, but only got {}", events.len());
+                panic!(
+                    "Expected to receive 3 messages, but only got {}",
+                    events.len()
+                );
             }
         }
 
@@ -331,7 +363,11 @@ mod tests {
         let message_bus = Arc::new(MessageBus::new());
         let filter = SubscriptionFilter::new(Some("1".to_string()));
 
-        let mut stream = Box::pin(start_sse_stream(message_bus.clone(), filter, "1".to_string()));
+        let mut stream = Box::pin(start_sse_stream(
+            message_bus.clone(),
+            filter,
+            "1".to_string(),
+        ));
 
         // Publish many messages to fill the throttle queue
         for i in 0..10 {
@@ -357,6 +393,9 @@ mod tests {
         .expect("Timeout waiting for heartbeat");
 
         let event_str = format!("{:?}", heartbeat_event);
-        assert!(event_str.contains("Heartbeat"), "Heartbeat should bypass throttle");
+        assert!(
+            event_str.contains("Heartbeat"),
+            "Heartbeat should bypass throttle"
+        );
     }
 }

@@ -322,22 +322,29 @@ async fn deploy_app(
 }
 
 #[instrument(skip(state))]
+#[instrument(skip(state))]
 async fn delete_app(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
     match delete::execute(&pool, &name).await {
-        Ok(_) => (
-            axum::http::StatusCode::OK,
-            format!("App '{}' deleted", name),
-        )
-            .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete app: {}", e),
-        )
-            .into_response(),
+        Ok(_) => {
+            tracing::info!("Successfully deleted app '{}'", name);
+            (
+                axum::http::StatusCode::OK,
+                format!("App '{}' deleted", name),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to delete app '{}': {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to delete app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 

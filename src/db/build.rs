@@ -100,6 +100,22 @@ pub async fn get_all_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<Bui
     Ok(rows.iter().map(build_from_row).collect())
 }
 
+/// Delete all builds for an app
+#[instrument(skip(pool))]
+pub async fn delete_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<()> {
+    sqlx::query(
+        r#"
+            DELETE FROM build
+            WHERE app_id = ?
+            "#,
+    )
+    .bind(app_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Delete old builds, keeping only the most recent `keep_count` builds per app
 #[instrument(skip(pool))]
 pub async fn delete_old_builds(pool: &Pool<Sqlite>, app_id: &str, keep_count: i64) -> Result<Vec<Build>> {
@@ -327,5 +343,76 @@ mod tests {
         assert_eq!(retrieved.image_id, Some("img123".to_string()));
         assert_eq!(retrieved.image_tag, Some("tag123".to_string()));
         assert_eq!(retrieved.git_commit, Some("commit123".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_app() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp").unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        // Create multiple builds for the app
+        let build1 = Build::new_building(app.id.clone(), "/tmp/build1.log".to_string());
+        let build2 = Build::new_building(app.id.clone(), "/tmp/build2.log".to_string());
+        let build3 = Build::new_building(app.id.clone(), "/tmp/build3.log".to_string());
+
+        save(&pool, &build1).await.unwrap();
+        save(&pool, &build2).await.unwrap();
+        save(&pool, &build3).await.unwrap();
+
+        // Verify all builds exist
+        let all_builds = get_all_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(all_builds.len(), 3);
+
+        // Delete all builds for the app
+        delete_by_app(&pool, &app.id).await.unwrap();
+
+        // Verify all builds are deleted
+        let remaining_builds = get_all_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(remaining_builds.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_app_with_other_apps() {
+        let pool = get_test_pool().await;
+        let app1 = App::new("app1").unwrap();
+        let app2 = App::new("app2").unwrap();
+        app::save(&pool, &app1).await.unwrap();
+        app::save(&pool, &app2).await.unwrap();
+
+        // Create builds for both apps
+        let build1 = Build::new_building(app1.id.clone(), "/tmp/build1.log".to_string());
+        let build2 = Build::new_building(app1.id.clone(), "/tmp/build2.log".to_string());
+        let build3 = Build::new_building(app2.id.clone(), "/tmp/build3.log".to_string());
+
+        save(&pool, &build1).await.unwrap();
+        save(&pool, &build2).await.unwrap();
+        save(&pool, &build3).await.unwrap();
+
+        // Delete builds for app1 only
+        delete_by_app(&pool, &app1.id).await.unwrap();
+
+        // Verify app1's builds are deleted
+        let app1_builds = get_all_by_app(&pool, &app1.id).await.unwrap();
+        assert_eq!(app1_builds.len(), 0);
+
+        // Verify app2's builds are still there
+        let app2_builds = get_all_by_app(&pool, &app2.id).await.unwrap();
+        assert_eq!(app2_builds.len(), 1);
+        assert_eq!(app2_builds[0].id, build3.id);
+    }
+
+    #[tokio::test]
+    async fn test_delete_by_app_no_builds() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp").unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        // Delete builds for an app with no builds (should not error)
+        delete_by_app(&pool, &app.id).await.unwrap();
+
+        // Verify no builds exist
+        let builds = get_all_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(builds.len(), 0);
     }
 }

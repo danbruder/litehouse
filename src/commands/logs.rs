@@ -1,6 +1,6 @@
+use futures_util::StreamExt;
 use std::pin::Pin;
 use tracing::instrument;
-use futures_util::StreamExt;
 
 use crate::db;
 use crate::docker;
@@ -38,11 +38,14 @@ pub async fn execute(
     let stream = docker::logs_stream(app_name, lines, follow)
         .await
         .map_err(LogsError::DockerError)?;
-    
+
     // Map stream items from Result<String, anyhow::Error> to Result<String, LogsError>
-    let mapped_stream = stream.map(|item| {
-        item.map_err(|e| LogsError::LogStreamError(e.to_string()))
-    });
-    
+    let mapped_stream = stream
+        .map(|item| item.map_err(|e| LogsError::LogStreamError(e.to_string())))
+        .map(|message| {
+            println!("{:?}", &message);
+            message
+        });
+
     Ok(Box::pin(mapped_stream))
 }
