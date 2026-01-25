@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
-use tracing::{info, instrument};
+use tracing::{info, instrument, warn};
 
 use super::executor::{run_command, run_command_with_log, sudo_write_file};
 use super::templates;
@@ -212,10 +212,78 @@ pub fn phase8_log_rotation() -> Result<()> {
     Ok(())
 }
 
-/// Phase 9: Start litehouse-server Container
+/// Phase 9a: Start Caddy Container
 #[instrument]
-pub fn phase9_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
-    info!("Phase 9: Start litehouse-server Container");
+pub fn phase9a_start_caddy_container(litehouse_uid: &str) -> Result<()> {
+    info!("Phase 9a: Start Caddy Container");
+
+    let script = templates::start_caddy_container_script(litehouse_uid);
+    std::fs::write("/tmp/start_caddy.sh", &script)?;
+    run_command("chmod +x /tmp/start_caddy.sh")?;
+    run_command("/tmp/start_caddy.sh")?;
+    run_command("rm /tmp/start_caddy.sh")?;
+
+    // Wait a moment for container to start
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // Verify container is running
+    let ps_output = run_command("docker ps --filter name=caddy-container --format '{{.Status}}'")?;
+
+    if !ps_output.contains("Up") {
+        // Container is not running - get the logs to understand why
+        let logs = run_command("docker logs caddy-container 2>&1 | tail -50")
+            .unwrap_or_else(|_| "Could not retrieve container logs".to_string());
+
+        anyhow::bail!(
+            "caddy-container is not running. Container logs:\n{}",
+            logs
+        );
+    }
+
+    // Wait for Caddy admin API to be ready (with retries)
+    info!("Waiting for Caddy admin API to be ready...");
+    let max_retries = 10;
+    let mut retries = 0;
+    let mut api_ready = false;
+
+    while retries < max_retries {
+        // Check if admin API is responding
+        let check_cmd = "curl -s -o /dev/null -w '%{http_code}' http://localhost:2019/config/ || echo '000'";
+        match run_command(check_cmd) {
+            Ok(output) => {
+                let status = output.trim();
+                if status == "200" || status == "404" {
+                    // 200 = API is responding, 404 = API is up but endpoint doesn't exist (which is fine)
+                    api_ready = true;
+                    break;
+                }
+            }
+            Err(_) => {
+                // curl failed, API not ready yet
+            }
+        }
+
+        retries += 1;
+        if retries < max_retries {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    if !api_ready {
+        warn!("Caddy admin API may not be ready, but continuing anyway");
+    } else {
+        info!("Caddy admin API is ready");
+    }
+
+    info!("caddy-container started successfully");
+    info!("Phase 9a completed successfully");
+    Ok(())
+}
+
+/// Phase 9b: Start litehouse-server Container
+#[instrument]
+pub fn phase9b_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
+    info!("Phase 9b: Start litehouse-server Container");
 
     let script = templates::start_litehouse_container_script(litehouse_uid);
     std::fs::write("/tmp/start_litehouse.sh", &script)?;
@@ -241,7 +309,7 @@ pub fn phase9_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
     }
 
     info!("litehouse-server container started successfully");
-    info!("Phase 9 completed successfully");
+    info!("Phase 9b completed successfully");
     Ok(())
 }
 

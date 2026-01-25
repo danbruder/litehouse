@@ -28,7 +28,10 @@ use crate::install::phases::*;
 ///     └────────┴────────┴────────┴─────────┘
 ///              │
 ///              v
-/// Phase 9: Start litehouse-server container
+/// Phase 9a: Start Caddy container
+///              │
+///              v
+/// Phase 9b: Start litehouse-server container
 ///              │
 ///              v
 /// Phase 10: Enable podman-restart service
@@ -45,7 +48,7 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     let multi = MultiProgress::new();
 
     // Create progress bar for phases
-    let total_phases = if skip_verify { 10 } else { 11 };
+    let total_phases = if skip_verify { 11 } else { 12 };
     let pb = multi.add(ProgressBar::new(total_phases));
     pb.set_style(
         ProgressStyle::default_bar()
@@ -204,11 +207,20 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     }
     pb.inc(1); // Count the parallel phases as one step
 
-    // Phase 9: Start litehouse-server Container
+    // Phase 9a: Start Caddy Container (must be before litehouse-server)
+    pb.set_message("Starting Caddy container...");
+    if let Err(e) = phase9a_start_caddy_container(&litehouse_uid) {
+        pb.finish_with_message("❌ Caddy container start failed");
+        error!("Phase 9a failed: {}", e);
+        return Err(e);
+    }
+    pb.inc(1);
+
+    // Phase 9b: Start litehouse-server Container
     pb.set_message("Starting litehouse-server container...");
-    if let Err(e) = phase9_start_litehouse_container(&litehouse_uid) {
+    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid) {
         pb.finish_with_message("❌ litehouse-server container start failed");
-        error!("Phase 9 failed: {}", e);
+        error!("Phase 9b failed: {}", e);
         return Err(e);
     }
     pb.inc(1);

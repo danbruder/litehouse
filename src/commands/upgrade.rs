@@ -4,7 +4,7 @@ use tracing::{info, instrument};
 
 use crate::install::executor::run_command;
 use crate::install::phases::{
-    get_litehouse_uid, phase6a_build_litehouse_image, phase9_start_litehouse_container,
+    get_litehouse_uid, phase6a_build_litehouse_image, phase9b_start_litehouse_container,
 };
 
 const GITHUB_REPO: &str = "danbruder/litehouse";
@@ -226,7 +226,7 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
     pb.set_message("Restarting litehouse-server container...");
     log_window.set_message("Restarting container...");
 
-    if let Err(e) = phase9_start_litehouse_container(&litehouse_uid) {
+    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid) {
         pb.finish_with_message("❌ Container restart failed");
         return Err(e);
     }
