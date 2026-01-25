@@ -4,14 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**litehouse** is a platform for deploying and running containerized applications, transitioning from a static binary deployment system to a container-based platform using Docker and Caddy. The goal is to create a self-hosted platform similar to Vercel, with focus on Next.js applications.
+**litehouse** is a container-based platform for deploying and running containerized applications on a single host, similar to Vercel but self-hosted. The focus is on SQLite-backed applications with automatic backups.
 
 The system consists of:
-- **CLI client** - Local tool for managing apps (create, start, stop, build, logs, etc.)
-- **Server** - HTTP server with admin API and reverse proxy
-- **Docker integration** - Container orchestration via Bollard (Docker/Docker API)
-- **Caddy integration** - Dynamic reverse proxy configuration
+- **CLI client** (`lh`) - Local tool for managing apps (create, start, stop, build, logs, etc.)
+- **litehouse-server container** - HTTP server with admin API, runs as a Docker container (NOT a systemd service)
+- **Caddy container** - Reverse proxy with automatic HTTPS and subdomain routing
+- **App containers** - User applications, each in their own container
+- **Docker integration** - Container orchestration via Bollard (Docker API client)
 - **SQLite database** - App state, builds, remotes, and environment variables
+
+**IMPORTANT DEPLOYMENT DETAILS:**
+- The litehouse server itself runs as a Docker container named `litehouse-server`
+- Check server status: `docker ps | grep litehouse-server` (NOT `systemctl status litehouse`)
+- Restart server: Handled by container restart policy or `docker restart litehouse-server`
+- Server binary at `/usr/local/bin/lh` is only used for CLI operations and install/upgrade tasks
+- After installation, the `lh serve` command runs inside the `litehouse-server` container
 
 ## Build & Development Commands
 
@@ -37,23 +45,26 @@ TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-li
 
 ## Architecture Overview
 
-### Current State (V2 Refactor)
+### Current State (Phase 1 Complete)
 
-The project is **mid-refactor** from a static binary deployment model to a container-based platform. See NOTES.md for detailed refactor notes and decisions.
+The V2 refactor to a container-based platform is **complete**. See VISION.md for the roadmap.
 
-**Completed:**
+**Phase 1 Complete:**
 - Create/delete apps
 - Set environment variables
 - Add/remove Git remotes
-- Build apps from Git repos (creates Docker images via Docker)
+- Build apps from Git repos (creates Docker images)
 - Start/stop containers
 - View container logs
-- Caddy reverse proxy management
+- Caddy reverse proxy with dynamic subdomain routing
+- End-to-end subdomain routing working
 
-**In Progress:**
-- Automatic subdomain routing (partial - Caddy config generation exists)
+**Next Priorities (Phase 2):**
+- Web admin UI (Htmx + Tailwind)
 - GitHub webhook integration
-- Restart functionality
+- Server initialization wizard (`lh server init`)
+
+See VISION.md and NEXT_PRIORITY.md for complete roadmap.
 
 ### Key Components
 
@@ -202,20 +213,40 @@ Each command module corresponds to a CLI subcommand:
 - `LITEHOUSE_LOCAL_DEV` or `RUST_LOG` - Enable local dev mode
 - `DATABASE_URL` - SQLite database path (default: `~/.local/share/litehouse/litehouse.db`)
 
+## Operational Notes
+
+**Checking Server Status:**
+```bash
+# Check if litehouse-server container is running
+docker ps | grep litehouse-server
+
+# View litehouse-server logs
+docker logs litehouse-server -f
+
+# Check Caddy container
+docker ps | grep caddy-container
+
+# Restart litehouse-server
+docker restart litehouse-server
+```
+
+**DO NOT use systemctl** - litehouse does not run as a systemd service.
+
+**Common Troubleshooting:**
+- If apps aren't accessible: Check `docker logs caddy-container` for routing issues
+- If builds fail: Check `docker logs litehouse-server` for API errors
+- If containers won't start: Check Docker socket is accessible at `/var/run/docker.sock`
+
 ## Known Issues & TODOs
 
-From NOTES.md:
-- Restart command not implemented (see `src/cli.rs:153`)
-- Deploy endpoint receives binary but doesn't process it (`src/api.rs:243`)
-- Caddy integration needs testing with actual subdomain routing
-- State synchronization between DB, Docker, and in-memory is not unified
-- No monitoring, backup, or litestream integration yet
-- GitHub webhook support planned but not implemented
+See VISION.md for complete roadmap. Current status:
+- Phase 1 (Container platform) - ✅ COMPLETE
+- Phase 2 (Web UI + webhooks) - Next priority
+- Phase 3 (SQLite + Litestream) - Planned
+- Phase 4 (DNS automation) - Planned
 
 ## Development Context
 
-**Branch:** `docker` (refactoring branch, not merged to main yet)
+**Target use case:** Self-hosted SQLite apps with automatic backups, similar to Vercel's deployment model but optimized for single-host, SQLite-first workloads.
 
-**Target use case:** Self-hosted Next.js apps with subdomain routing, similar to Vercel's deployment model
-
-**Original concept:** Deploy statically-linked binaries, now pivoting to container-based deployment for broader adoption (Next.js, etc.)
+**Architecture decision:** Litehouse runs as a Docker container to ensure consistent deployment, easy upgrades, and isolation from the host system. The `lh` CLI binary is installed on the host for administration, but the server itself runs containerized.

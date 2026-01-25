@@ -9,7 +9,17 @@ A self-hosted platform for deploying and running containerized applications with
 - Built-in reverse proxy with automatic HTTPS via Caddy
 - Environment variable management
 - Container lifecycle management (start, stop, logs)
-- Web-based admin interface
+- Web-based admin interface (coming in Phase 2)
+
+## Architecture
+
+Litehouse runs as a set of Docker containers:
+
+- `litehouse-server` - Main API server (runs `lh serve` inside container)
+- `caddy-container` - Reverse proxy handling all incoming HTTP/HTTPS traffic
+- `{app-name}-container` - Your application containers
+
+**Important:** Litehouse does NOT run as a systemd service. The `lh` binary installed at `/usr/local/bin/lh` is used for CLI administration and upgrades, but the server itself runs as a Docker container.
 
 ## Installation
 
@@ -88,12 +98,23 @@ lh env myapp set DATABASE_URL=postgres://...
 lh delete myapp
 ```
 
-### Start the server
+### Checking server status
 
 ```bash
-# Start the litehouse server (API + reverse proxy)
-lh serve
+# Check if litehouse-server is running
+docker ps | grep litehouse-server
+
+# View server logs
+docker logs litehouse-server -f
+
+# Check Caddy reverse proxy
+docker ps | grep caddy-container
+
+# Restart the server
+docker restart litehouse-server
 ```
+
+**Note:** Do not use `systemctl status litehouse` - litehouse runs as a Docker container, not a systemd service.
 
 ## Development
 

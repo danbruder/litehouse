@@ -218,6 +218,17 @@ Once in an environment with internet access:
 - [ ] **DNS automation** - Cloudflare integration planned (Phase 4)
 - [ ] **Production deployment** - Need to test with real domain name
 
+## Deployment Architecture
+
+**IMPORTANT:** Litehouse itself runs as a Docker container named `litehouse-server`.
+
+To check the status:
+- `docker ps | grep litehouse-server` - Check if server is running
+- `docker logs litehouse-server` - View server logs
+- **NOT** `systemctl status litehouse` - There is no systemd service
+
+The upgrade process (`lh upgrade` or `dev-deploy.sh`) rebuilds the `litehouse:latest` image and restarts the `litehouse-server` container.
+
 ## Architecture Diagram
 
 ```
