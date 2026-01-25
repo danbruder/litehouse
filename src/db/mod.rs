@@ -57,22 +57,66 @@ pub async fn init_pool() -> Result<Pool<Sqlite>> {
     // Create parent directory if it doesn't exist
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
-    };
+        // Ensure parent directory is writable
+        let metadata = std::fs::metadata(parent)?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Set to 755 (rwxr-xr-x) to allow owner write, others read/execute
+            perms.set_mode(0o755);
+        }
+        std::fs::set_permissions(parent, perms)?;
+    }
+    
     // Check if database file exists
     if !db_path.exists() {
         // Create an empty file
-        std::fs::File::create(&db_path)?;
+        let file = std::fs::File::create(&db_path)?;
+        // Ensure the file is writable
+        let metadata = file.metadata()?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Set to 644 (rw-r--r--) to allow owner read/write, others read
+            perms.set_mode(0o644);
+        }
+        std::fs::set_permissions(&db_path, perms)?;
         info!("Created new database file at {}", db_path.display());
+    } else {
+        // Ensure existing database file is writable
+        let metadata = std::fs::metadata(&db_path)?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Ensure owner has write permission
+            let mode = perms.mode();
+            if mode & 0o200 == 0 {
+                // Owner doesn't have write permission, add it
+                perms.set_mode(mode | 0o200);
+                std::fs::set_permissions(&db_path, perms)?;
+                info!("Fixed write permissions on database file at {}", db_path.display());
+            }
+        }
     }
 
-    // Connect to the database
-    let db_url = format!("sqlite:{}", db_path.display());
+    // Connect to the database with WAL mode for better concurrency
+    let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     info!("Connecting to database at {}", db_path.display());
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
         .await?;
+
+    // Enable WAL mode for better concurrency (allows multiple readers and one writer)
+    // This is especially important when litestream is also accessing the database
+    sqlx::query("PRAGMA journal_mode=WAL")
+        .execute(&pool)
+        .await?;
+    info!("Enabled WAL mode for database");
 
     // Run migrations
     sqlx::migrate!("./migrations").run(&pool).await?;

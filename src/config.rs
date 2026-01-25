@@ -216,15 +216,69 @@ pub fn get_app_database_path(app_name: &str) -> Result<PathBuf, ConfigError> {
 pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
     let db_path = get_app_database_path(app_name)?;
 
+    // Ensure parent directory exists and is writable
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)
+                .map_err(|e| ConfigError::IoError(format!("Failed to create data directory: {}", e)))?;
+        }
+        // Ensure parent directory is writable
+        let metadata = fs::metadata(parent)
+            .map_err(|e| ConfigError::IoError(format!("Failed to get directory metadata: {}", e)))?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Set to 755 (rwxr-xr-x) to allow owner write, others read/execute
+            perms.set_mode(0o755);
+        }
+        fs::set_permissions(parent, perms)
+            .map_err(|e| ConfigError::IoError(format!("Failed to set directory permissions: {}", e)))?;
+    }
+
     // Create empty database file if it doesn't exist
     if !db_path.exists() {
-        fs::File::create(&db_path)
+        let file = fs::File::create(&db_path)
             .map_err(|e| ConfigError::IoError(format!("Failed to create database file: {}", e)))?;
+        // Ensure the file is writable
+        let metadata = file.metadata()
+            .map_err(|e| ConfigError::IoError(format!("Failed to get file metadata: {}", e)))?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Set to 644 (rw-r--r--) to allow owner read/write, others read
+            perms.set_mode(0o644);
+        }
+        fs::set_permissions(&db_path, perms)
+            .map_err(|e| ConfigError::IoError(format!("Failed to set file permissions: {}", e)))?;
         tracing::info!(
             "Created SQLite database for app '{}' at {}",
             app_name,
             db_path.display()
         );
+    } else {
+        // Ensure existing database file is writable
+        let metadata = fs::metadata(&db_path)
+            .map_err(|e| ConfigError::IoError(format!("Failed to get file metadata: {}", e)))?;
+        let mut perms = metadata.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Ensure owner has write permission
+            let mode = perms.mode();
+            if mode & 0o200 == 0 {
+                // Owner doesn't have write permission, add it
+                perms.set_mode(mode | 0o200);
+                fs::set_permissions(&db_path, perms)
+                    .map_err(|e| ConfigError::IoError(format!("Failed to set file permissions: {}", e)))?;
+                tracing::info!(
+                    "Fixed write permissions on database file for app '{}' at {}",
+                    app_name,
+                    db_path.display()
+                );
+            }
+        }
     }
 
     Ok(())
