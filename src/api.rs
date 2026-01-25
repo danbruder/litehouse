@@ -7,6 +7,7 @@ use crate::commands::remote;
 use crate::commands::server::AppState;
 use crate::commands::{start, stop};
 use crate::db;
+use crate::db::env_var;
 use crate::db::system_config as db_system_config;
 use crate::github;
 use crate::litestream;
@@ -52,6 +53,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/env", post(set_env))
+        .route("/apps/:name/env", get(get_env))
         .route("/docker/version", get(get_docker_version))
         .route("/apps/:name/remote", post(add_remote))
         .route("/apps/:name/remote", delete(remove_remote))
@@ -518,11 +520,56 @@ struct RemoteInfoResponse {
     branch: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct EnvVarResponse {
+    key: String,
+    value: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct SetEnvRequest {
     key: String,
     value: String,
     delete: Option<bool>,
+}
+
+async fn get_env(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => {
+            match env_var::get_by_app(&pool, &app.id).await {
+                Ok(env_vars) => {
+                    let response: Vec<EnvVarResponse> = env_vars
+                        .iter()
+                        .map(|ev| EnvVarResponse {
+                            key: ev.key.clone(),
+                            value: ev.value.clone(),
+                        })
+                        .collect();
+                    Json(response).into_response()
+                }
+                Err(e) => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to get environment variables: {}", e),
+                )
+                    .into_response(),
+            }
+        }
+        Ok(None) => (
+            axum::http::StatusCode::NOT_FOUND,
+            format!("App '{}' not found", name),
+        )
+            .into_response(),
+        Err(e) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to get app: {}", e),
+        )
+            .into_response(),
+    }
 }
 
 async fn set_env(

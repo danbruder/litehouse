@@ -774,6 +774,15 @@ performEffect navKey effect =
         Effect.FetchBuildLogs token appName buildId toMsg ->
             fetchBuildLogsHttp token appName buildId toMsg
 
+        Effect.FetchEnvVars token appName toMsg ->
+            fetchEnvVarsHttp token appName toMsg
+
+        Effect.SetEnvVar token appName key value delete toMsg ->
+            if delete then
+                deleteEnvVarHttp token appName key toMsg
+            else
+                setEnvVarHttp token appName key value toMsg
+
         Effect.FetchGitHubStatus token toMsg ->
             fetchGitHubStatusHttp token toMsg
 
@@ -1087,6 +1096,59 @@ fetchBuildLogsHttp token appName buildId toMsg =
         }
 
 
+fetchEnvVarsHttp : String -> String -> (Result String (List Effect.EnvVar) -> msg) -> Cmd msg
+fetchEnvVarsHttp token appName toMsg =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/env"
+        , body = Http.emptyBody
+        , expect = Http.expectJson (toMsg << Result.mapError httpErrorToString) (Decode.list envVarDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+setEnvVarHttp : String -> String -> String -> String -> (Result String String -> msg) -> Cmd msg
+setEnvVarHttp token appName key value toMsg =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/env"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "key", Encode.string key )
+                    , ( "value", Encode.string value )
+                    , ( "delete", Encode.bool False )
+                    ]
+                )
+        , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+deleteEnvVarHttp : String -> String -> String -> (Result String String -> msg) -> Cmd msg
+deleteEnvVarHttp token appName key toMsg =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/apps/" ++ appName ++ "/env"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "key", Encode.string key )
+                    , ( "value", Encode.string "" )
+                    , ( "delete", Encode.bool True )
+                    ]
+                )
+        , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 
 -- DECODERS
 
@@ -1215,6 +1277,13 @@ appDetailDecoder =
         (Decode.field "created_at" Decode.string)
         (Decode.field "updated_at" Decode.string)
         (Decode.maybe (Decode.field "remote" remoteInfoDecoder))
+
+
+envVarDecoder : Decode.Decoder Effect.EnvVar
+envVarDecoder =
+    Decode.map2 Effect.EnvVar
+        (Decode.field "key" Decode.string)
+        (Decode.field "value" Decode.string)
 
 
 remoteInfoDecoder : Decode.Decoder Effect.RemoteInfo

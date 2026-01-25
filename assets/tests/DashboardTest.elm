@@ -48,6 +48,28 @@ testCreateAppState appName =
     }
 
 
+{-| Create a minimal AppDetailState for testing.
+-}
+testAppDetailState : Effect.AppDetail -> { app : Effect.AppDetail, logs : String, logsLoading : Bool, logsView : Dashboard.LogsView, builds : List Effect.BuildInfo, selectedBuildId : Maybe String, buildLogs : String, buildLogsLoading : Bool, actionInProgress : Maybe Dashboard.AppAction, error : Maybe String, streamingBuildId : Maybe String, buildLogsStreaming : Bool, envVars : List Effect.EnvVar, envVarsLoading : Bool, envVarForm : { key : String, value : String, editingKey : Maybe String } }
+testAppDetailState app =
+    { app = app
+    , logs = ""
+    , logsLoading = False
+    , logsView = Dashboard.RuntimeLogs
+    , builds = []
+    , selectedBuildId = Nothing
+    , buildLogs = ""
+    , buildLogsLoading = False
+    , actionInProgress = Nothing
+    , error = Nothing
+    , streamingBuildId = Nothing
+    , buildLogsStreaming = False
+    , envVars = []
+    , envVarsLoading = False
+    , envVarForm = { key = "", value = "", editingKey = Nothing }
+    }
+
+
 {-| Helper to check if an effect contains UpdateGitHubStatus.
 -}
 effectContainsUpdateGitHubStatus : Effect msg -> Bool
@@ -406,19 +428,8 @@ suite =
                             }
 
                         detailState =
-                            { app = testApp
-                            , logs = ""
-                            , logsLoading = False
-                            , logsView = Dashboard.RuntimeLogs
-                            , builds = []
-                            , selectedBuildId = Nothing
-                            , buildLogs = ""
-                            , buildLogsLoading = False
-                            , actionInProgress = Just Dashboard.Building
-                            , error = Nothing
-                            , streamingBuildId = Nothing
-                            , buildLogsStreaming = False
-                            }
+                            testAppDetailState testApp
+                                |> (\s -> { s | actionInProgress = Just Dashboard.Building })
 
                         model =
                             { view = Dashboard.AppDetailView detailState
@@ -453,19 +464,8 @@ suite =
                             }
 
                         detailState =
-                            { app = testApp
-                            , logs = ""
-                            , logsLoading = False
-                            , logsView = Dashboard.RuntimeLogs
-                            , builds = []
-                            , selectedBuildId = Nothing
-                            , buildLogs = ""
-                            , buildLogsLoading = False
-                            , actionInProgress = Just Dashboard.Building
-                            , error = Nothing
-                            , streamingBuildId = Nothing
-                            , buildLogsStreaming = False
-                            }
+                            testAppDetailState testApp
+                                |> (\s -> { s | actionInProgress = Just Dashboard.Building })
 
                         model =
                             { view = Dashboard.AppDetailView detailState
@@ -548,19 +548,8 @@ suite =
                             }
 
                         detailState =
-                            { app = testApp
-                            , logs = ""
-                            , logsLoading = False
-                            , logsView = Dashboard.RuntimeLogs
-                            , builds = []
-                            , selectedBuildId = Nothing
-                            , buildLogs = ""
-                            , buildLogsLoading = False
-                            , actionInProgress = Just Dashboard.Building
-                            , error = Nothing
-                            , streamingBuildId = Nothing
-                            , buildLogsStreaming = False
-                            }
+                            testAppDetailState testApp
+                                |> (\s -> { s | actionInProgress = Just Dashboard.Building })
 
                         model =
                             { view = Dashboard.AppDetailView detailState
@@ -599,19 +588,15 @@ suite =
                             }
 
                         detailState =
-                            { app = testApp
-                            , logs = ""
-                            , logsLoading = False
-                            , logsView = Dashboard.BuildLogs
-                            , builds = []
-                            , selectedBuildId = Nothing
-                            , buildLogs = ""
-                            , buildLogsLoading = False
-                            , actionInProgress = Just Dashboard.Building
-                            , error = Nothing
-                            , streamingBuildId = Just "build-123"
-                            , buildLogsStreaming = True
-                            }
+                            testAppDetailState testApp
+                                |> (\s -> 
+                                    { s 
+                                    | logsView = Dashboard.BuildLogs
+                                    , actionInProgress = Just Dashboard.Building
+                                    , streamingBuildId = Just "build-123"
+                                    , buildLogsStreaming = True
+                                    }
+                                )
 
                         model =
                             { view = Dashboard.AppDetailView detailState
@@ -652,19 +637,15 @@ suite =
                             }
 
                         detailState =
-                            { app = testApp
-                            , logs = ""
-                            , logsLoading = False
-                            , logsView = Dashboard.BuildLogs
-                            , builds = []
-                            , selectedBuildId = Nothing
-                            , buildLogs = ""
-                            , buildLogsLoading = False
-                            , actionInProgress = Just Dashboard.Building
-                            , error = Nothing
-                            , streamingBuildId = Just "build-123"
-                            , buildLogsStreaming = True
-                            }
+                            testAppDetailState testApp
+                                |> (\s -> 
+                                    { s 
+                                    | logsView = Dashboard.BuildLogs
+                                    , actionInProgress = Just Dashboard.Building
+                                    , streamingBuildId = Just "build-123"
+                                    , buildLogsStreaming = True
+                                    }
+                                )
 
                         model =
                             { view = Dashboard.AppDetailView detailState
@@ -701,19 +682,8 @@ suite =
                         }
 
                     detailState =
-                        { app = testApp
-                        , logs = "existing log line"
-                        , logsLoading = False
-                        , logsView = Dashboard.RuntimeLogs
-                        , builds = []
-                        , selectedBuildId = Nothing
-                        , buildLogs = ""
-                        , buildLogsLoading = False
-                        , actionInProgress = Nothing
-                        , error = Nothing
-                        , streamingBuildId = Nothing
-                        , buildLogsStreaming = False
-                        }
+                        testAppDetailState testApp
+                            |> (\s -> { s | logs = "existing log line" })
 
                     model =
                         { view = Dashboard.AppDetailView detailState
@@ -748,19 +718,7 @@ suite =
                         }
 
                     detailState =
-                        { app = testApp
-                        , logs = ""
-                        , logsLoading = False
-                        , logsView = Dashboard.RuntimeLogs
-                        , builds = []
-                        , selectedBuildId = Nothing
-                        , buildLogs = ""
-                        , buildLogsLoading = False
-                        , actionInProgress = Nothing
-                        , error = Nothing
-                        , streamingBuildId = Nothing
-                        , buildLogsStreaming = False
-                        }
+                        testAppDetailState testApp
 
                     model =
                         { view = Dashboard.AppDetailView detailState
@@ -795,19 +753,8 @@ suite =
                         }
 
                     detailState =
-                        { app = testApp
-                        , logs = "existing logs"
-                        , logsLoading = False
-                        , logsView = Dashboard.RuntimeLogs
-                        , builds = []
-                        , selectedBuildId = Nothing
-                        , buildLogs = ""
-                        , buildLogsLoading = False
-                        , actionInProgress = Nothing
-                        , error = Nothing
-                        , streamingBuildId = Nothing
-                        , buildLogsStreaming = False
-                        }
+                        testAppDetailState testApp
+                            |> (\s -> { s | logs = "existing logs" })
 
                     model =
                         { view = Dashboard.AppDetailView detailState
@@ -842,19 +789,7 @@ suite =
                         }
 
                     detailState =
-                        { app = testApp
-                        , logs = ""
-                        , logsLoading = False
-                        , logsView = Dashboard.RuntimeLogs
-                        , builds = []
-                        , selectedBuildId = Nothing
-                        , buildLogs = ""
-                        , buildLogsLoading = False
-                        , actionInProgress = Nothing
-                        , error = Nothing
-                        , streamingBuildId = Nothing
-                        , buildLogsStreaming = False
-                        }
+                        testAppDetailState testApp
 
                     model =
                         { view = Dashboard.AppDetailView detailState
@@ -954,6 +889,585 @@ suite =
                 in
                 Expect.equal False (effectContainsStartLogStreaming effect)
         ]
+    , describe "Page.Dashboard Environment Variables"
+        [ describe "EnvVarKeyChanged"
+            [ test "updates the key in the form" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.EnvVarKeyChanged "NEW_KEY") model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.equal "NEW_KEY" updatedDetailState.envVarForm.key
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        , describe "EnvVarValueChanged"
+            [ test "updates the value in the form" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "KEY", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.EnvVarValueChanged "new_value") model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.equal "new_value" updatedDetailState.envVarForm.value
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        , describe "GotEnvVars"
+            [ test "updates env vars list" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = True
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        envVars =
+                            [ { key = "KEY1", value = "value1" }
+                            , { key = "KEY2", value = "value2" }
+                            ]
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.GotEnvVars (Ok envVars)) model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.all
+                                [ \_ -> Expect.equal 2 (List.length updatedDetailState.envVars)
+                                , \_ -> Expect.equal False updatedDetailState.envVarsLoading
+                                ]
+                                ()
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            , test "handles error when fetching env vars fails" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = True
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.GotEnvVars (Err "Network error")) model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.equal False updatedDetailState.envVarsLoading
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        , describe "SubmitEnvVar"
+            [ test "validates that key is required" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "", value = "some value", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel (Just "test-token")
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared Dashboard.SubmitEnvVar model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.equal (Just "Environment variable key is required") updatedDetailState.error
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            , test "emits SetEnvVar effect when key is provided" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "NEW_KEY", value = "new_value", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel (Just "test-token")
+
+                        ( _, effect ) =
+                            Dashboard.update shared Dashboard.SubmitEnvVar model
+                    in
+                    effectContainsSetEnvVar effect
+                        |> Expect.equal True
+                        |> Expect.onFail "should emit SetEnvVar effect"
+            ]
+        , describe "CancelEnvVarEdit"
+            [ test "clears the form" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Just "some error"
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared Dashboard.CancelEnvVarEdit model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.all
+                                [ \_ -> Expect.equal "" updatedDetailState.envVarForm.key
+                                , \_ -> Expect.equal "" updatedDetailState.envVarForm.value
+                                , \_ -> Expect.equal Nothing updatedDetailState.envVarForm.editingKey
+                                , \_ -> Expect.equal Nothing updatedDetailState.error
+                                ]
+                                ()
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        , describe "EditEnvVar"
+            [ test "populates form with existing env var" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = [ { key = "EXISTING_KEY", value = "existing_value" } ]
+                            , envVarsLoading = False
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel Nothing
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.EditEnvVar "EXISTING_KEY") model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.all
+                                [ \_ -> Expect.equal "EXISTING_KEY" updatedDetailState.envVarForm.key
+                                , \_ -> Expect.equal "existing_value" updatedDetailState.envVarForm.value
+                                , \_ -> Expect.equal (Just "EXISTING_KEY") updatedDetailState.envVarForm.editingKey
+                                ]
+                                ()
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        , describe "DeleteEnvVar"
+            [ test "emits SetEnvVar effect with delete flag" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel (Just "test-token")
+
+                        ( _, effect ) =
+                            Dashboard.update shared (Dashboard.DeleteEnvVar "KEY_TO_DELETE") model
+                    in
+                    effectContainsSetEnvVar effect
+                        |> Expect.equal True
+                        |> Expect.onFail "should emit SetEnvVar effect for deletion"
+            ]
+        , describe "GotEnvVarSet"
+            [ test "refetches env vars on success" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel (Just "test-token")
+
+                        ( _, effect ) =
+                            Dashboard.update shared (Dashboard.GotEnvVarSet (Ok "Success")) model
+                    in
+                    effectContainsFetchEnvVars effect
+                        |> Expect.equal True
+                        |> Expect.onFail "should emit FetchEnvVars effect after successful set"
+            , test "sets error on failure" <|
+                \_ ->
+                    let
+                        testApp =
+                            { id = "app-1"
+                            , name = "my-app"
+                            , state = "running"
+                            , port_ = Just 8080
+                            , createdAt = "2024-01-01T00:00:00Z"
+                            , updatedAt = "2024-01-01T00:00:00Z"
+                            , remote = Nothing
+                            }
+
+                        detailState =
+                            { app = testApp
+                            , logs = ""
+                            , logsLoading = False
+                            , logsView = Dashboard.RuntimeLogs
+                            , builds = []
+                            , selectedBuildId = Nothing
+                            , buildLogs = ""
+                            , buildLogsLoading = False
+                            , actionInProgress = Nothing
+                            , error = Nothing
+                            , streamingBuildId = Nothing
+                            , buildLogsStreaming = False
+                            , envVars = []
+                            , envVarsLoading = False
+                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            }
+
+                        model =
+                            { view = Dashboard.AppDetailView detailState
+                            , apps = []
+                            , appsLoading = False
+                            , activeSidebarItem = Dashboard.MyApps
+                            }
+
+                        shared =
+                            testSharedModel (Just "test-token")
+
+                        ( updatedModel, _ ) =
+                            Dashboard.update shared (Dashboard.GotEnvVarSet (Err "Failed to set env var")) model
+                    in
+                    case updatedModel.view of
+                        Dashboard.AppDetailView updatedDetailState ->
+                            Expect.equal (Just "Failed to set env var") updatedDetailState.error
+
+                        _ ->
+                            Expect.fail "Expected AppDetailView"
+            ]
+        ]
     ]
 
 
@@ -1012,6 +1526,36 @@ effectContainsStartLogStreaming effect =
 
         Effect.Batch effects ->
             List.any effectContainsStartLogStreaming effects
+
+        _ ->
+            False
+
+
+{-| Helper to check if an effect contains SetEnvVar.
+-}
+effectContainsSetEnvVar : Effect msg -> Bool
+effectContainsSetEnvVar effect =
+    case effect of
+        Effect.SetEnvVar _ _ _ _ _ _ ->
+            True
+
+        Effect.Batch effects ->
+            List.any effectContainsSetEnvVar effects
+
+        _ ->
+            False
+
+
+{-| Helper to check if an effect contains FetchEnvVars.
+-}
+effectContainsFetchEnvVars : Effect msg -> Bool
+effectContainsFetchEnvVars effect =
+    case effect of
+        Effect.FetchEnvVars _ _ _ ->
+            True
+
+        Effect.Batch effects ->
+            List.any effectContainsFetchEnvVars effects
 
         _ ->
             False

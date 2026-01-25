@@ -19,6 +19,7 @@ module Effect exposing
     , DeviceFlowStartResponse
     , RepoInfo
     , GitHubStatus(..)
+    , EnvVar
     )
 
 {-| The Effect pattern allows us to return a custom type from update functions
@@ -69,6 +70,9 @@ type Effect msg
     | StartLogStreaming String String (Result String String -> msg)
     | FetchBuilds String String (Result String (List BuildInfo) -> msg)
     | FetchBuildLogs String String String (Result String String -> msg)
+      -- HTTP Requests - Environment Variables
+    | FetchEnvVars String String (Result String (List EnvVar) -> msg)
+    | SetEnvVar String String String String Bool (Result String String -> msg)
       -- HTTP Requests - GitHub
     | FetchGitHubStatus String (Result String GitHubStatusResponse -> msg)
     | StartDeviceFlow String (Result String DeviceFlowStartResponse -> msg)
@@ -144,6 +148,12 @@ type alias AppDetail =
     , createdAt : String
     , updatedAt : String
     , remote : Maybe RemoteInfo
+    }
+
+
+type alias EnvVar =
+    { key : String
+    , value : String
     }
 
 
@@ -297,6 +307,12 @@ map fn effect =
 
         FetchBuildLogs token appName buildId toMsg ->
             FetchBuildLogs token appName buildId (toMsg >> fn)
+
+        FetchEnvVars token appName toMsg ->
+            FetchEnvVars token appName (toMsg >> fn)
+
+        SetEnvVar token appName key value delete toMsg ->
+            SetEnvVar token appName key value delete (toMsg >> fn)
 
         FetchGitHubStatus token toMsg ->
             FetchGitHubStatus token (toMsg >> fn)
