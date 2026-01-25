@@ -212,8 +212,9 @@ fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) ->
     });
 
     // Add app databases
+    // App databases are stored in the shared litehouse_data volume at /data/apps/{name}/data/app.db
     for app in apps {
-        // Database path inside the container
+        // Database path inside the litestream container (mounted from litehouse_data volume)
         let db_path = format!("/data/apps/{}/data/app.db", app.name);
         let replica_path = format!("/data/litestream-replicas/{}", app.name);
 
@@ -360,6 +361,37 @@ async fn get_container_state(docker: &Docker, container_name: &str) -> Result<Co
     Ok(ContainerState::NotExists)
 }
 
+/// Ensure litehouse Docker volumes exist
+pub async fn ensure_litehouse_volumes_exist(docker: &Docker) -> Result<()> {
+    info!("Ensuring litehouse volumes exist");
+
+    let volume_list = docker.list_volumes::<String>(None).await?;
+    let existing_volumes: std::collections::HashSet<String> = volume_list
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.name)
+        .collect();
+
+    let volume_names = ["litehouse_config", "litehouse_data"];
+
+    for volume_name in volume_names.iter() {
+        if !existing_volumes.contains(*volume_name) {
+            info!("Creating volume: {}", volume_name);
+            docker
+                .create_volume(bollard::volume::CreateVolumeOptions {
+                    name: volume_name.to_string(),
+                    ..Default::default()
+                })
+                .await?;
+        } else {
+            info!("Volume {} already exists", volume_name);
+        }
+    }
+
+    Ok(())
+}
+
 async fn create_and_start_container(
     docker: &Docker,
     container_name: &str,
@@ -368,12 +400,12 @@ async fn create_and_start_container(
 ) -> Result<()> {
     info!("Creating new Litestream container: {}", container_name);
 
+    // Ensure volumes exist
+    ensure_litehouse_volumes_exist(docker).await?;
+
+    // Get config file path from host (we'll copy it into the volume)
     let data_dir = config::get_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get data directory: {}", e))?;
-
-    let config_dir = config::get_config_dir()
-        .map_err(|e| anyhow::anyhow!("Failed to get config directory: {}", e))?;
-
     let config_file_path = data_dir.join("litestream.yml");
 
     // Create empty config if it doesn't exist
@@ -413,10 +445,11 @@ async fn create_and_start_container(
                 name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
                 maximum_retry_count: None,
             }),
+            // Use Docker volumes instead of bind mounts
             binds: Some(vec![
-                format!("{}:/data", data_dir.display()),
-                format!("{}:/config", config_dir.display()),
-                format!("{}:/etc/litestream.yml", config_file_path.display()),
+                "litehouse_data:/data".to_string(),
+                "litehouse_config:/config".to_string(),
+                format!("{}:/etc/litestream.yml:ro", config_file_path.display()),
             ]),
             ..Default::default()
         }),

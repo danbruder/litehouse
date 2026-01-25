@@ -260,17 +260,22 @@ docker rm litehouse-server 2>/dev/null || true
 # Create the litehouse network if it doesn't exist
 docker network create litehouse-network 2>/dev/null || true
 
+# Create Docker volumes if they don't exist
+docker volume create litehouse_config 2>/dev/null || true
+docker volume create litehouse_data 2>/dev/null || true
+
 # Get Docker socket group ID for permissions
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
 
 # Start litehouse-server container with restart policy
+# Use Docker volumes instead of bind mounts to avoid permission issues
 docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
   --network litehouse-network \
   -p 3030:3030 \
-  -v /opt/litehouse/config:/opt/litehouse/config \
-  -v /opt/litehouse/data:/opt/litehouse/data \
+  -v litehouse_config:/opt/litehouse/config \
+  -v litehouse_data:/opt/litehouse/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \

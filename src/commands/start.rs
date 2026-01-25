@@ -3,7 +3,6 @@ use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
 use crate::caddy;
-use crate::config;
 use crate::db;
 use crate::models::AppState;
 use crate::docker;
@@ -67,13 +66,18 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
 
     tracing::info!("Found {} environment variables", env_vars.len());
 
-    // Prepare volume binds for SQLite database
-    let data_dir = config::get_app_data_dir(&app.name)?;
+    // Ensure litehouse volumes exist (they're shared across containers)
+    crate::litestream::ensure_litehouse_volumes_exist(docker)
+        .await
+        .map_err(|e| StartError::AppStartFailed(format!("Failed to ensure volumes exist: {}", e)))?;
+
+    // Use shared litehouse_data volume, but mount app-specific subdirectory
+    // App databases are stored at /data/apps/{app_name}/data/app.db in the shared volume
     let volume_binds = vec![
-        format!("{}:/app/data", data_dir.display())
+        "litehouse_data:/app/data".to_string()
     ];
 
-    tracing::info!("Mounting app data directory: {} -> /app/data", data_dir.display());
+    tracing::info!("Mounting app data from shared Docker volume: litehouse_data -> /app/data");
 
     // Start the app with docker
     let image_tag = build.image_tag.as_ref()
