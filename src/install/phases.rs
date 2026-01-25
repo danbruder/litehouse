@@ -214,7 +214,7 @@ pub fn phase8_log_rotation() -> Result<()> {
 
 /// Phase 9a: Start Caddy Container
 #[instrument]
-pub fn phase9a_start_caddy_container(litehouse_uid: &str) -> Result<()> {
+pub fn phase9a_start_caddy_container(litehouse_uid: &str, domain: &str) -> Result<()> {
     info!("Phase 9a: Start Caddy Container");
 
     let script = templates::start_caddy_container_script(litehouse_uid);
@@ -274,6 +274,33 @@ pub fn phase9a_start_caddy_container(litehouse_uid: &str) -> Result<()> {
     } else {
         info!("Caddy admin API is ready");
     }
+
+    // Load initial Caddy configuration with admin route
+    info!("Loading initial Caddy configuration...");
+    let initial_config = templates::initial_caddy_config(domain);
+    let config_file = format!("/tmp/caddy_initial_config.json");
+    std::fs::write(&config_file, &initial_config)?;
+
+    // Send config to Caddy API
+    let load_cmd = format!(
+        "curl -s -X POST -H 'Content-Type: application/json' -d @{} http://localhost:2019/load",
+        config_file
+    );
+    
+    match run_command(&load_cmd) {
+        Ok(output) => {
+            info!("Initial Caddy configuration loaded successfully");
+            if !output.trim().is_empty() {
+                info!("Caddy response: {}", output.trim());
+            }
+        }
+        Err(e) => {
+            warn!("Failed to load initial Caddy configuration: {}. This may be okay if Caddy is not fully ready yet.", e);
+        }
+    }
+
+    // Clean up temp file
+    std::fs::remove_file(&config_file).ok();
 
     info!("caddy-container started successfully");
     info!("Phase 9a completed successfully");

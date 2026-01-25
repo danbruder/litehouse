@@ -230,7 +230,8 @@ echo "Pulling Caddy container image..."
 docker pull caddy:latest
 
 echo "Caddy container image pull completed"
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// Script to pull Litestream container image
@@ -243,7 +244,8 @@ echo "Pulling Litestream container image..."
 docker pull litestream/litestream:latest
 
 echo "Litestream container image pull completed"
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// Script to start litehouse-server container
@@ -273,7 +275,6 @@ docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
   --network litehouse-network \
-  -p 3030:3030 \
   -v litehouse_config:/opt/litehouse/config \
   -v litehouse_data:/opt/litehouse/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -286,7 +287,8 @@ docker run -d \
   litehouse:latest
 
 echo "litehouse-server container started"
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// Script to start Caddy container
@@ -314,16 +316,15 @@ docker run -d \
   --network litehouse-network \
   -p 80:80 \
   -p 443:443 \
-  -p 2019:2019 \
   -v caddy_data:/data \
   -v caddy_config:/config \
   -e CADDY_ADMIN=0.0.0.0:2019 \
-  --add-host=host.docker.internal:host-gateway \
   caddy:latest \
   caddy run --resume
 
 echo "Caddy container started"
-"#.to_string()
+"#
+    .to_string()
 }
 
 /// Generate initial Caddy configuration JSON
@@ -340,7 +341,7 @@ pub fn initial_caddy_config(domain: &str) -> String {
               "match": [{{ "host": ["admin.{domain}"] }}],
               "handle": [{{
                 "handler": "reverse_proxy",
-                "upstreams": [{{ "dial": "host.containers.internal:3030" }}]
+                "upstreams": [{{ "dial": "litehouse-server:3030" }}]
               }}]
             }}
           ]

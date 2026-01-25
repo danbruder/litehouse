@@ -509,8 +509,6 @@ async fn create_and_start_container(
             ]),
             // Connect to the litehouse network for inter-container communication
             network_mode: Some("litehouse-network".to_string()),
-            // Keep extra_hosts as fallback for legacy setups
-            extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
             ..Default::default()
         }),
         ..Default::default()

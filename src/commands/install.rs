@@ -209,7 +209,7 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
 
     // Phase 9a: Start Caddy Container (must be before litehouse-server)
     pb.set_message("Starting Caddy container...");
-    if let Err(e) = phase9a_start_caddy_container(&litehouse_uid) {
+    if let Err(e) = phase9a_start_caddy_container(&litehouse_uid, domain) {
         pb.finish_with_message("❌ Caddy container start failed");
         error!("Phase 9a failed: {}", e);
         return Err(e);

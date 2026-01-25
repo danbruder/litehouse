@@ -14,7 +14,10 @@ fn download_binary(version: Option<&str>, log_window: Option<&ProgressBar>) -> R
     let version_str = version.unwrap_or("latest");
 
     if let Some(pb) = log_window {
-        pb.set_message(format!("Downloading litehouse binary (version: {})...", version_str));
+        pb.set_message(format!(
+            "Downloading litehouse binary (version: {})...",
+            version_str
+        ));
     }
     info!("Downloading litehouse binary (version: {})", version_str);
 
@@ -83,7 +86,10 @@ fn install_binary(binary_path: &str, log_window: Option<&ProgressBar>) -> Result
     if let Some(pb) = log_window {
         pb.set_message("Installing new binary...");
     }
-    info!("Installing binary from {} to /usr/local/bin/lh", binary_path);
+    info!(
+        "Installing binary from {} to /usr/local/bin/lh",
+        binary_path
+    );
 
     // Backup current binary
     run_command("cp /usr/local/bin/lh /usr/local/bin/lh.backup 2>/dev/null || true")?;
@@ -144,11 +150,7 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
 
     // Create log window
     let log_window = multi.add(ProgressBar::new_spinner());
-    log_window.set_style(
-        ProgressStyle::default_spinner()
-            .template("{msg}")
-            .unwrap(),
-    );
+    log_window.set_style(ProgressStyle::default_spinner().template("{msg}").unwrap());
     log_window.set_message("Starting upgrade...");
 
     // Get current version for comparison
