@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT id, app_id, github_delivery_id, github_event, repository_url, ref, commit_sha, status, error_message, build_id, payload_snippet, created_at\n        FROM webhook_delivery\n        WHERE app_id = ?\n        ORDER BY created_at DESC\n        LIMIT ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "app_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "github_delivery_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "github_event",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "repository_url",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "ref",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "commit_sha",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "error_message",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "build_id",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "payload_snippet",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 11,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "dfe678cc47f7f22ecb517c4f42b023e864c0603b9a6d94b8659f7c1fee6edfe1"
+}

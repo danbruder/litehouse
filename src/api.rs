@@ -38,6 +38,8 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/auth/register", post(register_handler))
         .route("/auth/login", post(login_handler))
         .route("/auth/refresh", post(refresh_token_handler))
+        // Webhook receiver (public endpoint, secured by HMAC signature)
+        .route("/webhooks/github", post(github_webhook_handler))
         .with_state(state.clone());
 
     // Protected routes (require authentication)
@@ -71,6 +73,9 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/github/status", get(github_status))
         .route("/github/repos", get(github_list_repos))
         .route("/github/repos/search", get(github_search_repos))
+        // Webhook management
+        .route("/apps/:name/webhook", get(get_webhook_config_handler))
+        .route("/apps/:name/webhook/deliveries", get(get_webhook_deliveries_handler))
         // Unified SSE endpoint
         .route("/events/stream", get(events_stream_handler))
         .layer(axum::middleware::from_fn_with_state(
@@ -454,12 +459,17 @@ async fn create_app(
             }
         };
 
+        // Get webhook URL from server configuration
+        let webhook_url = state.read().await.webhook_url.clone();
+
         // Add the remote (pass GitHub token for authentication)
         if let Err(e) = remote::add::execute(
             &pool,
             &payload.name,
             &repo_info.clone_url,
             Some(&connection.access_token),
+            Some(&auth_user.user_id),
+            webhook_url.as_deref(),
         )
         .await
         {
@@ -629,7 +639,19 @@ async fn add_remote(
         _ => None,
     };
 
-    match remote::add::execute(&pool, &name, &payload.remote, github_token.as_deref()).await {
+    // Get webhook URL from server configuration
+    let webhook_url = state.read().await.webhook_url.clone();
+
+    match remote::add::execute(
+        &pool,
+        &name,
+        &payload.remote,
+        github_token.as_deref(),
+        Some(&auth_user.user_id),
+        webhook_url.as_deref(),
+    )
+    .await
+    {
         Ok(_) => (
             StatusCode::OK,
             format!("Remote configured for app '{}'", name),
@@ -1660,4 +1682,151 @@ async fn events_stream_handler(
             .interval(std::time::Duration::from_secs(15))
             .text("keep-alive"),
     ))
+}
+
+// ===== Webhook Handlers =====
+
+/// Public endpoint - receives webhooks from GitHub
+#[instrument(skip(state, body))]
+async fn github_webhook_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let event_type = headers
+        .get("X-GitHub-Event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let delivery_id = headers
+        .get("X-GitHub-Delivery")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let signature = match headers
+        .get("X-Hub-Signature-256")
+        .and_then(|v| v.to_str().ok())
+    {
+        Some(sig) => sig.to_string(),
+        None => {
+            return (StatusCode::BAD_REQUEST, "Missing signature").into_response();
+        }
+    };
+
+    let (pool, docker, message_bus) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone(), s.message_bus.clone())
+    };
+
+    // Get GitHub token (from first user's connection - improve this later)
+    let github_token = None; // TODO: Need better token management
+
+    match crate::webhook::handle_github_webhook(
+        &pool,
+        &docker,
+        message_bus,
+        github_token,
+        event_type,
+        delivery_id,
+        signature,
+        &body,
+    )
+    .await
+    {
+        Ok(delivery) => {
+            (StatusCode::OK, format!("Processed: {:?}", delivery.status)).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Webhook processing error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WebhookConfigResponse {
+    enabled: bool,
+    auto_deploy: bool,
+    status: String,
+    github_webhook_id: Option<i64>,
+    error_message: Option<String>,
+}
+
+/// Get webhook configuration for an app
+#[instrument(skip(state))]
+async fn get_webhook_config_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    axum::Extension(_auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return (StatusCode::NOT_FOUND, "App not found").into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    match db::webhook::get_webhook_config_by_app(&pool, &app.id).await {
+        Ok(Some(config)) => {
+            let response = WebhookConfigResponse {
+                enabled: config.enabled,
+                auto_deploy: config.auto_deploy,
+                status: config.status.as_str().to_string(),
+                github_webhook_id: config.github_webhook_id,
+                error_message: config.error_message,
+            };
+            Json(response).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Webhook not configured").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: {}", e),
+        )
+            .into_response(),
+    }
+}
+
+/// Get webhook delivery history
+#[instrument(skip(state))]
+async fn get_webhook_deliveries_handler(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+    axum::Extension(_auth_user): axum::Extension<crate::auth::AuthUser>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return (StatusCode::NOT_FOUND, "App not found").into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: {}", e),
+            )
+                .into_response()
+        }
+    };
+
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<i64>().ok())
+        .unwrap_or(50);
+
+    match db::webhook::get_webhook_deliveries_by_app(&pool, &app.id, limit).await {
+        Ok(deliveries) => Json(deliveries).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Error: {}", e),
+        )
+            .into_response(),
+    }
 }

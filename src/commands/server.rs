@@ -26,6 +26,8 @@ pub struct AppState {
     pub message_bus: Arc<MessageBus>,
     /// Track active log streaming tasks per app name
     pub log_streaming_tasks: Arc<RwLock<HashMap<String, (JoinHandle<()>, oneshot::Sender<()>)>>>,
+    /// Webhook base URL (e.g., "https://admin.yourdomain.com")
+    pub webhook_url: Option<String>,
 }
 
 /// Start the Litehouse server
@@ -88,6 +90,9 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         });
     }
 
+    // Construct webhook URL from domain if available
+    let webhook_url = config.domain.as_ref().map(|d| format!("https://{}", d));
+
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
         db_pool: pool.clone(),
@@ -96,6 +101,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         github_client_id,
         message_bus,
         log_streaming_tasks: Arc::new(RwLock::new(HashMap::new())),
+        webhook_url,
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else

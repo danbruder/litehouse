@@ -32,6 +32,12 @@ pub enum SSEMessage {
         level: String,
         message: String,
     },
+    WebhookReceived {
+        app_name: String,
+        event_type: String,
+        status: String,
+        delivery_id: Option<String>,
+    },
     Heartbeat,
 }
 
@@ -44,6 +50,7 @@ impl SSEMessage {
             SSEMessage::ContainerLogs { .. } => "container_logs",
             SSEMessage::AppState { .. } => "app_state",
             SSEMessage::SystemNotification { .. } => "system_notification",
+            SSEMessage::WebhookReceived { .. } => "webhook_received",
             SSEMessage::Heartbeat => "heartbeat",
         };
 
@@ -57,6 +64,7 @@ impl SSEMessage {
             SSEMessage::BuildStatus { app_name, .. } => Some(app_name),
             SSEMessage::ContainerLogs { app_name, .. } => Some(app_name),
             SSEMessage::AppState { app_name, .. } => Some(app_name),
+            SSEMessage::WebhookReceived { app_name, .. } => Some(app_name),
             _ => None,
         }
     }
@@ -69,6 +77,7 @@ impl SSEMessage {
             SSEMessage::ContainerLogs { .. } => "ContainerLogs",
             SSEMessage::AppState { .. } => "AppState",
             SSEMessage::SystemNotification { .. } => "SystemNotification",
+            SSEMessage::WebhookReceived { .. } => "WebhookReceived",
             SSEMessage::Heartbeat => "Heartbeat",
         }
     }
@@ -109,6 +118,17 @@ impl From<Message> for SSEMessage {
             Message::SystemNotification { level, message } => SSEMessage::SystemNotification {
                 level,
                 message,
+            },
+            Message::WebhookReceived {
+                app_name,
+                event_type,
+                status,
+                delivery_id,
+            } => SSEMessage::WebhookReceived {
+                app_name,
+                event_type,
+                status,
+                delivery_id,
             },
             Message::Heartbeat => SSEMessage::Heartbeat,
         }

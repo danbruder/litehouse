@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        DELETE FROM webhook_config\n        WHERE app_id = ?\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "99e396475070ea0bda6115bae6238babb3d8125fcd6de6f9153b45d467f9b684"
+}

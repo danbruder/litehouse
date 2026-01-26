@@ -52,6 +52,22 @@ pub async fn get_by_user_id(pool: &Pool<Sqlite>, user_id: &str) -> Result<Option
     Ok(connection)
 }
 
+/// Get all GitHub connections
+#[instrument(skip(pool))]
+pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<GitHubConnection>> {
+    let connections = sqlx::query_as!(
+        GitHubConnection,
+        r#"
+            SELECT id, user_id, github_user_id, github_username, github_email, access_token, scopes, created_at, updated_at
+            FROM github_connection
+            "#
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(connections)
+}
+
 /// Delete a GitHub connection by user ID
 #[instrument(skip(pool))]
 pub async fn delete_by_user_id(pool: &Pool<Sqlite>, user_id: &str) -> Result<()> {

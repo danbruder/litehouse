@@ -17,3 +17,4 @@ pub mod docker;
 pub mod reconciler;
 pub mod sse;
 pub mod volume;
+pub mod webhook;

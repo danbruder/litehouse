@@ -13,6 +13,7 @@ pub mod organization;
 pub mod organization_member;
 pub mod refresh_token;
 pub mod github_connection;
+pub mod webhook;
 
 use crate::config;
 use crate::models::{parse_app_state, App, AppState, StateChange};

@@ -30,6 +30,12 @@ pub enum Message {
         level: String,
         message: String,
     },
+    WebhookReceived {
+        app_name: String,
+        event_type: String,
+        status: String,
+        delivery_id: Option<String>,
+    },
     Heartbeat,
 }
 
@@ -40,6 +46,7 @@ impl Message {
             Message::BuildStatus { app_name, .. } => Some(app_name),
             Message::ContainerLogs { app_name, .. } => Some(app_name),
             Message::AppState { app_name, .. } => Some(app_name),
+            Message::WebhookReceived { app_name, .. } => Some(app_name),
             _ => None,
         }
     }
@@ -52,6 +59,7 @@ impl Message {
             Message::ContainerLogs { .. } => "ContainerLogs",
             Message::AppState { .. } => "AppState",
             Message::SystemNotification { .. } => "SystemNotification",
+            Message::WebhookReceived { .. } => "WebhookReceived",
             Message::Heartbeat => "Heartbeat",
         }
     }
