@@ -32,7 +32,7 @@ pub struct ServerConfig {
 }
 
 fn default_reconcile_interval() -> u64 {
-    60 * 60 // Every hour
+    60 * 15 // Every hour
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -680,9 +680,9 @@ async fn create_and_start_container(
         "litehouse_config:/config".to_string(),
     ];
 
-    // Mount each app volume read-only at /apps/{app_id}
+    // Mount each app volume at /apps/{app_id}
     for (volume_name, app_id) in app_volumes {
-        binds.push(format!("{}:/apps/{}:ro", volume_name, app_id));
+        binds.push(format!("{}:/apps/{}:rw", volume_name, app_id));
     }
 
     info!(
