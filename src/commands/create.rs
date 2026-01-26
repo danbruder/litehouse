@@ -33,6 +33,13 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     let app = App::new(app_name)?;
     db::app::save(pool, &app).await?;
 
+    // Initialize default environment variables
+    db::env_var::init_default_env_vars(pool, &app.id, &app.name)
+        .await
+        .map_err(|e| AppCreateError::DatabaseError(e.into()))?;
+
+    info!("Initialized default environment variables for app '{}'", app.name);
+
     // Initialize SQLite database for the app
     config::init_app_database(app_name)?;
 
@@ -41,6 +48,15 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
         .map_err(|e| AppCreateError::DockerError(e.to_string()))?;
     crate::volume::create_app_volume(&docker, &app.id).await
         .map_err(|e| AppCreateError::DockerError(format!("Failed to create app volume: {}", e)))?;
+
+    // Initialize empty database in volume
+    // Note: We don't have the image yet, so we can't discover user permissions
+    // The database will be created with permissive settings, then corrected when the app first starts
+    crate::volume::init_app_database_in_volume(&docker, &app.id, &crate::volume::get_app_volume_name(&app.id), None)
+        .await
+        .map_err(|e| AppCreateError::DockerError(format!("Failed to initialize database in volume: {}", e)))?;
+
+    info!("Initialized SQLite database in volume for app '{}'", app.name);
 
     info!("Created app '{}' with SQLite database and volume litehouse-db-{}", app.name, app.id);
 

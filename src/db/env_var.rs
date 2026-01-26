@@ -73,6 +73,28 @@ pub async fn delete_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Initialize default environment variables for a new app
+#[instrument(skip(pool))]
+pub async fn init_default_env_vars(
+    pool: &Pool<Sqlite>,
+    app_id: &str,
+    app_name: &str,
+) -> Result<()> {
+    let vars = vec![
+        EnvVar::new(app_id, "DATABASE_PATH", "/data/app.db"),
+        EnvVar::new(app_id, "DATA_DIR", "/data"),
+        EnvVar::new(app_id, "APP_ID", app_id),
+        EnvVar::new(app_id, "APP_NAME", app_name),
+    ];
+
+    for var in vars {
+        save(pool, &var).await?;
+    }
+
+    info!("Initialized {} default environment variables for app {}", 4, app_name);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +195,27 @@ mod tests {
         assert_eq!(app1_vars[0].value, "value1");
         assert_eq!(app2_vars.len(), 1);
         assert_eq!(app2_vars[0].value, "value2");
+    }
+
+    #[tokio::test]
+    async fn test_init_default_env_vars() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp").unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        // Initialize default env vars
+        init_default_env_vars(&pool, &app.id, &app.name).await.unwrap();
+
+        // Retrieve all env vars
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+
+        // Should have exactly 4 default variables
+        assert_eq!(retrieved.len(), 4);
+
+        // Verify each default variable exists with correct value
+        assert!(retrieved.iter().any(|e| e.key == "DATABASE_PATH" && e.value == "/data/app.db"));
+        assert!(retrieved.iter().any(|e| e.key == "DATA_DIR" && e.value == "/data"));
+        assert!(retrieved.iter().any(|e| e.key == "APP_ID" && e.value == app.id));
+        assert!(retrieved.iter().any(|e| e.key == "APP_NAME" && e.value == app.name));
     }
 }

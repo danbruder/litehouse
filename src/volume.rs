@@ -268,6 +268,108 @@ pub async fn init_app_volume(
     }
 }
 
+/// Initialize database file in app volume
+/// Creates an empty SQLite database at /data/app.db with proper permissions
+#[instrument]
+pub async fn init_app_database_in_volume(
+    docker: &Docker,
+    app_id: &str,
+    volume_name: &str,
+    uid_gid: Option<(u32, u32)>,
+) -> Result<()> {
+    info!("Initializing database file in volume {}", volume_name);
+
+    let container_name = format!("litehouse-init-db-{}", app_id);
+
+    // Build command to create empty SQLite database
+    let cmd = if let Some((uid, gid)) = uid_gid {
+        info!("Creating database with ownership {}:{}", uid, gid);
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "apk add --no-cache sqlite && \
+                 mkdir -p /data && \
+                 sqlite3 /data/app.db 'VACUUM;' && \
+                 chown {}:{} /data/app.db && \
+                 chmod 0660 /data/app.db",
+                uid, gid
+            ),
+        ]
+    } else {
+        info!("Creating database with default permissions");
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "apk add --no-cache sqlite && \
+             mkdir -p /data && \
+             sqlite3 /data/app.db 'VACUUM;' && \
+             chmod 0666 /data/app.db".to_string(),
+        ]
+    };
+
+    let host_config = HostConfig {
+        binds: Some(vec![format!("{}:/data", volume_name)]),
+        ..Default::default()
+    };
+
+    let config = Config {
+        image: Some("alpine:latest".to_string()),
+        cmd: Some(cmd),
+        host_config: Some(host_config),
+        ..Default::default()
+    };
+
+    let options = CreateContainerOptions {
+        name: container_name.clone(),
+        platform: None,
+    };
+
+    // Create and start container
+    let container_info = docker.create_container(Some(options), config).await?;
+    docker.start_container::<String>(&container_info.id, None).await?;
+
+    // Wait for container to complete (with timeout)
+    let timeout = std::time::Duration::from_secs(60);
+    let start = std::time::Instant::now();
+
+    let exit_code = loop {
+        if start.elapsed() > timeout {
+            warn!("Database initialization timed out after 60s");
+            // Clean up container on timeout
+            let _ = docker.remove_container(&container_info.id, None).await;
+            return Err(VolumeError::PermissionError(
+                "Database initialization timed out".to_string()
+            ).into());
+        }
+
+        let inspect = docker.inspect_container(&container_info.id, None).await?;
+
+        if let Some(state) = inspect.state {
+            if let Some(running) = state.running {
+                if !running {
+                    // Container finished
+                    break state.exit_code.unwrap_or(-1);
+                }
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+
+    // Remove the container now that we're done with it
+    docker.remove_container(&container_info.id, None).await?;
+
+    if exit_code != 0 {
+        return Err(VolumeError::PermissionError(
+            format!("Database initialization failed with exit code {}", exit_code)
+        ).into());
+    }
+
+    info!("Database file initialized successfully");
+    Ok(())
+}
+
 /// Verify no running container has RW mount on this volume
 /// Checks all running containers, returns error if volume is already mounted RW
 /// Read-only mounts (like Litestream) are allowed
@@ -478,6 +580,95 @@ mod tests {
         // Should pass when no containers use the volume
         verify_volume_single_writer(&docker, app_id, &volume_name).await?;
 
+        // Clean up
+        delete_app_volume(&docker, app_id).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_init_app_database_in_volume() -> Result<()> {
+        let docker = docker::connect().await?;
+        let app_id = "test-db-init";
+
+        // Create volume
+        let volume_name = create_app_volume(&docker, app_id).await?;
+
+        // Initialize database in volume (this will complete when the container finishes)
+        // The function internally waits for completion, so if it returns Ok, the database was created
+        init_app_database_in_volume(&docker, app_id, &volume_name, None).await?;
+
+        // Verify database file exists by running a simple test container
+        let verify_container = format!("litehouse-verify-db-{}", app_id);
+        let verify_config = Config {
+            image: Some("alpine:latest".to_string()),
+            cmd: Some(vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "test -f /data/app.db && echo 'Database exists'".to_string(),
+            ]),
+            host_config: Some(HostConfig {
+                binds: Some(vec![format!("{}:/data", volume_name)]),
+                auto_remove: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let container_info = docker.create_container(
+            Some(CreateContainerOptions {
+                name: verify_container.clone(),
+                ..Default::default()
+            }),
+            verify_config,
+        ).await?;
+
+        docker.start_container::<String>(&container_info.id, None).await?;
+
+        // Wait for verification container to finish
+        let timeout = tokio::time::Duration::from_secs(10);
+        let start_time = tokio::time::Instant::now();
+
+        loop {
+            if start_time.elapsed() > timeout {
+                delete_app_volume(&docker, app_id).await?;
+                return Err(anyhow::anyhow!("Verification timed out"));
+            }
+
+            let inspect = docker.inspect_container(&container_info.id, None).await;
+            if let Ok(container) = inspect {
+                if let Some(state) = container.state {
+                    if let Some(running) = state.running {
+                        if !running {
+                            let exit_code = state.exit_code.unwrap_or(-1);
+                            delete_app_volume(&docker, app_id).await?;
+                            if exit_code == 0 {
+                                return Ok(());
+                            } else {
+                                return Err(anyhow::anyhow!("Database file not found in volume"));
+                            }
+                        }
+                    }
+                }
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_init_app_database_with_uid_gid() -> Result<()> {
+        let docker = docker::connect().await?;
+        let app_id = "test-db-init-uid";
+
+        // Create volume
+        let volume_name = create_app_volume(&docker, app_id).await?;
+
+        // Initialize database with specific uid/gid
+        // The function internally waits for completion, so if it returns Ok, the database was created
+        init_app_database_in_volume(&docker, app_id, &volume_name, Some((1000, 1000))).await?;
+
+        // If we get here without error, the database was created successfully
         // Clean up
         delete_app_volume(&docker, app_id).await?;
 
