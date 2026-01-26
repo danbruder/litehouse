@@ -433,12 +433,8 @@ fn generate_config(
 
     // Add main litehouse database (mounted from config directory)
     let main_db_path = "/config/litehouse.db";
-    let main_replica_path = "/data/litestream-replicas/main";
 
-    let mut main_replicas = vec![ReplicaConfig {
-        path: Some(main_replica_path.to_string()),
-        url: None,
-    }];
+    let mut main_replicas = vec![];
 
     // Add S3 replica for main database if configured
     if let Some(s3) = s3_config {
@@ -460,12 +456,7 @@ fn generate_config(
         // Database path inside the litestream container
         // Volume mounted at /apps/{app_id} read-only
         let db_path = format!("/apps/{}/app.db", app.id);
-        let replica_path = format!("/data/litestream-replicas/{}", app.id);
-
-        let mut replicas = vec![ReplicaConfig {
-            path: Some(replica_path),
-            url: None,
-        }];
+        let mut replicas = vec![];
 
         // Add S3 replica if configured
         if let Some(s3) = s3_config {
