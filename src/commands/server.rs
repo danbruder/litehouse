@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{RwLock, oneshot};
+use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, instrument};
 
@@ -91,7 +91,10 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     }
 
     // Construct webhook URL from domain if available
-    let webhook_url = config.domain.as_ref().map(|d| format!("https://{}", d));
+    let webhook_url = config
+        .domain
+        .as_ref()
+        .map(|d| format!("https://admin.{}", d));
 
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
