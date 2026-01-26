@@ -7,7 +7,7 @@ use super::models::{DeviceAuthResponse, TokenResponse};
 
 const DEVICE_AUTH_URL: &str = "https://github.com/login/device/code";
 const TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-const DEFAULT_SCOPES: &str = "repo read:user";
+const DEFAULT_SCOPES: &str = "repo read:user admin:repo_hook";
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {

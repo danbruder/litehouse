@@ -1212,28 +1212,30 @@ update shared msg model =
             case model.view of
                 SettingsView settingsState ->
                     let
+                        currentForm = settingsState.s3Form
+                        
                         updatedForm =
                             case fieldName of
                                 "access_key_id" ->
-                                    { settingsState.s3Form | accessKeyId = value }
+                                    { currentForm | accessKeyId = value }
 
                                 "secret_access_key" ->
-                                    { settingsState.s3Form | secretAccessKey = value }
+                                    { currentForm | secretAccessKey = value }
 
                                 "bucket" ->
-                                    { settingsState.s3Form | bucket = value }
+                                    { currentForm | bucket = value }
 
                                 "region" ->
-                                    { settingsState.s3Form | region = value }
+                                    { currentForm | region = value }
 
                                 "endpoint" ->
-                                    { settingsState.s3Form | endpoint = value }
+                                    { currentForm | endpoint = value }
 
                                 "path_prefix" ->
-                                    { settingsState.s3Form | pathPrefix = value }
+                                    { currentForm | pathPrefix = value }
 
                                 _ ->
-                                    settingsState.s3Form
+                                    currentForm
                     in
                     ( { model
                         | view =

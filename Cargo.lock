@@ -1333,6 +1333,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "hex",
+ "hmac",
  "http 0.2.12",
  "hyper 0.14.32",
  "indicatif",
