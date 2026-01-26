@@ -14,8 +14,8 @@ pub fn start_sse_stream(
     filter: SubscriptionFilter,
     _user_id: String,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
-    // Throttle configuration: process messages every 100ms (max 10 messages/second)
-    const THROTTLE_INTERVAL_MS: u64 = 100;
+    // Throttle configuration: process messages every 10ms (max 100 messages/second)
+    const THROTTLE_INTERVAL_MS: u64 = 10;
 
     let receiver = message_bus.subscribe();
 
