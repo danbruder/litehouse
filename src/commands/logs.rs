@@ -40,12 +40,8 @@ pub async fn execute(
         .map_err(LogsError::DockerError)?;
 
     // Map stream items from Result<String, anyhow::Error> to Result<String, LogsError>
-    let mapped_stream = stream
-        .map(|item| item.map_err(|e| LogsError::LogStreamError(e.to_string())))
-        .map(|message| {
-            println!("{:?}", &message);
-            message
-        });
+    let mapped_stream =
+        stream.map(|item| item.map_err(|e| LogsError::LogStreamError(e.to_string())));
 
     Ok(Box::pin(mapped_stream))
 }
