@@ -32,7 +32,7 @@ pub struct ServerConfig {
 }
 
 fn default_reconcile_interval() -> u64 {
-    60 * 5 // Every 5 min
+    60 // Every minute
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +71,9 @@ impl Default for ClientConfig {
 /// Returns Ok if set successfully, Err if already set
 pub fn set_test_dirs(data_dir: PathBuf, config_dir: PathBuf) -> Result<(), PathBuf> {
     TEST_DATA_DIR.set(data_dir).map_err(|_| PathBuf::new())?;
-    TEST_CONFIG_DIR.set(config_dir).map_err(|_| PathBuf::new())?;
+    TEST_CONFIG_DIR
+        .set(config_dir)
+        .map_err(|_| PathBuf::new())?;
     Ok(())
 }
 
@@ -219,12 +221,14 @@ pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
     // Ensure parent directory exists and is writable
     if let Some(parent) = db_path.parent() {
         if !parent.exists() {
-            fs::create_dir_all(parent)
-                .map_err(|e| ConfigError::IoError(format!("Failed to create data directory: {}", e)))?;
+            fs::create_dir_all(parent).map_err(|e| {
+                ConfigError::IoError(format!("Failed to create data directory: {}", e))
+            })?;
         }
         // Ensure parent directory is writable
-        let metadata = fs::metadata(parent)
-            .map_err(|e| ConfigError::IoError(format!("Failed to get directory metadata: {}", e)))?;
+        let metadata = fs::metadata(parent).map_err(|e| {
+            ConfigError::IoError(format!("Failed to get directory metadata: {}", e))
+        })?;
         let mut perms = metadata.permissions();
         #[cfg(unix)]
         {
@@ -232,8 +236,9 @@ pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
             // Set to 755 (rwxr-xr-x) to allow owner write, others read/execute
             perms.set_mode(0o755);
         }
-        fs::set_permissions(parent, perms)
-            .map_err(|e| ConfigError::IoError(format!("Failed to set directory permissions: {}", e)))?;
+        fs::set_permissions(parent, perms).map_err(|e| {
+            ConfigError::IoError(format!("Failed to set directory permissions: {}", e))
+        })?;
     }
 
     // Create empty database file if it doesn't exist
@@ -241,7 +246,8 @@ pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
         let file = fs::File::create(&db_path)
             .map_err(|e| ConfigError::IoError(format!("Failed to create database file: {}", e)))?;
         // Ensure the file is writable
-        let metadata = file.metadata()
+        let metadata = file
+            .metadata()
             .map_err(|e| ConfigError::IoError(format!("Failed to get file metadata: {}", e)))?;
         let mut perms = metadata.permissions();
         #[cfg(unix)]
@@ -270,8 +276,9 @@ pub fn init_app_database(app_name: &str) -> Result<(), ConfigError> {
             if mode & 0o200 == 0 {
                 // Owner doesn't have write permission, add it
                 perms.set_mode(mode | 0o200);
-                fs::set_permissions(&db_path, perms)
-                    .map_err(|e| ConfigError::IoError(format!("Failed to set file permissions: {}", e)))?;
+                fs::set_permissions(&db_path, perms).map_err(|e| {
+                    ConfigError::IoError(format!("Failed to set file permissions: {}", e))
+                })?;
                 tracing::info!(
                     "Fixed write permissions on database file for app '{}' at {}",
                     app_name,
@@ -337,7 +344,10 @@ mod tests {
         std::fs::create_dir_all(data_dir.path()).unwrap();
         std::fs::create_dir_all(config_dir.path()).unwrap();
         // Only set if not already set (for parallel test execution)
-        let _ = set_test_dirs(data_dir.path().to_path_buf(), config_dir.path().to_path_buf());
+        let _ = set_test_dirs(
+            data_dir.path().to_path_buf(),
+            config_dir.path().to_path_buf(),
+        );
         (data_dir, config_dir)
     }
 
@@ -357,9 +367,9 @@ mod tests {
         config.base_url = "http://test.example.com/api".to_string();
         config.access_token = Some("test-access-token".to_string());
         config.refresh_token = Some("test-refresh-token".to_string());
-        
+
         config.save().unwrap();
-        
+
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.base_url, "http://test.example.com/api");
         assert_eq!(loaded.access_token, Some("test-access-token".to_string()));
@@ -371,7 +381,7 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let config = ClientConfig::default();
         config.save().unwrap();
-        
+
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.access_token, None);
         assert_eq!(loaded.refresh_token, None);
@@ -382,21 +392,21 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let mut config = ClientConfig::default();
         config.save().unwrap();
-        
+
         // Update with tokens
         config.access_token = Some("new-access".to_string());
         config.refresh_token = Some("new-refresh".to_string());
         config.save().unwrap();
-        
+
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.access_token, Some("new-access".to_string()));
         assert_eq!(loaded.refresh_token, Some("new-refresh".to_string()));
-        
+
         // Clear tokens
         config.access_token = None;
         config.refresh_token = None;
         config.save().unwrap();
-        
+
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.access_token, None);
         assert_eq!(loaded.refresh_token, None);
