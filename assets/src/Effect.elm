@@ -20,6 +20,8 @@ module Effect exposing
     , RepoInfo
     , GitHubStatus(..)
     , EnvVar
+    , S3ConfigRedacted
+    , S3ConfigForm
     )
 
 {-| The Effect pattern allows us to return a custom type from update functions
@@ -80,6 +82,10 @@ type Effect msg
     | FetchRepos String (Result String (List RepoInfo) -> msg)
     | CreateApp String String (Result String AppInfo -> msg)
     | CreateAppWithRepo String String String (Result String AppInfo -> msg)
+      -- HTTP Requests - S3 Config
+    | FetchS3Config String (Result String (Maybe S3ConfigRedacted) -> msg)
+    | SetS3Config String S3ConfigForm (Result String String -> msg)
+    | DeleteS3Config String (Result String String -> msg)
       -- Shared state updates
     | UpdateGitHubStatus GitHubStatus
 
@@ -205,6 +211,25 @@ type GitHubStatus
     | GitHubConnected String
 
 
+type alias S3ConfigRedacted =
+    { accessKeyId : String
+    , bucket : String
+    , region : String
+    , endpoint : Maybe String
+    , pathPrefix : Maybe String
+    }
+
+
+type alias S3ConfigForm =
+    { accessKeyId : String
+    , secretAccessKey : String
+    , bucket : String
+    , region : String
+    , endpoint : String
+    , pathPrefix : String
+    }
+
+
 -- CONSTRUCTORS
 
 
@@ -328,6 +353,15 @@ map fn effect =
 
         CreateAppWithRepo token name repo toMsg ->
             CreateAppWithRepo token name repo (toMsg >> fn)
+
+        FetchS3Config token toMsg ->
+            FetchS3Config token (toMsg >> fn)
+
+        SetS3Config token form toMsg ->
+            SetS3Config token form (toMsg >> fn)
+
+        DeleteS3Config token toMsg ->
+            DeleteS3Config token (toMsg >> fn)
 
         UpdateGitHubStatus status ->
             UpdateGitHubStatus status

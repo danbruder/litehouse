@@ -801,6 +801,15 @@ performEffect navKey effect =
         Effect.CreateAppWithRepo token name repo toMsg ->
             createAppWithRepoHttp token name repo toMsg
 
+        Effect.FetchS3Config token toMsg ->
+            fetchS3ConfigHttp token toMsg
+
+        Effect.SetS3Config token form toMsg ->
+            setS3ConfigHttp token form toMsg
+
+        Effect.DeleteS3Config token toMsg ->
+            deleteS3ConfigHttp token toMsg
+
         Effect.UpdateGitHubStatus _ ->
             -- Handled by updateSharedFromEffect, no Cmd needed
             Cmd.none
@@ -1149,6 +1158,63 @@ deleteEnvVarHttp token appName key toMsg =
         }
 
 
+fetchS3ConfigHttp : String -> (Result String (Maybe Effect.S3ConfigRedacted) -> msg) -> Cmd msg
+fetchS3ConfigHttp token toMsg =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/config/s3"
+        , body = Http.emptyBody
+        , expect = Http.expectJson (toMsg << Result.mapError httpErrorToString) (Decode.nullable s3ConfigRedactedDecoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+setS3ConfigHttp : String -> Effect.S3ConfigForm -> (Result String String -> msg) -> Cmd msg
+setS3ConfigHttp token form toMsg =
+    Http.request
+        { method = "POST"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/config/s3"
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    (List.filterMap identity
+                        [ Just ( "access_key_id", Encode.string form.accessKeyId )
+                        , Just ( "secret_access_key", Encode.string form.secretAccessKey )
+                        , Just ( "bucket", Encode.string form.bucket )
+                        , Just ( "region", Encode.string form.region )
+                        , if String.isEmpty form.endpoint then
+                            Nothing
+                          else
+                            Just ( "endpoint", Encode.string form.endpoint )
+                        , if String.isEmpty form.pathPrefix then
+                            Nothing
+                          else
+                            Just ( "path_prefix", Encode.string form.pathPrefix )
+                        ]
+                    )
+                )
+        , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+deleteS3ConfigHttp : String -> (Result String String -> msg) -> Cmd msg
+deleteS3ConfigHttp token toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = [ Http.header "Authorization" ("Bearer " ++ token) ]
+        , url = "/api/config/s3"
+        , body = Http.emptyBody
+        , expect = Http.expectString (toMsg << Result.mapError httpErrorToString)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 
 -- DECODERS
 
@@ -1292,6 +1358,16 @@ remoteInfoDecoder =
         (Decode.field "name" Decode.string)
         (Decode.field "url" Decode.string)
         (Decode.field "branch" Decode.string)
+
+
+s3ConfigRedactedDecoder : Decode.Decoder Effect.S3ConfigRedacted
+s3ConfigRedactedDecoder =
+    Decode.map5 Effect.S3ConfigRedacted
+        (Decode.field "access_key_id" Decode.string)
+        (Decode.field "bucket" Decode.string)
+        (Decode.field "region" Decode.string)
+        (Decode.maybe (Decode.field "endpoint" Decode.string))
+        (Decode.maybe (Decode.field "path_prefix" Decode.string))
 
 
 
