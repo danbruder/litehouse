@@ -64,7 +64,8 @@ pub async fn start_with_pool(docker: &Docker, db_pool: &Pool<Sqlite>) -> Result<
     match container_state {
         ContainerState::NotExists => {
             info!("Container doesn't exist, creating new one");
-            create_and_start_container(docker, container_name, image_name, s3_config.as_ref()).await?;
+            create_and_start_container(docker, container_name, image_name, s3_config.as_ref())
+                .await?;
         }
         ContainerState::Running { id: _ } => {
             info!("Container is already running");
@@ -80,7 +81,8 @@ pub async fn start_with_pool(docker: &Docker, db_pool: &Pool<Sqlite>) -> Result<
         ContainerState::Error { id } | ContainerState::Exited { id } => {
             info!("Container is in error/exited state, removing and recreating");
             remove_container(docker, &id).await?;
-            create_and_start_container(docker, container_name, image_name, s3_config.as_ref()).await?;
+            create_and_start_container(docker, container_name, image_name, s3_config.as_ref())
+                .await?;
         }
         ContainerState::Restarting { id } => {
             info!("Container is restarting, waiting for it to stabilize");
@@ -294,7 +296,10 @@ async fn restore_database(
 
     // Build S3 URL for the app database
     let path_prefix = s3_config.path_prefix.as_deref().unwrap_or("litehouse");
-    let s3_url = build_s3_url(s3_config, &format!("{}/apps/{}/app.db", path_prefix, app_id));
+    let s3_url = build_s3_url(
+        s3_config,
+        &format!("{}/apps/{}/app.db", path_prefix, app_id),
+    );
 
     info!("Restoring from S3 URL: {}", s3_url);
 
@@ -303,7 +308,10 @@ async fn restore_database(
     // Prepare environment variables for S3 configuration
     let mut env_vars = vec![
         format!("LITESTREAM_ACCESS_KEY_ID={}", s3_config.access_key_id),
-        format!("LITESTREAM_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
+        format!(
+            "LITESTREAM_SECRET_ACCESS_KEY={}",
+            s3_config.secret_access_key
+        ),
         format!("AWS_ACCESS_KEY_ID={}", s3_config.access_key_id),
         format!("AWS_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
         format!("AWS_REGION={}", s3_config.region),
@@ -356,7 +364,9 @@ async fn restore_database(
 
     loop {
         if start_time.elapsed() > timeout {
-            return Err(anyhow::anyhow!("Restore container timed out after 5 minutes"));
+            return Err(anyhow::anyhow!(
+                "Restore container timed out after 5 minutes"
+            ));
         }
 
         let container = docker.inspect_container(&container_info.id, None).await?;
@@ -406,7 +416,10 @@ async fn restore_database(
     }
 }
 
-fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) -> Result<LitestreamConfig> {
+fn generate_config(
+    apps: &[crate::models::App],
+    s3_config: Option<&S3Config>,
+) -> Result<LitestreamConfig> {
     let data_dir = config::get_data_dir()
         .map_err(|e| anyhow::anyhow!("Failed to get data directory: {}", e))?;
 
@@ -478,11 +491,10 @@ fn generate_config(apps: &[crate::models::App], s3_config: Option<&S3Config>) ->
 fn build_s3_url(s3_config: &S3Config, path: &str) -> String {
     if let Some(endpoint) = &s3_config.endpoint {
         // S3-compatible service with custom endpoint
-        format!("s3://{}:{}@{}/{}",
-            s3_config.access_key_id,
-            s3_config.secret_access_key,
-            endpoint,
-            path)
+        format!(
+            "s3://{}:{}@{}/{}",
+            s3_config.access_key_id, s3_config.secret_access_key, endpoint, path
+        )
     } else {
         // Standard AWS S3
         format!("s3://{}/{}", s3_config.bucket, path)
@@ -649,7 +661,10 @@ async fn create_and_start_container(
     let mut env_vars = Vec::new();
     if let Some(s3) = s3_config {
         env_vars.push(format!("LITESTREAM_ACCESS_KEY_ID={}", s3.access_key_id));
-        env_vars.push(format!("LITESTREAM_SECRET_ACCESS_KEY={}", s3.secret_access_key));
+        env_vars.push(format!(
+            "LITESTREAM_SECRET_ACCESS_KEY={}",
+            s3.secret_access_key
+        ));
 
         // AWS credentials (some apps might check these)
         env_vars.push(format!("AWS_ACCESS_KEY_ID={}", s3.access_key_id));
@@ -660,16 +675,18 @@ async fn create_and_start_container(
             env_vars.push(format!("AWS_ENDPOINT_URL={}", endpoint));
         }
 
-        info!("Configuring Litestream with S3 backup to bucket: {}", s3.bucket);
+        info!(
+            "Configuring Litestream with S3 backup to bucket: {}",
+            s3.bucket
+        );
     }
 
     // Get all app volumes to mount dynamically
     let app_volumes = crate::volume::list_app_volumes(docker).await?;
 
     let mut binds = vec![
-        "litehouse_data:/data".to_string(),  // Keep for replicas directory
+        "litehouse_data:/data".to_string(), // Keep for replicas directory
         "litehouse_config:/config".to_string(),
-        format!("{}:/etc/litestream.yml:ro", config_file_path.display()),
     ];
 
     // Mount each app volume read-only at /apps/{app_id}
@@ -677,7 +694,10 @@ async fn create_and_start_container(
         binds.push(format!("{}:/apps/{}:ro", volume_name, app_id));
     }
 
-    info!("Mounting {} app volumes to Litestream container", binds.len() - 3);
+    info!(
+        "Mounting {} app volumes to Litestream container",
+        binds.len() - 3
+    );
 
     let container_config = Config {
         image: Some(image_name.to_string()),
@@ -685,15 +705,19 @@ async fn create_and_start_container(
         cmd: Some(vec![
             "replicate".to_string(),
             "-config".to_string(),
-            "/etc/litestream.yml".to_string(),
+            "/data/litestream.yml".to_string(),
         ]),
-        env: if env_vars.is_empty() { None } else { Some(env_vars) },
+        env: if env_vars.is_empty() {
+            None
+        } else {
+            Some(env_vars)
+        },
         host_config: Some(HostConfig {
             restart_policy: Some(RestartPolicy {
                 name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
                 maximum_retry_count: None,
             }),
-            binds: Some(binds),  // Updated binds with all app volumes
+            binds: Some(binds), // Updated binds with all app volumes
             ..Default::default()
         }),
         ..Default::default()
