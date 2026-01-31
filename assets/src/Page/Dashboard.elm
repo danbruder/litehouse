@@ -26,6 +26,7 @@ import Html.Attributes exposing (class, disabled, for, href, id, placeholder, re
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Page.Dashboard.Layout as Layout
 import Shared
 
 
@@ -1865,10 +1866,19 @@ unifiedSSEDecoder =
 
 view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
+    let
+        userName =
+            case shared.user of
+                Just user ->
+                    user.fullName
+
+                Nothing ->
+                    ""
+    in
     div [ class "min-h-screen bg-litehouse-bg flex flex-col" ]
-        [ viewHeader shared model
+        [ Layout.viewHeader shared shared.githubStatus userName ShowCreateApp Logout
         , div [ class "flex flex-1" ]
-            [ viewSidebar model
+            [ Layout.viewSidebar
             , main_ [ class "flex-1 p-6" ]
                 [ div [ class "max-w-6xl mx-auto" ]
                     [ case model.view of
@@ -1887,110 +1897,9 @@ view shared model =
                 ]
             ]
         , footer [ class "p-4 text-center border-t border-litehouse-border" ]
-            [ viewVersion shared.serverVersion
+            [ Layout.viewVersion shared.serverVersion
             ]
         ]
-
-
-viewHeader : Shared.Model navigationKey -> Model -> Html Msg
-viewHeader shared model =
-    let
-        userName =
-            case shared.user of
-                Just user ->
-                    user.fullName
-
-                Nothing ->
-                    ""
-    in
-    header [ class "bg-litehouse-surface border-b border-litehouse-border px-6 py-4 flex justify-between items-center" ]
-        [ div [ class "flex items-center gap-4" ]
-            [ a [ href "/dashboard", class "text-xl font-semibold text-litehouse-text hover:opacity-80 transition-opacity" ] [ text "Litehouse" ]
-            ]
-        , div [ class "flex items-center gap-4" ]
-            [ viewGitHubStatusBadge shared.githubStatus
-            , span [ class "text-sm text-litehouse-muted" ] [ text userName ]
-            , button
-                [ class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
-                , onClick ShowCreateApp
-                ]
-                [ text "+ New App" ]
-            , button
-                [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                , onClick Logout
-                ]
-                [ text "Logout" ]
-            ]
-        ]
-
-
-viewSidebar : Model -> Html Msg
-viewSidebar model =
-    aside [ class "w-56 bg-litehouse-surface border-r border-litehouse-border p-4" ]
-        [ nav [ class "space-y-1" ]
-            [ viewSidebarItem "My Apps" MyApps model.activeSidebarItem
-            , viewSidebarItem "Activity" Activity model.activeSidebarItem
-            , viewSidebarItem "Backups" Backups model.activeSidebarItem
-            , viewSidebarItem "Settings" Settings model.activeSidebarItem
-            ]
-        ]
-
-
-viewSidebarItem : String -> SidebarItem -> SidebarItem -> Html Msg
-viewSidebarItem label item activeItem =
-    let
-        isActive =
-            item == activeItem
-
-        baseClasses =
-            "block w-full px-3 py-2 rounded-xl text-sm font-medium transition-colors text-left"
-
-        activeClasses =
-            if isActive then
-                "bg-litehouse-amber/10 text-litehouse-amber"
-
-            else
-                "text-litehouse-muted hover:bg-litehouse-bg hover:text-litehouse-text"
-    in
-    case item of
-        MyApps ->
-            a [ class (baseClasses ++ " " ++ activeClasses), href "/dashboard" ] [ text label ]
-
-        Settings ->
-            a [ class (baseClasses ++ " " ++ activeClasses), href "/settings" ] [ text label ]
-
-        _ ->
-            let
-                onClickMsg =
-                    case item of
-                        MyApps ->
-                            NoOp
-
-                        Activity ->
-                            NoOp
-
-                        Backups ->
-                            NoOp
-
-                        Settings ->
-                            NoOp
-            in
-            button [ class (baseClasses ++ " " ++ activeClasses), onClick onClickMsg ] [ text label ]
-
-
-viewGitHubStatusBadge : Shared.GitHubStatus -> Html Msg
-viewGitHubStatusBadge status =
-    case status of
-        Shared.GitHubConnected username ->
-            span [ class "px-2.5 py-1 rounded-full text-xs font-medium bg-litehouse-success/20 text-litehouse-success" ]
-                [ text ("GitHub: " ++ username) ]
-
-        Shared.GitHubNotConnected ->
-            span [ class "px-2.5 py-1 rounded-full text-xs font-medium bg-litehouse-warning/20 text-litehouse-warning" ]
-                [ text "GitHub: Not connected" ]
-
-        Shared.GitHubUnknown ->
-            text ""
 
 
 viewAppsList : Model -> Html Msg
@@ -2689,15 +2598,6 @@ viewEnvVarForm state =
             , cancelButton
             ]
         ]
-
-
-viewVersion : String -> Html Msg
-viewVersion version =
-    if String.isEmpty version then
-        text ""
-
-    else
-        p [ class "text-xs text-litehouse-muted" ] [ text ("v" ++ version) ]
 
 
 viewSettings : Shared.Model navigationKey -> SettingsState -> Html Msg
