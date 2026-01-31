@@ -3,7 +3,7 @@ module Page.Dashboard exposing
     , Msg(..)
     , DashboardView(..)
     , CreateAppState
-    , CreateAppStep(..)
+    , CreateAppStep
     , GitHubConnectState
     , SidebarItem(..)
     , init
@@ -26,6 +26,7 @@ import Html.Attributes exposing (class, disabled, for, href, id, placeholder, re
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Page.Dashboard.CreateApp as CreateApp
 import Page.Dashboard.Data as Data
 import Page.Dashboard.EnvVars as EnvVars
 import Page.Dashboard.Settings as Settings
@@ -50,29 +51,17 @@ type DashboardView
     | SettingsView SettingsState
 
 
+-- Type aliases to maintain backward compatibility
 type alias CreateAppState =
-    { appName : String
-    , step : CreateAppStep
-    , error : Maybe String
-    }
+    CreateApp.State
 
 
-type CreateAppStep
-    = EnterName
-    | CheckingGitHub
-    | ConnectGitHub GitHubConnectState
-    | SelectRepo (List Effect.RepoInfo) String
-    | Creating
+type alias CreateAppStep =
+    CreateApp.Step
 
 
 type alias GitHubConnectState =
-    { userCode : String
-    , verificationUri : String
-    , deviceCode : String
-    , expiresIn : Int
-    , interval : Int
-    , polling : Bool
-    }
+    CreateApp.GitHubConnectState
 
 
 type alias AppDetailState =
@@ -117,10 +106,7 @@ type SidebarItem
 
 emptyCreateAppState : CreateAppState
 emptyCreateAppState =
-    { appName = ""
-    , step = EnterName
-    , error = Nothing
-    }
+    CreateApp.init
 
 
 -- INIT
@@ -231,153 +217,141 @@ update shared msg model =
                     ( model, Effect.none )
 
         ShowCreateApp ->
-            ( { model | view = CreateAppView emptyCreateAppState }
-            , Effect.none
+            let
+                ( newCreateState, createAppEffect ) =
+                    CreateApp.update shared CreateApp.ShowCreateApp emptyCreateAppState
+            in
+            ( { model | view = CreateAppView newCreateState }
+            , Effect.map mapCreateAppMsg createAppEffect
             )
 
         CancelCreateApp ->
-            ( { model | view = AppsListView }
-            , Effect.none
-            )
+            case model.view of
+                CreateAppView createState ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared CreateApp.CancelCreateApp createState
+                    in
+                    ( { model | view = AppsListView }
+                    , Effect.map mapCreateAppMsg createAppEffect
+                    )
+
+                _ ->
+                    ( model, Effect.none )
 
         AppNameChanged name ->
             case model.view of
                 CreateAppView createState ->
-                    ( { model | view = CreateAppView { createState | appName = name } }
-                    , Effect.none
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared (CreateApp.AppNameChanged name) createState
+                    in
+                    ( { model | view = CreateAppView newCreateState }
+                    , Effect.map mapCreateAppMsg createAppEffect
                     )
 
                 _ ->
                     ( model, Effect.none )
 
         SubmitAppName ->
-            case ( model.view, shared.token ) of
-                ( CreateAppView createState, Just token ) ->
-                    if String.isEmpty (String.trim createState.appName) then
-                        ( { model
-                            | view = CreateAppView { createState | error = Just "App name is required" }
-                          }
-                        , Effect.none
-                        )
+            case model.view of
+                CreateAppView createState ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared CreateApp.SubmitAppName createState
+                    in
+                    -- Apply the effect from Dashboard-level logic
+                    let
+                        effect =
+                            if String.isEmpty (String.trim newCreateState.appName) then
+                                Effect.none
 
-                    else
-                        -- Check GitHub status and proceed accordingly
-                        case shared.githubStatus of
-                            Shared.GitHubConnected _ ->
-                                -- Already connected, fetch repos
-                                ( { model
-                                    | view = CreateAppView { createState | step = SelectRepo [] "", error = Nothing }
-                                  }
-                                , Effect.FetchRepos token GotRepoList
-                                )
+                            else
+                                case shared.githubStatus of
+                                    Shared.GitHubConnected _ ->
+                                        case shared.token of
+                                            Just token ->
+                                                Effect.FetchRepos token GotRepoList
 
-                            Shared.GitHubNotConnected ->
-                                -- Show GitHub connect option
-                                ( { model
-                                    | view =
-                                        CreateAppView
-                                            { createState
-                                                | step =
-                                                    ConnectGitHub
-                                                        { userCode = ""
-                                                        , verificationUri = ""
-                                                        , deviceCode = ""
-                                                        , expiresIn = 0
-                                                        , interval = 5
-                                                        , polling = False
-                                                        }
-                                                , error = Nothing
-                                            }
-                                  }
-                                , Effect.none
-                                )
+                                            Nothing ->
+                                                Effect.none
 
-                            Shared.GitHubUnknown ->
-                                -- Still loading, check again
-                                ( { model
-                                    | view = CreateAppView { createState | step = CheckingGitHub, error = Nothing }
-                                  }
-                                , Effect.FetchGitHubStatus token GotGitHubStatus
-                                )
+                                    Shared.GitHubNotConnected ->
+                                        Effect.none
+
+                                    Shared.GitHubUnknown ->
+                                        case shared.token of
+                                            Just token ->
+                                                Effect.FetchGitHubStatus token GotGitHubStatus
+
+                                            Nothing ->
+                                                Effect.none
+                    in
+                    ( { model | view = CreateAppView newCreateState }
+                    , effect
+                    )
 
                 _ ->
                     ( model, Effect.none )
 
         StartGitHubConnect ->
-            case shared.token of
-                Just token ->
-                    ( model
-                    , Effect.StartDeviceFlow token GotDeviceFlowStart
+            case model.view of
+                CreateAppView createState ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared CreateApp.StartGitHubConnect createState
+                    in
+                    ( { model | view = CreateAppView newCreateState }
+                    , Effect.map mapCreateAppMsg createAppEffect
                     )
 
-                Nothing ->
+                _ ->
                     ( model, Effect.none )
 
         GotDeviceFlowStart result ->
-            case ( model.view, shared.token ) of
-                ( CreateAppView createState, Just token ) ->
-                    case result of
-                        Ok response ->
-                            ( { model
-                                | view =
-                                    CreateAppView
-                                        { createState
-                                            | step =
-                                                ConnectGitHub
-                                                    { userCode = response.userCode
-                                                    , verificationUri = response.verificationUri
-                                                    , deviceCode = response.deviceCode
-                                                    , expiresIn = response.expiresIn
-                                                    , interval = response.interval
-                                                    , polling = True
-                                                    }
-                                            , error = Nothing
-                                        }
-                              }
-                            , Effect.StartGitHubPolling
-                                token
-                                response.deviceCode
-                                response.interval
-                                response.expiresIn
+            case model.view of
+                CreateAppView createState ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared (CreateApp.GotDeviceFlowStart result) createState
+                    in
+                    case shared.token of
+                        Just token ->
+                            let
+                                effect =
+                                    case result of
+                                        Ok response ->
+                                            Effect.StartGitHubPolling
+                                                token
+                                                response.deviceCode
+                                                response.interval
+                                                response.expiresIn
+
+                                        Err _ ->
+                                            Effect.none
+                            in
+                            ( { model | view = CreateAppView newCreateState }
+                            , effect
                             )
 
-                        Err err ->
-                            ( { model
-                                | view = CreateAppView { createState | error = Just err }
-                              }
+                        Nothing ->
+                            ( { model | view = CreateAppView newCreateState }
                             , Effect.none
                             )
 
                 _ ->
                     ( model, Effect.none )
 
-
         GotRepoList result ->
             case model.view of
                 CreateAppView createState ->
-                    case result of
-                        Ok repos ->
-                            case createState.step of
-                                SelectRepo _ query ->
-                                    ( { model
-                                        | view = CreateAppView { createState | step = SelectRepo repos query }
-                                      }
-                                    , Effect.none
-                                    )
-
-                                _ ->
-                                    ( { model
-                                        | view = CreateAppView { createState | step = SelectRepo repos "" }
-                                      }
-                                    , Effect.none
-                                    )
-
-                        Err err ->
-                            ( { model
-                                | view = CreateAppView { createState | error = Just err }
-                              }
-                            , Effect.none
-                            )
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared (CreateApp.GotRepoList result) createState
+                    in
+                    ( { model | view = CreateAppView newCreateState }
+                    , Effect.map mapCreateAppMsg createAppEffect
+                    )
 
                 _ ->
                     ( model, Effect.none )
@@ -385,16 +359,13 @@ update shared msg model =
         RepoSearchChanged query ->
             case model.view of
                 CreateAppView createState ->
-                    case createState.step of
-                        SelectRepo repos _ ->
-                            ( { model
-                                | view = CreateAppView { createState | step = SelectRepo repos query }
-                              }
-                            , Effect.none
-                            )
-
-                        _ ->
-                            ( model, Effect.none )
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared (CreateApp.RepoSearchChanged query) createState
+                    in
+                    ( { model | view = CreateAppView newCreateState }
+                    , Effect.map mapCreateAppMsg createAppEffect
+                    )
 
                 _ ->
                     ( model, Effect.none )
@@ -402,8 +373,12 @@ update shared msg model =
         ChooseRepo repo ->
             case ( model.view, shared.token ) of
                 ( CreateAppView createState, Just token ) ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared (CreateApp.ChooseRepo repo) createState
+                    in
                     ( { model
-                        | view = CreateAppView { createState | step = Creating, error = Nothing }
+                        | view = CreateAppView newCreateState
                       }
                     , Effect.CreateAppWithRepo token createState.appName repo.fullName GotAppCreated
                     )
@@ -414,8 +389,12 @@ update shared msg model =
         SkipRepoSelection ->
             case ( model.view, shared.token ) of
                 ( CreateAppView createState, Just token ) ->
+                    let
+                        ( newCreateState, createAppEffect ) =
+                            CreateApp.update shared CreateApp.SkipRepoSelection createState
+                    in
                     ( { model
-                        | view = CreateAppView { createState | step = Creating, error = Nothing }
+                        | view = CreateAppView newCreateState
                       }
                     , Effect.CreateApp token createState.appName GotAppCreated
                     )
@@ -442,7 +421,7 @@ update shared msg model =
                                 | view =
                                     CreateAppView
                                         { createState
-                                            | step = EnterName
+                                            | step = CreateApp.EnterName
                                             , error = Just err
                                         }
                               }
@@ -1012,7 +991,7 @@ handleGitHubOAuthEvent model shared eventType data =
                                 | view =
                                     CreateAppView
                                         { createState
-                                            | step = SelectRepo [] ""
+                                            | step = CreateApp.SelectRepo [] ""
                                             , error = Nothing
                                         }
                               }
@@ -1025,7 +1004,7 @@ handleGitHubOAuthEvent model shared eventType data =
                                 | view =
                                     CreateAppView
                                         { createState
-                                            | step = SelectRepo [] ""
+                                            | step = CreateApp.SelectRepo [] ""
                                             , error = Nothing
                                         }
                               }
@@ -1035,12 +1014,12 @@ handleGitHubOAuthEvent model shared eventType data =
                 "error" ->
                     -- Stop polling and show error
                     case createState.step of
-                        ConnectGitHub ghState ->
+                        CreateApp.ConnectGitHub ghState ->
                             ( { model
                                 | view =
                                     CreateAppView
                                         { createState
-                                            | step = ConnectGitHub { ghState | polling = False }
+                                            | step = CreateApp.ConnectGitHub { ghState | polling = False }
                                             , error = Just data
                                         }
                               }
@@ -1297,6 +1276,40 @@ handleContainerLogsEvent model shared appName data =
 -- TESTABLE HELPERS
 
 
+mapCreateAppMsg : CreateApp.Msg -> Msg
+mapCreateAppMsg createAppMsg =
+    case createAppMsg of
+        CreateApp.ShowCreateApp ->
+            ShowCreateApp
+
+        CreateApp.CancelCreateApp ->
+            CancelCreateApp
+
+        CreateApp.AppNameChanged name ->
+            AppNameChanged name
+
+        CreateApp.SubmitAppName ->
+            SubmitAppName
+
+        CreateApp.StartGitHubConnect ->
+            StartGitHubConnect
+
+        CreateApp.GotDeviceFlowStart result ->
+            GotDeviceFlowStart result
+
+        CreateApp.GotRepoList result ->
+            GotRepoList result
+
+        CreateApp.RepoSearchChanged query ->
+            RepoSearchChanged query
+
+        CreateApp.ChooseRepo repo ->
+            ChooseRepo repo
+
+        CreateApp.SkipRepoSelection ->
+            SkipRepoSelection
+
+
 {-| Pure function to handle GitHub status response. Extracted for testability.
 Takes the GitHub status result, current create state, and auth token.
 Returns the new create state step, any error message, and effects to emit.
@@ -1317,7 +1330,7 @@ handleGotGitHubStatus result createState maybeToken =
                     status =
                         Effect.GitHubConnected username
                 in
-                ( SelectRepo [] ""
+                ( CreateApp.SelectRepo [] ""
                 , Nothing
                 , Effect.batch
                     [ Effect.UpdateGitHubStatus status
@@ -1326,7 +1339,7 @@ handleGotGitHubStatus result createState maybeToken =
                 )
 
             else
-                ( ConnectGitHub
+                ( CreateApp.ConnectGitHub
                     { userCode = ""
                     , verificationUri = ""
                     , deviceCode = ""
@@ -1339,7 +1352,7 @@ handleGotGitHubStatus result createState maybeToken =
                 )
 
         ( Err _, _ ) ->
-            ( EnterName
+            ( CreateApp.EnterName
             , Just "Failed to check GitHub connection"
             , Effect.none
             )
@@ -1355,6 +1368,16 @@ handleGotGitHubStatus result createState maybeToken =
 -- VIEW
 
 
+viewError : Maybe String -> Html Msg
+viewError maybeError =
+    case maybeError of
+        Just error ->
+            div [ class "bg-litehouse-error/10 text-litehouse-error p-3 rounded-xl mb-4 text-sm text-left" ] [ text error ]
+
+        Nothing ->
+            text ""
+
+
 view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
     div []
@@ -1363,7 +1386,7 @@ view shared model =
                 viewAppsList model
 
             CreateAppView createState ->
-                viewCreateApp shared model createState
+                Html.map (\createAppMsg -> mapCreateAppMsg createAppMsg) (CreateApp.view shared createState)
 
             AppDetailView detailState ->
                 viewAppDetail detailState
@@ -1752,210 +1775,6 @@ formatBuildDate isoDate =
     -- Simple formatting: just take the date part (first 10 characters)
     String.left 10 isoDate
 
-
-viewCreateApp : Shared.Model navigationKey -> Model -> CreateAppState -> Html Msg
-viewCreateApp shared model createState =
-    div [ class "max-w-xl" ]
-        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
-            [ div [ class "flex justify-between items-center mb-6 pb-4 border-b border-litehouse-border" ]
-                [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "Create New App" ]
-                , button
-                    [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                    , onClick CancelCreateApp
-                    ]
-                    [ text "Cancel" ]
-                ]
-            , viewError createState.error
-            , case createState.step of
-                EnterName ->
-                    viewEnterName createState
-
-                CheckingGitHub ->
-                    viewCheckingGitHub
-
-                ConnectGitHub ghState ->
-                    viewConnectGitHub ghState
-
-                SelectRepo repos query ->
-                    viewSelectRepo repos query
-
-                Creating ->
-                    viewCreating
-            ]
-        ]
-
-
-viewEnterName : CreateAppState -> Html Msg
-viewEnterName createState =
-    div [ class "py-4" ]
-        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 1: Name your app" ]
-        , Html.form [ onSubmit SubmitAppName ]
-            [ div [ class "mb-4" ]
-                [ label [ for "appName", class "block mb-1 text-sm font-medium text-litehouse-text" ] [ text "App Name" ]
-                , input
-                    [ type_ "text"
-                    , id "appName"
-                    , value createState.appName
-                    , onInput AppNameChanged
-                    , placeholder "my-awesome-app"
-                    , required True
-                    , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                    ]
-                    []
-                , p [ class "mt-1 text-xs text-litehouse-muted" ] [ text "Use lowercase letters, numbers, and hyphens only" ]
-                ]
-            , button
-                [ type_ "submit"
-                , class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
-                ]
-                [ text "Next" ]
-            ]
-        ]
-
-
-viewCheckingGitHub : Html Msg
-viewCheckingGitHub =
-    div [ class "py-8 text-center" ]
-        [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
-        , p [ class "text-litehouse-muted" ] [ text "Checking GitHub connection..." ]
-        ]
-
-
-viewConnectGitHub : GitHubConnectState -> Html Msg
-viewConnectGitHub ghState =
-    div [ class "py-4" ]
-        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 2: Connect GitHub (Optional)" ]
-        , if String.isEmpty ghState.userCode then
-            div [ class "text-center py-4" ]
-                [ p [ class "text-litehouse-muted mb-4" ] [ text "Connect your GitHub account to import repositories." ]
-                , div [ class "flex justify-center gap-3" ]
-                    [ button
-                        [ class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
-                        , onClick StartGitHubConnect
-                        ]
-                        [ text "Connect GitHub" ]
-                    , button
-                        [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                        , onClick SkipRepoSelection
-                        ]
-                        [ text "Skip" ]
-                    ]
-                ]
-
-          else
-            div [ class "text-center py-4" ]
-                [ p [ class "text-litehouse-muted mb-2" ] [ text "Go to GitHub and enter this code:" ]
-                , div [ class "text-3xl font-bold font-mono tracking-widest py-5 px-6 bg-litehouse-bg rounded-xl my-4 text-litehouse-text" ]
-                    [ text ghState.userCode ]
-                , p [ class "text-litehouse-muted" ]
-                    [ text "Open "
-                    , a [ href ghState.verificationUri, target "_blank", class "text-litehouse-slateBlue hover:underline" ] [ text ghState.verificationUri ]
-                    , text " and enter the code above."
-                    ]
-                , if ghState.polling then
-                    div [ class "flex items-center justify-center gap-3 mt-4 text-litehouse-muted" ]
-                        [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
-                        , span [] [ text "Waiting for authorization..." ]
-                        ]
-
-                  else
-                    button
-                        [ class "mt-4 px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                        , onClick SkipRepoSelection
-                        ]
-                        [ text "Skip" ]
-                ]
-        ]
-
-
-viewSelectRepo : List Effect.RepoInfo -> String -> Html Msg
-viewSelectRepo repos query =
-    let
-        filteredRepos =
-            if String.isEmpty query then
-                repos
-
-            else
-                List.filter
-                    (\repo ->
-                        String.contains (String.toLower query) (String.toLower repo.name)
-                            || String.contains (String.toLower query) (String.toLower repo.fullName)
-                    )
-                    repos
-    in
-    div [ class "py-4" ]
-        [ h3 [ class "text-base font-medium text-litehouse-text mb-4" ] [ text "Step 3: Select Repository (Optional)" ]
-        , div [ class "mb-4" ]
-            [ input
-                [ type_ "text"
-                , placeholder "Search repositories..."
-                , value query
-                , onInput RepoSearchChanged
-                , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                ]
-                []
-            ]
-        , if List.isEmpty repos then
-            div [ class "py-10 text-center" ]
-                [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
-                , p [ class "text-litehouse-muted" ] [ text "Loading repositories..." ]
-                ]
-
-          else
-            div []
-                [ div [ class "max-h-80 overflow-y-auto border border-litehouse-border rounded-xl" ]
-                    (List.map viewRepoItem filteredRepos)
-                , div [ class "mt-4 text-center" ]
-                    [ button
-                        [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                        , onClick SkipRepoSelection
-                        ]
-                        [ text "Create without repository" ]
-                    ]
-                ]
-        ]
-
-
-viewRepoItem : Effect.RepoInfo -> Html Msg
-viewRepoItem repo =
-    div
-        [ class "px-4 py-3 border-b border-litehouse-border last:border-b-0 cursor-pointer hover:bg-litehouse-bg transition-colors"
-        , onClick (ChooseRepo repo)
-        ]
-        [ div [ class "flex justify-between items-center mb-1" ]
-            [ span [ class "font-medium text-litehouse-text" ] [ text repo.fullName ]
-            , if repo.private then
-                span [ class "px-2 py-0.5 rounded text-xs font-medium bg-litehouse-warning/20 text-litehouse-warning" ] [ text "Private" ]
-
-              else
-                span [ class "px-2 py-0.5 rounded text-xs font-medium bg-litehouse-border/50 text-litehouse-muted" ] [ text "Public" ]
-            ]
-        , case repo.description of
-            Just desc ->
-                p [ class "text-sm text-litehouse-muted truncate mb-1" ] [ text desc ]
-
-            Nothing ->
-                text ""
-        , span [ class "text-xs text-litehouse-muted" ] [ text ("Default branch: " ++ repo.defaultBranch) ]
-        ]
-
-
-viewCreating : Html Msg
-viewCreating =
-    div [ class "py-8 text-center" ]
-        [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
-        , p [ class "text-litehouse-muted" ] [ text "Creating app..." ]
-        ]
-
-
-viewError : Maybe String -> Html Msg
-viewError maybeError =
-    case maybeError of
-        Just error ->
-            div [ class "bg-litehouse-error/10 text-litehouse-error p-3 rounded-xl mb-4 text-sm text-left" ] [ text error ]
-
-        Nothing ->
-            text ""
 
 
 -- PAGE LIFECYCLE

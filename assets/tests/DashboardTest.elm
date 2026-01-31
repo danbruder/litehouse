@@ -13,6 +13,7 @@ import Browser.Navigation as Nav
 import Effect exposing (Effect)
 import Expect exposing (Expectation)
 import Page.Dashboard as Dashboard
+import Page.Dashboard.CreateApp as CreateApp
 import Page.Dashboard.EnvVars as EnvVars
 import Shared
 import Test exposing (..)
@@ -44,7 +45,7 @@ testSharedModel maybeToken =
 testCreateAppState : String -> Dashboard.CreateAppState
 testCreateAppState appName =
     { appName = appName
-    , step = Dashboard.CheckingGitHub
+    , step = CreateApp.CheckingGitHub
     , error = Nothing
     }
 
@@ -119,7 +120,7 @@ effectIsNone effect =
 isSelectRepoStep : Dashboard.CreateAppStep -> Bool
 isSelectRepoStep step =
     case step of
-        Dashboard.SelectRepo _ _ ->
+        CreateApp.SelectRepo _ _ ->
             True
 
         _ ->
@@ -131,7 +132,7 @@ isSelectRepoStep step =
 isConnectGitHubStep : Dashboard.CreateAppStep -> Bool
 isConnectGitHubStep step =
     case step of
-        Dashboard.ConnectGitHub _ ->
+        CreateApp.ConnectGitHub _ ->
             True
 
         _ ->
@@ -143,7 +144,7 @@ isConnectGitHubStep step =
 isEnterNameStep : Dashboard.CreateAppStep -> Bool
 isEnterNameStep step =
     case step of
-        Dashboard.EnterName ->
+        CreateApp.EnterName ->
             True
 
         _ ->
@@ -177,7 +178,7 @@ suite =
                     let
                         createState =
                             { appName = "my-app"
-                            , step = Dashboard.CheckingGitHub
+                            , step = CreateApp.CheckingGitHub
                             , error = Just "some previous error"
                             }
 
@@ -265,7 +266,7 @@ suite =
                     let
                         createState =
                             { appName = "my-app"
-                            , step = Dashboard.CheckingGitHub
+                            , step = CreateApp.CheckingGitHub
                             , error = Just "some previous error"
                             }
 
@@ -353,7 +354,7 @@ suite =
                             Dashboard.handleGotGitHubStatus (Ok response) createState Nothing
                     in
                     -- Should stay on CheckingGitHub step since no token
-                    Expect.equal Dashboard.CheckingGitHub newStep
+                    Expect.equal CreateApp.CheckingGitHub newStep
             , test "returns Effect.none" <|
                 \_ ->
                     let

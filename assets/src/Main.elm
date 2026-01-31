@@ -118,25 +118,6 @@ initForTesting flags url () =
         route =
             Route.fromUrl url
 
-        -- Create a test model with a dummy Nav.Key
-        -- Since Nav.Key is opaque and ProgramTest handles navigation,
-        -- we'll use a workaround: create the shared model without a real key
-        -- For now, we'll need to modify Shared.init to handle this case
-        -- Actually, the simplest solution is to use a test-specific Shared.init
-        -- that doesn't require Nav.Key, or use a workaround
-        -- For testing, we need a Nav.Key but it's opaque.
-        -- ProgramTest handles navigation internally via SimulatedEffect.Navigation,
-        -- so the navKey won't be used for actual navigation in tests.
-        -- We'll create a test key using a workaround: since we can't create Nav.Key directly,
-        -- we'll use a helper that creates one from Browser.
-        -- Actually, the simplest workaround is to create a minimal Browser.application
-        -- just to get a Nav.Key, but that's complex.
-        -- For now, let's use a workaround: create the key from the main program.
-        -- Actually, since ProgramTest handles navigation, we can use a dummy approach.
-        -- The key insight: in tests, navKey is only used for type checking, not actual navigation.
-        -- So we can use a workaround where we get the key from somewhere.
-        -- Let's try: use a test helper that provides a key.
-        -- For now, using a workaround with a test-specific key creation.
         -- In tests, navigationKey is () and navigation is handled by ProgramTest via withSimulatedEffects
         shared =
             Shared.init ()
