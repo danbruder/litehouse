@@ -21,14 +21,13 @@ module Page.Dashboard exposing
     )
 
 import Effect exposing (Effect)
-import Html exposing (Html, a, aside, button, div, footer, h1, h2, h3, header, input, label, main_, nav, option, p, pre, select, span, text)
+import Html exposing (Html, a, button, div, h2, h3, input, label, option, p, pre, select, span, text)
 import Html.Attributes exposing (class, disabled, for, href, id, placeholder, required, selected, target, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Dashboard.Data as Data
 import Page.Dashboard.EnvVars as EnvVars
-import Page.Dashboard.Layout as Layout
 import Page.Dashboard.Settings as Settings
 import Shared
 
@@ -154,8 +153,7 @@ init shared =
 
 
 type Msg
-    = Logout
-    | GotApps (Result String (List Effect.AppInfo))
+    = GotApps (Result String (List Effect.AppInfo))
     | GotGitHubStatus (Result String Effect.GitHubStatusResponse)
       -- Create app flow
     | ShowCreateApp
@@ -204,14 +202,6 @@ type Msg
 update : Shared.Model navigationKey -> Msg -> Model -> ( Model, Effect Msg )
 update shared msg model =
     case msg of
-        Logout ->
-            ( model
-            , Effect.batch
-                [ Effect.ClearToken
-                , Effect.PushUrl "/login"
-                ]
-            )
-
         GotApps result ->
             case result of
                 Ok apps ->
@@ -1367,39 +1357,19 @@ handleGotGitHubStatus result createState maybeToken =
 
 view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
-    let
-        userName =
-            case shared.user of
-                Just user ->
-                    user.fullName
+    div []
+        [ case model.view of
+            AppsListView ->
+                viewAppsList model
 
-                Nothing ->
-                    ""
-    in
-    div [ class "min-h-screen bg-litehouse-bg flex flex-col" ]
-        [ Layout.viewHeader shared shared.githubStatus userName ShowCreateApp Logout
-        , div [ class "flex flex-1" ]
-            [ Layout.viewSidebar
-            , main_ [ class "flex-1 p-6" ]
-                [ div [ class "max-w-6xl mx-auto" ]
-                    [ case model.view of
-                        AppsListView ->
-                            viewAppsList model
+            CreateAppView createState ->
+                viewCreateApp shared model createState
 
-                        CreateAppView createState ->
-                            viewCreateApp shared model createState
+            AppDetailView detailState ->
+                viewAppDetail detailState
 
-                        AppDetailView detailState ->
-                            viewAppDetail detailState
-
-                        SettingsView settingsState ->
-                            Html.map SettingsMsg (Settings.view shared settingsState)
-                    ]
-                ]
-            ]
-        , footer [ class "p-4 text-center border-t border-litehouse-border" ]
-            [ Layout.viewVersion shared.serverVersion
-            ]
+            SettingsView settingsState ->
+                Html.map SettingsMsg (Settings.view shared settingsState)
         ]
 
 

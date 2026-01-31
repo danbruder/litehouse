@@ -10,6 +10,7 @@ import Html.Attributes exposing (class)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Layout
 import Page.Dashboard
 import Page.Login
 import Page.Settings
@@ -170,6 +171,7 @@ type Msg
     | SetupMsg Page.Setup.Msg
     | DashboardMsg Page.Dashboard.Msg
     | SettingsMsg Page.Settings.Msg
+    | Logout
     | GotServerStatus (Result String ServerStatus)
     | GotTokenVerification (Result String TokenVerificationResponse)
     | RefreshTokenReceived (Maybe String)
@@ -517,6 +519,26 @@ update msg model =
             in
             ( { model | shared = newShared }, Effect.none )
 
+        Logout ->
+            let
+                newShared =
+                    Shared.update Shared.ClearAuth model.shared
+
+                ( loginModel, loginEffect ) =
+                    Page.Login.init newShared
+            in
+            ( { model
+                | shared = newShared
+                , page = Login loginModel
+              }
+            , Effect.batch
+                [ Effect.ClearToken
+                , Effect.DisconnectSSE
+                , Effect.PushUrl "/login"
+                , Effect.map LoginMsg loginEffect
+                ]
+            )
+
 
 
 -- HANDLE PAGE EFFECTS
@@ -691,12 +713,22 @@ view model =
                     |> Html.map SetupMsg
 
             Dashboard pageModel ->
-                Page.Dashboard.view model.shared pageModel
-                    |> Html.map DashboardMsg
+                Layout.viewShell
+                    { route = model.shared.currentRoute
+                    , shared = model.shared
+                    , onLogout = Logout
+                    , headerAction = Just { label = "+ New App", msg = DashboardMsg Page.Dashboard.ShowCreateApp }
+                    , content = Page.Dashboard.view model.shared pageModel |> Html.map DashboardMsg
+                    }
 
             Settings pageModel ->
-                Page.Settings.view model.shared pageModel
-                    |> Html.map SettingsMsg
+                Layout.viewShell
+                    { route = model.shared.currentRoute
+                    , shared = model.shared
+                    , onLogout = Logout
+                    , headerAction = Nothing
+                    , content = Page.Settings.view model.shared pageModel |> Html.map SettingsMsg
+                    }
         ]
     }
 

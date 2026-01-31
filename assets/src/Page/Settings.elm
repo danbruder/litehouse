@@ -9,8 +9,8 @@ module Page.Settings exposing
     )
 
 import Effect exposing (Effect)
-import Html exposing (Html, a, button, div, h1, h2, h3, input, label, p, span, text)
-import Html.Attributes exposing (class, disabled, for, id, placeholder, required, type_, value, href)
+import Html exposing (Html, button, div, h2, h3, input, label, p, span, text)
+import Html.Attributes exposing (class, disabled, for, id, placeholder, required, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Shared
 
@@ -243,55 +243,21 @@ update shared msg model =
 
 view : Shared.Model navigationKey -> Model -> Html Msg
 view shared model =
-    div [ class "min-h-screen bg-litehouse-bg" ]
-        [ viewHeader shared
-        , div [ class "max-w-5xl mx-auto px-6 py-8" ]
-            [ viewBackLink
-            , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6 mt-4" ]
-                [ div [ class "flex justify-between items-center mb-6 pb-4 border-b border-litehouse-border" ]
-                    [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "Settings" ]
-                    ]
-                , div []
-                    [ h3 [ class "text-lg font-medium text-litehouse-text mb-4" ] [ text "S3 Backup Configuration" ]
-                    , p [ class "text-sm text-litehouse-muted mb-6" ]
-                        [ text "Configure S3-compatible storage for SQLite backups using Litestream." ]
-                    , if model.s3ConfigLoading then
-                        viewLoading
+    div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
+        [ div [ class "flex justify-between items-center mb-6 pb-4 border-b border-litehouse-border" ]
+            [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "Settings" ]
+            ]
+        , div []
+            [ h3 [ class "text-lg font-medium text-litehouse-text mb-4" ] [ text "S3 Backup Configuration" ]
+            , p [ class "text-sm text-litehouse-muted mb-6" ]
+                [ text "Configure S3-compatible storage for SQLite backups using Litestream." ]
+            , if model.s3ConfigLoading then
+                viewLoading
 
-                      else
-                        viewS3ConfigForm model
-                    ]
-                ]
+              else
+                viewS3ConfigForm model
             ]
         ]
-
-
-viewHeader : Shared.Model navigationKey -> Html Msg
-viewHeader shared =
-    div [ class "bg-litehouse-surface border-b border-litehouse-border" ]
-        [ div [ class "max-w-5xl mx-auto px-6 py-4 flex justify-between items-center" ]
-            [ h1 [ class "text-2xl font-bold text-litehouse-text" ] [ text "Litehouse" ]
-            , viewUserInfo shared
-            ]
-        ]
-
-
-viewBackLink : Html Msg
-viewBackLink =
-    a [ href "/dashboard", class "inline-flex items-center text-sm text-litehouse-muted hover:text-litehouse-text transition-colors" ]
-        [ text "← Back to Dashboard" ]
-
-
-viewUserInfo : Shared.Model navigationKey -> Html Msg
-viewUserInfo shared =
-    case shared.user of
-        Just user ->
-            div [ class "flex items-center gap-3" ]
-                [ span [ class "text-sm text-litehouse-muted" ] [ text user.email ]
-                ]
-
-        Nothing ->
-            text ""
 
 
 viewLoading : Html Msg
