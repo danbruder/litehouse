@@ -152,6 +152,9 @@ enum Commands {
         #[command(subcommand)]
         command: AuthCmd,
     },
+
+    /// Check DNS configuration for the configured domain
+    CheckDns,
 }
 
 #[derive(Subcommand)]
@@ -437,6 +440,9 @@ pub async fn run() -> Result<()> {
                     AuthCmd::Status => {
                         crate::commands::auth::cli::status::execute(&api_client).await
                     }
+                },
+                Commands::CheckDns => {
+                    crate::commands::check_dns::execute().await
                 },
                 Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => {
                     unreachable!("Already handled above")

@@ -250,3 +250,13 @@ See VISION.md for complete roadmap. Current status:
 **Target use case:** Self-hosted SQLite apps with automatic backups, similar to Vercel's deployment model but optimized for single-host, SQLite-first workloads.
 
 **Architecture decision:** Litehouse runs as a Docker container to ensure consistent deployment, easy upgrades, and isolation from the host system. The `lh` CLI binary is installed on the host for administration, but the server itself runs containerized.
+
+## The server 
+
+Working with a server right now that you can access at root@104.248.15.20; feel free to ssh into the server if required. Also no production workloads are running on it so feel free to make changes. If you are fixing an issue with the server, ALWAYS loop the learnings back into the code (install/upgrade script etc) so that future installs don't have the defect. 
+
+It is a digital ocean server that I'm happy to wipe clean and reinstall if needed. 
+
+Cloudflare manages the domain (litehouse.run) and it points `*.litehouse.run` to the IP address above.
+
+When re-installing, use the litehouse.run domain.

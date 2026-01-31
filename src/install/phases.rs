@@ -358,6 +358,70 @@ pub fn phase10_enable_docker_restart(_litehouse_uid: &str) -> Result<()> {
 pub fn phase11_verification(domain: &str) -> Result<()> {
     info!("Phase 11: Verification");
 
+    // Step 1: Verify DNS configuration
+    info!("Step 1: Verifying DNS configuration...");
+
+    // Get this server's public IP
+    let server_ip = match run_command("curl -4 -s ifconfig.me --max-time 10") {
+        Ok(ip) => ip.trim().to_string(),
+        Err(_) => {
+            // Try alternative service
+            match run_command("curl -4 -s icanhazip.com --max-time 10") {
+                Ok(ip) => ip.trim().to_string(),
+                Err(e) => {
+                    anyhow::bail!("Failed to determine server's public IP address: {}", e);
+                }
+            }
+        }
+    };
+
+    info!("Server public IP: {}", server_ip);
+
+    // Check if dig is available, otherwise use host
+    let dns_command = if run_command("which dig").is_ok() {
+        format!("dig +short admin.{} A | head -1", domain)
+    } else {
+        format!("host -t A admin.{} | grep 'has address' | awk '{{print $NF}}' | head -1", domain)
+    };
+
+    // Resolve DNS for admin subdomain
+    match run_command(&dns_command) {
+        Ok(resolved_ip) => {
+            let resolved_ip = resolved_ip.trim();
+            if resolved_ip.is_empty() {
+                anyhow::bail!(
+                    "DNS verification failed: admin.{} does not resolve to any IP address.\n\
+                    Please configure your DNS provider to point:\n\
+                    - admin.{} (A record) -> {}\n\
+                    - *.{} (A record) -> {}",
+                    domain, domain, server_ip, domain, server_ip
+                );
+            } else if resolved_ip != server_ip {
+                anyhow::bail!(
+                    "DNS verification failed: admin.{} resolves to {} but this server's IP is {}.\n\
+                    Please update your DNS provider to point:\n\
+                    - admin.{} (A record) -> {}\n\
+                    - *.{} (A record) -> {}",
+                    domain, resolved_ip, server_ip,
+                    domain, server_ip, domain, server_ip
+                );
+            } else {
+                info!("✓ DNS configured correctly: admin.{} -> {}", domain, resolved_ip);
+            }
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "DNS verification failed: Unable to resolve admin.{}: {}\n\
+                Please configure your DNS provider to point:\n\
+                - admin.{} (A record) -> {}\n\
+                - *.{} (A record) -> {}",
+                domain, e, domain, server_ip, domain, server_ip
+            );
+        }
+    }
+
+    // Step 2: Verify API endpoint is responding
+    info!("Step 2: Verifying API endpoint is responding...");
     let api_url = format!("http://admin.{}/apps", domain);
     info!("Testing API endpoint: {}", api_url);
 
@@ -372,7 +436,7 @@ pub fn phase11_verification(domain: &str) -> Result<()> {
             Ok(output) => {
                 let status_code = output.trim();
                 if status_code == "200" {
-                    info!("API endpoint responding successfully!");
+                    info!("✓ API endpoint responding successfully!");
                     info!("Phase 11 completed successfully");
                     return Ok(());
                 } else {
