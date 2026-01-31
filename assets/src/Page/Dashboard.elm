@@ -1951,22 +1951,31 @@ viewSidebarItem label item activeItem =
 
             else
                 "text-litehouse-muted hover:bg-litehouse-bg hover:text-litehouse-text"
-
-        onClickMsg =
-            case item of
-                MyApps ->
-                    NoOp
-
-                Activity ->
-                    NoOp
-
-                Backups ->
-                    NoOp
-
-                Settings ->
-                    ShowSettings
     in
-    button [ class (baseClasses ++ " " ++ activeClasses), onClick onClickMsg ] [ text label ]
+    case item of
+        MyApps ->
+            a [ class (baseClasses ++ " " ++ activeClasses), href "/dashboard" ] [ text label ]
+
+        Settings ->
+            a [ class (baseClasses ++ " " ++ activeClasses), href "/settings" ] [ text label ]
+
+        _ ->
+            let
+                onClickMsg =
+                    case item of
+                        MyApps ->
+                            NoOp
+
+                        Activity ->
+                            NoOp
+
+                        Backups ->
+                            NoOp
+
+                        Settings ->
+                            NoOp
+            in
+            button [ class (baseClasses ++ " " ++ activeClasses), onClick onClickMsg ] [ text label ]
 
 
 viewGitHubStatusBadge : Shared.GitHubStatus -> Html Msg

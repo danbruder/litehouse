@@ -17,6 +17,7 @@ type Route
     | Setup
     | Dashboard
     | AppDetail String
+    | Settings
 
 
 -- PARSER
@@ -30,6 +31,7 @@ parser =
         , Parser.map Setup (s "setup")
         , Parser.map Dashboard (s "dashboard")
         , Parser.map AppDetail (s "apps" </> string)
+        , Parser.map Settings (s "settings")
         ]
 
 
@@ -52,3 +54,6 @@ toString route =
 
         AppDetail appName ->
             "/apps/" ++ appName
+
+        Settings ->
+            "/settings"

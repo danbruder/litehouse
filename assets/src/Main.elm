@@ -10,6 +10,7 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Dashboard
 import Page.Login
+import Page.Settings
 import Page.Setup
 import Route
 import Shared
@@ -98,6 +99,7 @@ type Page
     | Login Page.Login.Model
     | Setup Page.Setup.Model
     | Dashboard Page.Dashboard.Model
+    | Settings Page.Settings.Model
 
 
 
@@ -198,6 +200,7 @@ type Msg
     | LoginMsg Page.Login.Msg
     | SetupMsg Page.Setup.Msg
     | DashboardMsg Page.Dashboard.Msg
+    | SettingsMsg Page.Settings.Msg
     | GotServerStatus (Result String ServerStatus)
     | GotTokenVerification (Result String TokenVerificationResponse)
     | RefreshTokenReceived (Maybe String)
@@ -278,6 +281,18 @@ update msg model =
                             , Effect.none
                             )
 
+                Just Route.Settings ->
+                    let
+                        ( pageModel, effect ) =
+                            Page.Settings.init newShared
+                    in
+                    ( { model
+                        | shared = newShared
+                        , page = Settings pageModel
+                      }
+                    , Effect.map SettingsMsg effect
+                    )
+
                 Nothing ->
                     ( { model
                         | shared = newShared
@@ -344,6 +359,20 @@ update msg model =
                             handleDashboardEffect model newPageModel effect
                     in
                     ( newModel, cmd )
+
+                _ ->
+                    ( model, Effect.none )
+
+        SettingsMsg settingsMsg ->
+            case model.page of
+                Settings pageModel ->
+                    let
+                        ( newPageModel, effect ) =
+                            Page.Settings.update model.shared settingsMsg pageModel
+                    in
+                    ( { model | page = Settings newPageModel }
+                    , Effect.map SettingsMsg effect
+                    )
 
                 _ ->
                     ( model, Effect.none )
@@ -1427,6 +1456,10 @@ view model =
             Dashboard pageModel ->
                 Page.Dashboard.view model.shared pageModel
                     |> Html.map DashboardMsg
+
+            Settings pageModel ->
+                Page.Settings.view model.shared pageModel
+                    |> Html.map SettingsMsg
         ]
     }
 
@@ -1448,6 +1481,9 @@ getPageTitle page =
 
         Dashboard _ ->
             "Dashboard - Litehouse"
+
+        Settings _ ->
+            "Settings - Litehouse"
 
 
 viewNotFound : Html Msg

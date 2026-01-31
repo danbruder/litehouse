@@ -106,11 +106,14 @@ async fn list_apps(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoRespo
                 .collect::<Vec<AppInfo>>();
             Json(app_infos).into_response()
         }
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to list apps: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list apps: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list apps: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -150,11 +153,14 @@ async fn get_app(
             format!("App '{}' not found", name),
         )
             .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to get app: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get app '{}': {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -172,11 +178,14 @@ async fn start_app(
             format!("App '{}' started", name),
         )
             .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to start app: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to start app '{}': {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to start app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -191,11 +200,14 @@ async fn stop_app(
             format!("App '{}' stopped", name),
         )
             .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to stop app: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to stop app '{}': {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to stop app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -408,6 +420,7 @@ async fn create_app(
 
     // Create the app
     if let Err(e) = create::execute(&pool, &payload.name).await {
+        tracing::error!("Failed to create app '{}': {}", payload.name, e);
         return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create app: {}", e),
@@ -429,6 +442,7 @@ async fn create_app(
                         .into_response();
                 }
                 Err(e) => {
+                    tracing::error!("Failed to get GitHub connection for app '{}': {}", payload.name, e);
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("Failed to get GitHub connection: {}", e),
@@ -451,6 +465,7 @@ async fn create_app(
         let repo_info = match gh_client.get_repo(parts[0], parts[1]).await {
             Ok(info) => info,
             Err(e) => {
+                tracing::warn!("Repository '{}' not found or not accessible for app '{}': {}", repo, payload.name, e);
                 return (
                     StatusCode::NOT_FOUND,
                     format!("Repository not found or not accessible: {}", e),
@@ -473,6 +488,7 @@ async fn create_app(
         )
         .await
         {
+            tracing::error!("App '{}' created but failed to add remote: {}", payload.name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("App created but failed to add remote: {}", e),
@@ -492,16 +508,22 @@ async fn create_app(
             }),
         )
             .into_response(),
-        Ok(None) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "App created but could not be retrieved",
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("App created but failed to retrieve: {}", e),
-        )
-            .into_response(),
+        Ok(None) => {
+            tracing::error!("App '{}' created but could not be retrieved", payload.name);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "App created but could not be retrieved",
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!("App '{}' created but failed to retrieve: {}", payload.name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("App created but failed to retrieve: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -562,11 +584,14 @@ async fn get_env(
                         .collect();
                     Json(response).into_response()
                 }
-                Err(e) => (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to get environment variables: {}", e),
-                )
-                    .into_response(),
+                Err(e) => {
+                    tracing::error!("Failed to get environment variables for app '{}': {}", name, e);
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to get environment variables: {}", e),
+                    )
+                        .into_response()
+                }
             }
         }
         Ok(None) => (
@@ -574,11 +599,14 @@ async fn get_env(
             format!("App '{}' not found", name),
         )
             .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to get app: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get app '{}' for env vars: {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -606,11 +634,14 @@ async fn set_env(
             ),
         )
             .into_response(),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to set environment variable: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to set environment variable '{}' for app '{}': {}", payload.key, name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to set environment variable: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -657,11 +688,14 @@ async fn add_remote(
             format!("Remote configured for app '{}'", name),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to configure remote: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to configure remote for app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to configure remote: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -672,11 +706,14 @@ async fn remove_remote(
     let pool = state.read().await.db_pool.clone();
     match remote::remove::execute(&pool, &name).await {
         Ok(_) => (StatusCode::OK, format!("Remote removed for app '{}'", name)).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to remove remote: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to remove remote for app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to remove remote: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -708,11 +745,14 @@ async fn build_app(
             format!("App '{}' is already building", name),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to build app: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to build app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build app: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -740,6 +780,7 @@ async fn list_builds(
             return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
         }
         Err(e) => {
+            tracing::error!("Failed to get app '{}' for builds: {}", name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to get app: {}", e),
@@ -763,11 +804,14 @@ async fn list_builds(
                 .collect();
             Json(build_infos).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to list builds: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list builds for app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list builds: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -805,6 +849,7 @@ async fn get_build_logs(
                 .into_response();
         }
         Err(e) => {
+            tracing::error!("Failed to get app '{}' for build logs: {}", params.name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to get app: {}", e),
@@ -824,6 +869,7 @@ async fn get_build_logs(
                 .into_response();
         }
         Err(e) => {
+            tracing::error!("Failed to get build '{}' for app '{}': {}", params.build_id, params.name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to get build: {}", e),
@@ -952,11 +998,14 @@ async fn get_build_logs(
         // Return all logs as plain text
         match tokio::fs::read_to_string(&log_path).await {
             Ok(content) => (StatusCode::OK, content).into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read log file: {}", e),
-            )
-                .into_response(),
+            Err(e) => {
+                tracing::error!("Failed to read log file for build '{}': {}", params.build_id, e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read log file: {}", e),
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -1002,18 +1051,24 @@ async fn set_s3_config(
                     "S3 configuration saved and Litestream updated successfully",
                 )
                     .into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("S3 config saved but failed to update Litestream: {}", e),
-                )
-                    .into_response(),
+                Err(e) => {
+                    tracing::error!("S3 config saved but failed to update Litestream: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("S3 config saved but failed to update Litestream: {}", e),
+                    )
+                        .into_response()
+                }
             }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save S3 config: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to save S3 config: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save S3 config: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1027,11 +1082,14 @@ async fn get_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoR
             Json(redacted).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND, "No S3 configuration found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to get S3 config: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get S3 config: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get S3 config: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1049,18 +1107,24 @@ async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl In
                     "S3 configuration deleted and Litestream updated successfully",
                 )
                     .into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("S3 config deleted but failed to update Litestream: {}", e),
-                )
-                    .into_response(),
+                Err(e) => {
+                    tracing::error!("S3 config deleted but failed to update Litestream: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("S3 config deleted but failed to update Litestream: {}", e),
+                    )
+                        .into_response()
+                }
             }
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to delete S3 config: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to delete S3 config: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to delete S3 config: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1084,11 +1148,14 @@ async fn auth_status_handler(State(state): State<Arc<RwLock<AppState>>>) -> impl
             };
             Json(response).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to check server status: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to check server status: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to check server status: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1213,19 +1280,25 @@ async fn get_current_user(
                     organizations: orgs,
                 })
                 .into_response(),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Failed to get user organizations: {}", e),
-                )
-                    .into_response(),
+                Err(e) => {
+                    tracing::error!("Failed to get organizations for user '{}': {}", user.id, e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to get user organizations: {}", e),
+                    )
+                        .into_response()
+                }
             }
         }
         Ok(None) => (StatusCode::NOT_FOUND, "User not found").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to get user: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get current user: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get user: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1262,11 +1335,14 @@ async fn github_connect_start(State(state): State<Arc<RwLock<AppState>>>) -> imp
             interval: response.interval,
         })
         .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to start GitHub device flow: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to start GitHub device flow: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to start GitHub device flow: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1321,6 +1397,7 @@ async fn github_connect_poll(
             return (StatusCode::FORBIDDEN, "Authorization was denied").into_response();
         }
         Err(e) => {
+            tracing::error!("Failed to poll for GitHub token: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to poll for token: {}", e),
@@ -1334,6 +1411,7 @@ async fn github_connect_poll(
     let gh_user = match gh_client.get_user().await {
         Ok(user) => user,
         Err(e) => {
+            tracing::error!("Failed to get GitHub user info: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to get GitHub user: {}", e),
@@ -1353,6 +1431,7 @@ async fn github_connect_poll(
     );
 
     if let Err(e) = db::github_connection::save(&pool, &connection).await {
+        tracing::error!("Failed to save GitHub connection for user '{}': {}", auth_user.user_id, e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to save GitHub connection: {}", e),
@@ -1504,11 +1583,14 @@ async fn github_disconnect(
 
     match db::github_connection::delete_by_user_id(&pool, &auth_user.user_id).await {
         Ok(_) => (StatusCode::OK, "GitHub connection removed").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to remove GitHub connection: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to remove GitHub connection for user '{}': {}", auth_user.user_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to remove GitHub connection: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1542,11 +1624,14 @@ async fn github_status(
             scopes: None,
         })
         .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to get GitHub status: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get GitHub status for user '{}': {}", auth_user.user_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get GitHub status: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1574,6 +1659,7 @@ async fn github_list_repos(
                 .into_response();
         }
         Err(e) => {
+            tracing::error!("Failed to get GitHub connection for user '{}': {}", auth_user.user_id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to get GitHub connection: {}", e),
@@ -1587,11 +1673,14 @@ async fn github_list_repos(
 
     match gh_client.list_repos(limit).await {
         Ok(repos) => Json(repos).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to list repositories: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list GitHub repositories for user '{}': {}", auth_user.user_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list repositories: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1631,11 +1720,14 @@ async fn github_search_repos(
 
     match gh_client.search_repos(&query.q).await {
         Ok(repos) => Json(repos).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to search repositories: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to search GitHub repositories for user '{}': {}", auth_user.user_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to search repositories: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1766,6 +1858,7 @@ async fn get_webhook_config_handler(
         Ok(Some(app)) => app,
         Ok(None) => return (StatusCode::NOT_FOUND, "App not found").into_response(),
         Err(e) => {
+            tracing::error!("Failed to get app '{}' for webhook config: {}", name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Error: {}", e),
@@ -1786,11 +1879,14 @@ async fn get_webhook_config_handler(
             Json(response).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND, "Webhook not configured").into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get webhook config for app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: {}", e),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1808,6 +1904,7 @@ async fn get_webhook_deliveries_handler(
         Ok(Some(app)) => app,
         Ok(None) => return (StatusCode::NOT_FOUND, "App not found").into_response(),
         Err(e) => {
+            tracing::error!("Failed to get app '{}' for webhook deliveries: {}", name, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Error: {}", e),
@@ -1823,10 +1920,13 @@ async fn get_webhook_deliveries_handler(
 
     match db::webhook::get_webhook_deliveries_by_app(&pool, &app.id, limit).await {
         Ok(deliveries) => Json(deliveries).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Error: {}", e),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get webhook deliveries for app '{}': {}", name, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error: {}", e),
+            )
+                .into_response()
+        }
     }
 }
