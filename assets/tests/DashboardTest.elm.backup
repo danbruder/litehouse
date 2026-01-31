@@ -1141,7 +1141,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar model
+                            Dashboard.update shared Dashboard.SubmitEnvVar model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
@@ -1191,7 +1191,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar model
+                            Dashboard.update shared Dashboard.SubmitEnvVar model
                     in
                     effectContainsSetEnvVar effect
                         |> Expect.equal True
@@ -1240,7 +1240,7 @@ suite =
                             testSharedModel Nothing
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.CancelEnvVarEdit model
+                            Dashboard.update shared Dashboard.CancelEnvVarEdit model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
@@ -1298,7 +1298,7 @@ suite =
                             testSharedModel Nothing
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.EditEnvVar "EXISTING_KEY") model
+                            Dashboard.update shared (Dashboard.EditEnvVar "EXISTING_KEY") model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
@@ -1355,7 +1355,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.DeleteEnvVar "KEY_TO_DELETE") model
+                            Dashboard.update shared (Dashboard.DeleteEnvVar "KEY_TO_DELETE") model
                     in
                     effectContainsSetEnvVar effect
                         |> Expect.equal True
@@ -1404,7 +1404,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Ok "Success")) model
+                            Dashboard.update shared (Dashboard.GotEnvVarSet (Ok "Success")) model
                     in
                     effectContainsFetchEnvVars effect
                         |> Expect.equal True
@@ -1451,7 +1451,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Err "Failed to set env var")) model
+                            Dashboard.update shared (Dashboard.GotEnvVarSet (Err "Failed to set env var")) model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->

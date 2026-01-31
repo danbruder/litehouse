@@ -26,6 +26,7 @@ import Html.Attributes exposing (class, disabled, for, href, id, placeholder, re
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Page.Dashboard.EnvVars as EnvVars
 import Page.Dashboard.Layout as Layout
 import Page.Dashboard.Settings as Settings
 import Shared
@@ -87,16 +88,7 @@ type alias AppDetailState =
     , error : Maybe String
     , streamingBuildId : Maybe String
     , buildLogsStreaming : Bool
-    , envVars : List Effect.EnvVar
-    , envVarsLoading : Bool
-    , envVarForm : EnvVarFormState
-    }
-
-
-type alias EnvVarFormState =
-    { key : String
-    , value : String
-    , editingKey : Maybe String
+    , envVarsModel : EnvVars.Model
     }
 
 
@@ -200,15 +192,7 @@ type Msg
     | SelectBuild String
     | GotBuildLogs (Result String String)
       -- Environment variables
-    | FetchEnvVars
-    | GotEnvVars (Result String (List Effect.EnvVar))
-    | EnvVarKeyChanged String
-    | EnvVarValueChanged String
-    | SubmitEnvVar
-    | CancelEnvVarEdit
-    | EditEnvVar String
-    | DeleteEnvVar String
-    | GotEnvVarSet (Result String String)
+    | EnvVarsMsg EnvVars.Msg
       -- Settings
     | ShowSettings
     | SettingsMsg Settings.Msg
@@ -527,8 +511,8 @@ update shared msg model =
                         envVarsEffect =
                             case shared.token of
                                 Just token ->
-                                    Effect.FetchEnvVars token app.name GotEnvVars
-                                
+                                    Effect.FetchEnvVars token app.name (EnvVarsMsg << EnvVars.GotEnvVars)
+
                                 Nothing ->
                                     Effect.none
                     in
@@ -547,12 +531,10 @@ update shared msg model =
                                 , error = Nothing
                                 , streamingBuildId = streamingBuildId
                                 , buildLogsStreaming = buildLogsStreaming
-                                , envVars = []
-                                , envVarsLoading = False
-                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                , envVarsModel = EnvVars.init
                                 }
                       }
-                    , Effect.batch 
+                    , Effect.batch
                         [ logStreamingEffect
                         , sseFilterEffect
                         , envVarsEffect
@@ -931,195 +913,23 @@ update shared msg model =
                 _ ->
                     ( model, Effect.none )
 
-        FetchEnvVars ->
-            case ( model.view, shared.token ) of
-                ( AppDetailView detailState, Just token ) ->
-                    ( { model
-                        | view = AppDetailView { detailState | envVarsLoading = True }
-                      }
-                    , Effect.FetchEnvVars token detailState.app.name GotEnvVars
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
-        GotEnvVars result ->
-            case model.view of
-                AppDetailView detailState ->
-                    case result of
-                        Ok envVars ->
-                            ( { model
-                                | view =
-                                    AppDetailView
-                                        { detailState
-                                            | envVars = envVars
-                                            , envVarsLoading = False
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                        Err _ ->
-                            ( { model
-                                | view = AppDetailView { detailState | envVarsLoading = False }
-                              }
-                            , Effect.none
-                            )
-
-                _ ->
-                    ( model, Effect.none )
-
-        EnvVarKeyChanged key ->
-            case model.view of
-                AppDetailView detailState ->
-                    let
-                        currentForm = detailState.envVarForm
-                        updatedForm = { currentForm | key = key }
-                    in
-                    ( { model
-                        | view =
-                            AppDetailView
-                                { detailState | envVarForm = updatedForm }
-                      }
-                    , Effect.none
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
-        EnvVarValueChanged value ->
-            case model.view of
-                AppDetailView detailState ->
-                    let
-                        currentForm = detailState.envVarForm
-                        updatedForm = { currentForm | value = value }
-                    in
-                    ( { model
-                        | view =
-                            AppDetailView
-                                { detailState | envVarForm = updatedForm }
-                      }
-                    , Effect.none
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
-        SubmitEnvVar ->
+        EnvVarsMsg envVarsMsg ->
             case ( model.view, shared.token ) of
                 ( AppDetailView detailState, Just token ) ->
                     let
-                        formState = detailState.envVarForm
+                        ( updatedEnvVarsModel, envVarsEffect, maybeError ) =
+                            EnvVars.update envVarsMsg detailState.envVarsModel token detailState.app.name
                     in
-                    if String.isEmpty (String.trim formState.key) then
-                        ( { model
-                            | view =
-                                AppDetailView
-                                    { detailState
-                                        | error = Just "Environment variable key is required"
-                                    }
-                          }
-                        , Effect.none
-                        )
-
-                    else
-                        ( { model
-                            | view =
-                                AppDetailView
-                                    { detailState
-                                        | envVarForm = { key = "", value = "", editingKey = Nothing }
-                                        , error = Nothing
-                                    }
-                          }
-                        , Effect.SetEnvVar token detailState.app.name formState.key formState.value False GotEnvVarSet
-                        )
-
-                _ ->
-                    ( model, Effect.none )
-
-        CancelEnvVarEdit ->
-            case model.view of
-                AppDetailView detailState ->
                     ( { model
                         | view =
                             AppDetailView
                                 { detailState
-                                    | envVarForm = { key = "", value = "", editingKey = Nothing }
-                                    , error = Nothing
+                                    | envVarsModel = updatedEnvVarsModel
+                                    , error = maybeError
                                 }
                       }
-                    , Effect.none
+                    , Effect.map EnvVarsMsg envVarsEffect
                     )
-
-                _ ->
-                    ( model, Effect.none )
-
-        EditEnvVar key ->
-            case model.view of
-                AppDetailView detailState ->
-                    let
-                        envVar =
-                            List.filter (\ev -> ev.key == key) detailState.envVars
-                                |> List.head
-                    in
-                    case envVar of
-                        Just ev ->
-                            ( { model
-                                | view =
-                                    AppDetailView
-                                        { detailState
-                                            | envVarForm =
-                                                { key = ev.key
-                                                , value = ev.value
-                                                , editingKey = Just ev.key
-                                                }
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                        Nothing ->
-                            ( model, Effect.none )
-
-                _ ->
-                    ( model, Effect.none )
-
-        DeleteEnvVar key ->
-            case ( model.view, shared.token ) of
-                ( AppDetailView detailState, Just token ) ->
-                    ( { model
-                        | view =
-                            AppDetailView
-                                { detailState
-                                    | envVarForm = { key = "", value = "", editingKey = Nothing }
-                                    , error = Nothing
-                                }
-                      }
-                    , Effect.SetEnvVar token detailState.app.name key "" True GotEnvVarSet
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
-        GotEnvVarSet result ->
-            case ( model.view, shared.token ) of
-                ( AppDetailView detailState, Just token ) ->
-                    case result of
-                        Ok _ ->
-                            ( model
-                            , Effect.FetchEnvVars token detailState.app.name GotEnvVars
-                            )
-
-                        Err err ->
-                            ( { model
-                                | view =
-                                    AppDetailView
-                                        { detailState
-                                            | error = Just err
-                                        }
-                              }
-                            , Effect.none
-                            )
 
                 _ ->
                     ( model, Effect.none )
@@ -1906,7 +1716,7 @@ viewAppDetail state =
         -- Environment Variables section
         , div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
             [ h3 [ class "text-base font-semibold text-litehouse-text mb-4" ] [ text "Environment Variables" ]
-            , viewEnvVars state
+            , Html.map EnvVarsMsg (EnvVars.view state.envVarsModel)
             ]
 
         -- Logs section
@@ -2248,118 +2058,6 @@ viewError maybeError =
         Nothing ->
             text ""
 
-
-viewEnvVars : AppDetailState -> Html Msg
-viewEnvVars state =
-    div [ class "space-y-4" ]
-        [ if state.envVarsLoading then
-            div [ class "flex items-center justify-center gap-3 py-4 text-litehouse-muted" ]
-                [ div [ class "w-5 h-5 border-2 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow" ] []
-                , span [] [ text "Loading environment variables..." ]
-                ]
-
-          else
-            div []
-                [ -- List of existing env vars
-                  if List.isEmpty state.envVars then
-                    p [ class "text-sm text-litehouse-muted italic mb-4" ] [ text "No environment variables set" ]
-
-                  else
-                    div [ class "mb-4 space-y-2" ]
-                        (List.map (viewEnvVarRow state) state.envVars)
-
-                -- Form to add/edit env var
-                , viewEnvVarForm state
-                ]
-        ]
-
-
-viewEnvVarRow : AppDetailState -> Effect.EnvVar -> Html Msg
-viewEnvVarRow state envVar =
-    let
-        isEditing =
-            state.envVarForm.editingKey == Just envVar.key
-    in
-    if isEditing then
-        text ""
-
-    else
-        div [ class "flex items-center justify-between p-3 bg-litehouse-bg rounded-xl border border-litehouse-border" ]
-            [ div [ class "flex-1" ]
-                [ div [ class "text-sm font-medium text-litehouse-text font-mono" ] [ text envVar.key ]
-                , div [ class "text-xs text-litehouse-muted font-mono mt-1 truncate" ] [ text envVar.value ]
-                ]
-            , div [ class "flex items-center gap-2 ml-4" ]
-                [ button
-                    [ class "px-3 py-1.5 text-xs border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                    , onClick (EditEnvVar envVar.key)
-                    ]
-                    [ text "Edit" ]
-                , button
-                    [ class "px-3 py-1.5 text-xs bg-litehouse-error hover:bg-litehouse-error/80 text-white rounded-xl transition-colors"
-                    , onClick (DeleteEnvVar envVar.key)
-                    ]
-                    [ text "Delete" ]
-                ]
-            ]
-
-
-viewEnvVarForm : AppDetailState -> Html Msg
-viewEnvVarForm state =
-    let
-        formState = state.envVarForm
-        isEditing = formState.editingKey /= Nothing
-        submitLabel = if isEditing then "Update" else "Add"
-        cancelButton =
-            if isEditing then
-                button
-                    [ class "px-4 py-2 border border-litehouse-border text-litehouse-muted hover:bg-litehouse-bg rounded-xl transition-colors"
-                    , onClick CancelEnvVarEdit
-                    ]
-                    [ text "Cancel" ]
-
-            else
-                text ""
-    in
-    Html.form [ onSubmit SubmitEnvVar, class "space-y-3" ]
-        [ div [ class "grid grid-cols-2 gap-3" ]
-            [ div []
-                [ label [ for "envKey", class "block mb-1 text-xs font-medium text-litehouse-text" ] [ text "Key" ]
-                , input
-                    [ type_ "text"
-                    , id "envKey"
-                    , value formState.key
-                    , onInput EnvVarKeyChanged
-                    , placeholder "ENV_VAR_NAME"
-                    , required True
-                    , disabled isEditing
-                    , class "w-full px-3 py-2 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 disabled:opacity-50 disabled:cursor-not-allowed font-mono"
-                    ]
-                    []
-                ]
-            , div []
-                [ label [ for "envValue", class "block mb-1 text-xs font-medium text-litehouse-text" ] [ text "Value" ]
-                , input
-                    [ type_ "text"
-                    , id "envValue"
-                    , value formState.value
-                    , onInput EnvVarValueChanged
-                    , placeholder "value"
-                    , required True
-                    , class "w-full px-3 py-2 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50 font-mono"
-                    ]
-                    []
-                ]
-            ]
-        , div [ class "flex items-center gap-3" ]
-            [ button
-                [ type_ "submit"
-                , class "px-4 py-2 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors"
-                ]
-                [ text submitLabel ]
-            , cancelButton
-            ]
-        ]
 
 -- HELPER FUNCTIONS
 
