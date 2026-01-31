@@ -27,6 +27,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Dashboard.Layout as Layout
+import Page.Dashboard.Settings as Settings
 import Shared
 
 
@@ -100,12 +101,7 @@ type alias EnvVarFormState =
 
 
 type alias SettingsState =
-    { s3Config : Maybe Effect.S3ConfigRedacted
-    , s3ConfigLoading : Bool
-    , s3Form : Effect.S3ConfigForm
-    , s3FormError : Maybe String
-    , s3FormSaving : Bool
-    }
+    Settings.Model
 
 
 type AppAction
@@ -213,14 +209,9 @@ type Msg
     | EditEnvVar String
     | DeleteEnvVar String
     | GotEnvVarSet (Result String String)
-      -- Settings / S3 Config
+      -- Settings
     | ShowSettings
-    | GotS3Config (Result String (Maybe Effect.S3ConfigRedacted))
-    | S3FormFieldChanged String String  -- field name, value
-    | SubmitS3Config
-    | GotS3ConfigSet (Result String String)
-    | DeleteS3Config
-    | GotS3ConfigDeleted (Result String String)
+    | SettingsMsg Settings.Msg
       -- Unified SSE message handler
     | HandleSSEEvent Decode.Value
 
@@ -1136,258 +1127,29 @@ update shared msg model =
         ShowSettings ->
             case shared.token of
                 Just token ->
-                    let
-                        settingsState =
-                            { s3Config = Nothing
-                            , s3ConfigLoading = True
-                            , s3Form =
-                                { accessKeyId = ""
-                                , secretAccessKey = ""
-                                , bucket = ""
-                                , region = "us-east-1"
-                                , endpoint = ""
-                                , pathPrefix = "litehouse"
-                                }
-                            , s3FormError = Nothing
-                            , s3FormSaving = False
-                            }
-                    in
                     ( { model
-                        | view = SettingsView settingsState
+                        | view = SettingsView Settings.init
                         , activeSidebarItem = Settings
                       }
-                    , Effect.FetchS3Config token GotS3Config
+                    , Effect.FetchS3Config token (SettingsMsg << Settings.GotS3Config)
                     )
 
                 Nothing ->
                     ( model, Effect.none )
 
-        GotS3Config result ->
-            case model.view of
-                SettingsView settingsState ->
-                    case result of
-                        Ok maybeConfig ->
-                            let
-                                updatedForm =
-                                    case maybeConfig of
-                                        Just config ->
-                                            { accessKeyId = config.accessKeyId
-                                            , secretAccessKey = ""  -- Never show secret
-                                            , bucket = config.bucket
-                                            , region = config.region
-                                            , endpoint = Maybe.withDefault "" config.endpoint
-                                            , pathPrefix = Maybe.withDefault "litehouse" config.pathPrefix
-                                            }
-
-                                        Nothing ->
-                                            settingsState.s3Form
-                            in
-                            ( { model
-                                | view =
-                                    SettingsView
-                                        { settingsState
-                                            | s3Config = maybeConfig
-                                            , s3ConfigLoading = False
-                                            , s3Form = updatedForm
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                        Err err ->
-                            ( { model
-                                | view =
-                                    SettingsView
-                                        { settingsState
-                                            | s3ConfigLoading = False
-                                            , s3FormError = Just err
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                _ ->
-                    ( model, Effect.none )
-
-        S3FormFieldChanged fieldName value ->
-            case model.view of
-                SettingsView settingsState ->
+        SettingsMsg settingsMsg ->
+            case ( model.view, shared.token ) of
+                ( SettingsView settingsState, Just token ) ->
                     let
-                        currentForm = settingsState.s3Form
-                        
-                        updatedForm =
-                            case fieldName of
-                                "access_key_id" ->
-                                    { currentForm | accessKeyId = value }
-
-                                "secret_access_key" ->
-                                    { currentForm | secretAccessKey = value }
-
-                                "bucket" ->
-                                    { currentForm | bucket = value }
-
-                                "region" ->
-                                    { currentForm | region = value }
-
-                                "endpoint" ->
-                                    { currentForm | endpoint = value }
-
-                                "path_prefix" ->
-                                    { currentForm | pathPrefix = value }
-
-                                _ ->
-                                    currentForm
+                        ( newSettingsState, settingsEffect ) =
+                            Settings.update settingsMsg settingsState token
                     in
-                    ( { model
-                        | view =
-                            SettingsView
-                                { settingsState
-                                    | s3Form = updatedForm
-                                    , s3FormError = Nothing
-                                }
-                      }
-                    , Effect.none
+                    ( { model | view = SettingsView newSettingsState }
+                    , Effect.map SettingsMsg settingsEffect
                     )
 
                 _ ->
                     ( model, Effect.none )
-
-        SubmitS3Config ->
-            case ( model.view, shared.token ) of
-                ( SettingsView settingsState, Just token ) ->
-                    let
-                        form = settingsState.s3Form
-                    in
-                    if String.isEmpty (String.trim form.accessKeyId) || String.isEmpty (String.trim form.secretAccessKey) || String.isEmpty (String.trim form.bucket) || String.isEmpty (String.trim form.region) then
-                        ( { model
-                            | view =
-                                SettingsView
-                                    { settingsState
-                                        | s3FormError = Just "Access Key ID, Secret Access Key, Bucket, and Region are required"
-                                    }
-                          }
-                        , Effect.none
-                        )
-
-                    else
-                        ( { model
-                            | view =
-                                SettingsView
-                                    { settingsState
-                                        | s3FormSaving = True
-                                        , s3FormError = Nothing
-                                    }
-                          }
-                        , Effect.SetS3Config token form GotS3ConfigSet
-                        )
-
-                _ ->
-                    ( model, Effect.none )
-
-        GotS3ConfigSet result ->
-            case model.view of
-                SettingsView settingsState ->
-                    case result of
-                        Ok _ ->
-                            case shared.token of
-                                Just token ->
-                                    ( { model
-                                        | view =
-                                            SettingsView
-                                                { settingsState
-                                                    | s3FormSaving = False
-                                                    , s3FormError = Nothing
-                                                }
-                                      }
-                                    , Effect.FetchS3Config token GotS3Config
-                                    )
-
-                                Nothing ->
-                                    ( { model
-                                        | view =
-                                            SettingsView
-                                                { settingsState
-                                                    | s3FormSaving = False
-                                                }
-                                      }
-                                    , Effect.none
-                                    )
-
-                        Err err ->
-                            ( { model
-                                | view =
-                                    SettingsView
-                                        { settingsState
-                                            | s3FormSaving = False
-                                            , s3FormError = Just err
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                _ ->
-                    ( model, Effect.none )
-
-        DeleteS3Config ->
-            case ( model.view, shared.token ) of
-                ( SettingsView settingsState, Just token ) ->
-                    ( { model
-                        | view =
-                            SettingsView
-                                { settingsState
-                                    | s3FormSaving = True
-                                    , s3FormError = Nothing
-                                }
-                      }
-                    , Effect.DeleteS3Config token GotS3ConfigDeleted
-                    )
-
-                _ ->
-                    ( model, Effect.none )
-
-        GotS3ConfigDeleted result ->
-            case model.view of
-                SettingsView settingsState ->
-                    case result of
-                        Ok _ ->
-                            let
-                                emptyForm =
-                                    { accessKeyId = ""
-                                    , secretAccessKey = ""
-                                    , bucket = ""
-                                    , region = "us-east-1"
-                                    , endpoint = ""
-                                    , pathPrefix = "litehouse"
-                                    }
-                            in
-                            ( { model
-                                | view =
-                                    SettingsView
-                                        { settingsState
-                                            | s3Config = Nothing
-                                            , s3Form = emptyForm
-                                            , s3FormSaving = False
-                                            , s3FormError = Nothing
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                        Err err ->
-                            ( { model
-                                | view =
-                                    SettingsView
-                                        { settingsState
-                                            | s3FormSaving = False
-                                            , s3FormError = Just err
-                                        }
-                              }
-                            , Effect.none
-                            )
-
-                _ ->
-                    ( model, Effect.none )
-
 
         HandleSSEEvent value ->
             -- Decode the unified SSE message and route to appropriate handler
@@ -1892,7 +1654,7 @@ view shared model =
                             viewAppDetail detailState
 
                         SettingsView settingsState ->
-                            viewSettings shared settingsState
+                            Html.map SettingsMsg (Settings.view shared settingsState)
                     ]
                 ]
             ]
@@ -2598,185 +2360,6 @@ viewEnvVarForm state =
             , cancelButton
             ]
         ]
-
-
-viewSettings : Shared.Model navigationKey -> SettingsState -> Html Msg
-viewSettings shared settingsState =
-    div [ class "max-w-3xl" ]
-        [ div [ class "bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-6" ]
-            [ div [ class "flex justify-between items-center mb-6 pb-4 border-b border-litehouse-border" ]
-                [ h2 [ class "text-xl font-semibold text-litehouse-text" ] [ text "Settings" ]
-                ]
-            , div []
-                [ h3 [ class "text-lg font-medium text-litehouse-text mb-4" ] [ text "S3 Backup Configuration" ]
-                , p [ class "text-sm text-litehouse-muted mb-6" ]
-                    [ text "Configure S3 credentials for Litestream backups. These credentials will be used for all app databases and the main Litehouse database." ]
-                , if settingsState.s3ConfigLoading then
-                    div [ class "py-8 text-center" ]
-                        [ div [ class "w-10 h-10 border-3 border-litehouse-border border-t-litehouse-amber rounded-full animate-spin-slow mx-auto mb-4" ] []
-                        , p [ class "text-litehouse-muted" ] [ text "Loading S3 configuration..." ]
-                        ]
-
-                  else
-                    viewS3ConfigForm settingsState
-                ]
-            ]
-        ]
-
-
-viewS3ConfigForm : SettingsState -> Html Msg
-viewS3ConfigForm settingsState =
-    let
-        form = settingsState.s3Form
-        hasConfig = settingsState.s3Config /= Nothing
-    in
-    div []
-        [ if hasConfig then
-            div [ class "mb-4 p-4 bg-litehouse-success/10 border border-litehouse-success/30 rounded-xl" ]
-                [ p [ class "text-sm text-litehouse-success font-medium" ] [ text "S3 configuration is active" ]
-                , case settingsState.s3Config of
-                    Just config ->
-                        div [ class "mt-2 text-xs text-litehouse-muted space-y-1" ]
-                            [ p [] [ text ("Bucket: " ++ config.bucket) ]
-                            , p [] [ text ("Region: " ++ config.region) ]
-                            , case config.endpoint of
-                                Just endpoint ->
-                                    p [] [ text ("Endpoint: " ++ endpoint) ]
-
-                                Nothing ->
-                                    text ""
-                            ]
-                    Nothing ->
-                        text ""
-                ]
-
-          else
-            text ""
-        , Html.form [ onSubmit SubmitS3Config ]
-            [ div [ class "space-y-4" ]
-                [ div []
-                    [ label [ for "s3_access_key_id", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Access Key ID" ]
-                    , input
-                        [ type_ "text"
-                        , id "s3_access_key_id"
-                        , value form.accessKeyId
-                        , onInput (S3FormFieldChanged "access_key_id")
-                        , placeholder "AKIAIOSFODNN7EXAMPLE"
-                        , required True
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    ]
-                , div []
-                    [ label [ for "s3_secret_access_key", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Secret Access Key" ]
-                    , input
-                        [ type_ "password"
-                        , id "s3_secret_access_key"
-                        , value form.secretAccessKey
-                        , onInput (S3FormFieldChanged "secret_access_key")
-                        , placeholder "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-                        , required True
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    ]
-                , div []
-                    [ label [ for "s3_bucket", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Bucket" ]
-                    , input
-                        [ type_ "text"
-                        , id "s3_bucket"
-                        , value form.bucket
-                        , onInput (S3FormFieldChanged "bucket")
-                        , placeholder "my-backup-bucket"
-                        , required True
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    ]
-                , div []
-                    [ label [ for "s3_region", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Region" ]
-                    , input
-                        [ type_ "text"
-                        , id "s3_region"
-                        , value form.region
-                        , onInput (S3FormFieldChanged "region")
-                        , placeholder "us-east-1"
-                        , required True
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    ]
-                , div []
-                    [ label [ for "s3_endpoint", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Endpoint (Optional)" ]
-                    , input
-                        [ type_ "text"
-                        , id "s3_endpoint"
-                        , value form.endpoint
-                        , onInput (S3FormFieldChanged "endpoint")
-                        , placeholder "https://s3.example.com (for S3-compatible services)"
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    , p [ class "mt-1 text-xs text-litehouse-muted" ] [ text "Leave empty for standard AWS S3" ]
-                    ]
-                , div []
-                    [ label [ for "s3_path_prefix", class "block mb-1 text-sm font-medium text-litehouse-text" ]
-                        [ text "Path Prefix (Optional)" ]
-                    , input
-                        [ type_ "text"
-                        , id "s3_path_prefix"
-                        , value form.pathPrefix
-                        , onInput (S3FormFieldChanged "path_prefix")
-                        , placeholder "litehouse"
-                        , class "w-full px-3 py-2.5 border border-litehouse-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-litehouse-amber/50"
-                        ]
-                        []
-                    , p [ class "mt-1 text-xs text-litehouse-muted" ] [ text "Prefix for all backup paths (default: litehouse)" ]
-                    ]
-                ]
-            , if settingsState.s3FormError /= Nothing then
-                div [ class "mt-4 p-3 bg-litehouse-error/10 border border-litehouse-error/30 rounded-xl" ]
-                    [ p [ class "text-sm text-litehouse-error" ]
-                        [ text (Maybe.withDefault "" settingsState.s3FormError) ]
-                    ]
-
-              else
-                text ""
-            , div [ class "mt-6 flex gap-3" ]
-                [ button
-                    [ type_ "submit"
-                    , disabled settingsState.s3FormSaving
-                    , class "px-4 py-2.5 bg-litehouse-amber hover:bg-litehouse-amberDeep text-white font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    ]
-                    [ if settingsState.s3FormSaving then
-                        text "Saving..."
-
-                      else if hasConfig then
-                        text "Update Configuration"
-
-                      else
-                        text "Save Configuration"
-                    ]
-                , if hasConfig then
-                    button
-                        [ type_ "button"
-                        , onClick DeleteS3Config
-                        , disabled settingsState.s3FormSaving
-                        , class "px-4 py-2 border border-litehouse-border text-litehouse-error hover:bg-litehouse-error/10 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        ]
-                        [ text "Delete Configuration" ]
-
-                  else
-                    text ""
-                ]
-            ]
-        ]
-
 
 -- HELPER FUNCTIONS
 
