@@ -148,6 +148,23 @@ buildInfoDecoder =
         (Decode.field "created_at" Decode.string)
 
 
+envVarDecoder : Decode.Decoder Effect.EnvVar
+envVarDecoder =
+    Decode.map2 Effect.EnvVar
+        (Decode.field "key" Decode.string)
+        (Decode.field "value" Decode.string)
+
+
+s3ConfigRedactedDecoder : Decode.Decoder Effect.S3ConfigRedacted
+s3ConfigRedactedDecoder =
+    Decode.map5 Effect.S3ConfigRedacted
+        (Decode.field "access_key_id" Decode.string)
+        (Decode.field "bucket" Decode.string)
+        (Decode.field "region" Decode.string)
+        (Decode.maybe (Decode.field "endpoint" Decode.string))
+        (Decode.maybe (Decode.field "path_prefix" Decode.string))
+
+
 authResponseDecoder : Decode.Decoder Effect.AuthResponse
 authResponseDecoder =
     Decode.map3 Effect.AuthResponse
@@ -473,6 +490,84 @@ createSimulateEffects () effect =
 
                 Effect.Load href ->
                     SimulatedEffect.Navigation.load href
+
+                Effect.FetchEnvVars token appName toMsg ->
+                    SimulatedEffect.Http.request
+                        { method = "GET"
+                        , headers = [ ( "Authorization", "Bearer " ++ token ) ]
+                        , url = "/api/apps/" ++ appName ++ "/env"
+                        , body = SimulatedEffect.Http.emptyBody
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) (Decode.list envVarDecoder)
+                        , timeout = Nothing
+                        , tracker = Nothing
+                        }
+
+                Effect.SetEnvVar token appName key value delete toMsg ->
+                    SimulatedEffect.Http.request
+                        { method = "POST"
+                        , headers = [ ( "Authorization", "Bearer " ++ token ) ]
+                        , url = "/api/apps/" ++ appName ++ "/env"
+                        , body = SimulatedEffect.Http.jsonBody
+                            (Encode.object
+                                [ ( "key", Encode.string key )
+                                , ( "value", Encode.string value )
+                                , ( "delete", Encode.bool delete )
+                                ]
+                            )
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
+                        }
+
+                Effect.FetchS3Config token toMsg ->
+                    SimulatedEffect.Http.request
+                        { method = "GET"
+                        , headers = [ ( "Authorization", "Bearer " ++ token ) ]
+                        , url = "/api/config/s3"
+                        , body = SimulatedEffect.Http.emptyBody
+                        , expect = SimulatedEffect.Http.expectJson (\result -> toMsg (Result.mapError httpErrorToString result)) (Decode.nullable s3ConfigRedactedDecoder)
+                        , timeout = Nothing
+                        , tracker = Nothing
+                        }
+
+                Effect.SetS3Config token form toMsg ->
+                    SimulatedEffect.Http.request
+                        { method = "POST"
+                        , headers = [ ( "Authorization", "Bearer " ++ token ) ]
+                        , url = "/api/config/s3"
+                        , body = SimulatedEffect.Http.jsonBody
+                            (Encode.object
+                                (List.filterMap identity
+                                    [ Just ( "access_key_id", Encode.string form.accessKeyId )
+                                    , Just ( "secret_access_key", Encode.string form.secretAccessKey )
+                                    , Just ( "bucket", Encode.string form.bucket )
+                                    , Just ( "region", Encode.string form.region )
+                                    , if String.isEmpty form.endpoint then
+                                        Nothing
+                                      else
+                                        Just ( "endpoint", Encode.string form.endpoint )
+                                    , if String.isEmpty form.pathPrefix then
+                                        Nothing
+                                      else
+                                        Just ( "path_prefix", Encode.string form.pathPrefix )
+                                    ]
+                                )
+                            )
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
+                        }
+
+                Effect.DeleteS3Config token toMsg ->
+                    SimulatedEffect.Http.request
+                        { method = "DELETE"
+                        , headers = [ ( "Authorization", "Bearer " ++ token ) ]
+                        , url = "/api/config/s3"
+                        , body = SimulatedEffect.Http.emptyBody
+                        , expect = SimulatedEffect.Http.expectString (\result -> toMsg (Result.mapError httpErrorToString result))
+                        , timeout = Nothing
+                        , tracker = Nothing
+                        }
 
                 Effect.UpdateGitHubStatus _ ->
                     SimulatedEffect.Cmd.none

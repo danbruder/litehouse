@@ -1,4 +1,4 @@
-port module Main exposing (main, init, initForTesting, update, view, Model, Msg(..), Flags)
+module Main exposing (main, init, initForTesting, update, view, Model, Msg(..), Flags)
 
 import Browser
 import Browser.Navigation as Nav
@@ -12,46 +12,13 @@ import Page.Dashboard
 import Page.Login
 import Page.Settings
 import Page.Setup
+import Ports
 import Route
 import Shared
 
 import Time
 
 import Url
-
-
--- PORTS
-
-
-port saveToken : String -> Cmd msg
-
-
-port saveRefreshToken : String -> Cmd msg
-
-
-port clearToken : () -> Cmd msg
-
-
-port getRefreshToken : () -> Cmd msg
-
-
-port refreshTokenReceived : (Maybe String -> msg) -> Sub msg
-
-
--- Unified SSE ports
-port connectSSE : { token : String, filters : Maybe Encode.Value } -> Cmd msg
-
-
-port disconnectSSE : () -> Cmd msg
-
-
-port updateSSEFilters : { filters : Maybe Encode.Value } -> Cmd msg
-
-
-port sseEvent : (Decode.Value -> msg) -> Sub msg
-
-
-port sseConnectionState : (String -> msg) -> Sub msg
 
 
 
@@ -721,25 +688,25 @@ performEffect navKey effect =
             Nav.load href
 
         Effect.SaveToken token ->
-            saveToken token
+            Ports.saveToken token
 
         Effect.SaveRefreshToken token ->
-            saveRefreshToken token
+            Ports.saveRefreshToken token
 
         Effect.ClearToken ->
-            Cmd.batch [ clearToken (), disconnectSSE () ]
+            Cmd.batch [ Ports.clearToken (), Ports.disconnectSSE () ]
 
         Effect.GetRefreshToken ->
-            getRefreshToken ()
+            Ports.getRefreshToken ()
 
         Effect.ConnectSSE config ->
-            connectSSE config
+            Ports.connectSSE config
 
         Effect.DisconnectSSE ->
-            disconnectSSE ()
+            Ports.disconnectSSE ()
 
         Effect.UpdateSSEFilters filters ->
-            updateSSEFilters { filters = filters }
+            Ports.updateSSEFilters { filters = filters }
 
         Effect.CheckServerStatus toMsg ->
             Http.get
@@ -1512,7 +1479,7 @@ viewLoading =
 subscriptions : Model navigationKey -> Sub Msg
 subscriptions model =
     Sub.batch
-        [ refreshTokenReceived RefreshTokenReceived
-        , sseEvent SSEEvent
-        , sseConnectionState SSEConnectionStateChanged
+        [ Ports.refreshTokenReceived RefreshTokenReceived
+        , Ports.sseEvent SSEEvent
+        , Ports.sseConnectionState SSEConnectionStateChanged
         ]
