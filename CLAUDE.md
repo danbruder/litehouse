@@ -260,3 +260,33 @@ It is a digital ocean server that I'm happy to wipe clean and reinstall if neede
 Cloudflare manages the domain (litehouse.run) and it points `*.litehouse.run` to the IP address above.
 
 When re-installing, use the litehouse.run domain.
+
+
+## Beads Task Tracking
+
+Use `bd` (beads) for all task/issue tracking instead of markdown plans.
+
+### Quick Reference
+```bash
+bd init                    # Initialize in project (once)
+bd ready --json            # Find work with no blockers
+bd create "Title" -p 1 -t bug  # Create issue (priority 0-4, type: bug|feature|task|epic)
+bd update <id> --status in_progress
+bd close <id> --reason "Done"
+bd dep add <child> <parent> --type discovered-from  # Link discovered work
+bd list --status open --json
+bd show <id>
+bd sync                    # Sync with git
+```
+
+### Workflow
+1. **Start session**: Run `bd ready --json` to find unblocked work
+2. **During work**: File issues for bugs/tasks discovered with `bd create`, link via `bd dep add`
+3. **End session**: Update statuses, close completed work, run `bd sync`
+
+### Key Points
+- Issues use hash IDs (e.g., `bd-a1b2`)
+- Four dependency types: blocks, related, parent-child, discovered-from
+- Data stored in `.beads/` (JSONL synced via git)
+- Use `--json` flag for programmatic output
+
