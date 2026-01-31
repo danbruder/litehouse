@@ -914,9 +914,12 @@ update shared msg model =
                     ( model, Effect.none )
 
         EnvVarsMsg envVarsMsg ->
-            case ( model.view, shared.token ) of
-                ( AppDetailView detailState, Just token ) ->
+            case model.view of
+                AppDetailView detailState ->
                     let
+                        token =
+                            Maybe.withDefault "" shared.token
+
                         ( updatedEnvVarsModel, envVarsEffect, maybeError ) =
                             EnvVars.update envVarsMsg detailState.envVarsModel token detailState.app.name
                     in

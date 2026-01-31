@@ -51,7 +51,7 @@ testCreateAppState appName =
 
 {-| Create a minimal AppDetailState for testing.
 -}
-testAppDetailState : Effect.AppDetail -> { app : Effect.AppDetail, logs : String, logsLoading : Bool, logsView : Dashboard.LogsView, builds : List Effect.BuildInfo, selectedBuildId : Maybe String, buildLogs : String, buildLogsLoading : Bool, actionInProgress : Maybe Dashboard.AppAction, error : Maybe String, streamingBuildId : Maybe String, buildLogsStreaming : Bool, envVars : List Effect.EnvVar, envVarsLoading : Bool, envVarForm : { key : String, value : String, editingKey : Maybe String } }
+testAppDetailState : Effect.AppDetail -> { app : Effect.AppDetail, logs : String, logsLoading : Bool, logsView : Dashboard.LogsView, builds : List Effect.BuildInfo, selectedBuildId : Maybe String, buildLogs : String, buildLogsLoading : Bool, actionInProgress : Maybe Dashboard.AppAction, error : Maybe String, streamingBuildId : Maybe String, buildLogsStreaming : Bool, envVarsModel : EnvVars.Model }
 testAppDetailState app =
     { app = app
     , logs = ""
@@ -65,9 +65,7 @@ testAppDetailState app =
     , error = Nothing
     , streamingBuildId = Nothing
     , buildLogsStreaming = False
-    , envVars = []
-    , envVarsLoading = False
-    , envVarForm = { key = "", value = "", editingKey = Nothing }
+    , envVarsModel = EnvVars.init
     }
 
 
@@ -968,7 +966,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVarsModel = { EnvVars.init | envVarForm = { key = "KEY", value = "", editingKey = Nothing } }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "KEY", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1018,7 +1020,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVarsModel = { EnvVars.init | envVarsLoading = True }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = True
+                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1075,7 +1081,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVarsModel = { EnvVars.init | envVarsLoading = True }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = True
+                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1125,9 +1135,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "", value = "some value", editingKey = Nothing }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "", value = "some value", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1141,7 +1153,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar) model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
@@ -1175,9 +1187,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "NEW_KEY", value = "new_value", editingKey = Nothing }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "NEW_KEY", value = "new_value", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1191,7 +1205,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg EnvVars.SubmitEnvVar) model
                     in
                     effectContainsSetEnvVar effect
                         |> Expect.equal True
@@ -1224,9 +1238,11 @@ suite =
                             , error = Just "some error"
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                                }
                             }
 
                         model =
@@ -1240,14 +1256,14 @@ suite =
                             testSharedModel Nothing
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared Dashboard.EnvVarsMsg EnvVars.CancelEnvVarEdit model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg EnvVars.CancelEnvVarEdit) model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
                             Expect.all
-                                [ \_ -> Expect.equal "" updatedDetailState.envVarForm.key
-                                , \_ -> Expect.equal "" updatedDetailState.envVarForm.value
-                                , \_ -> Expect.equal Nothing updatedDetailState.envVarForm.editingKey
+                                [ \_ -> Expect.equal "" updatedDetailState.envVarsModel.envVarForm.key
+                                , \_ -> Expect.equal "" updatedDetailState.envVarsModel.envVarForm.value
+                                , \_ -> Expect.equal Nothing updatedDetailState.envVarsModel.envVarForm.editingKey
                                 , \_ -> Expect.equal Nothing updatedDetailState.error
                                 ]
                                 ()
@@ -1282,9 +1298,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = [ { key = "EXISTING_KEY", value = "existing_value" } ]
-                            , envVarsLoading = False
-                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            , envVarsModel =
+                                { envVars = [ { key = "EXISTING_KEY", value = "existing_value" } ]
+                                , envVarsLoading = False
+                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1298,14 +1316,14 @@ suite =
                             testSharedModel Nothing
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.EditEnvVar "EXISTING_KEY") model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.EditEnvVar "EXISTING_KEY")) model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
                             Expect.all
-                                [ \_ -> Expect.equal "EXISTING_KEY" updatedDetailState.envVarForm.key
-                                , \_ -> Expect.equal "existing_value" updatedDetailState.envVarForm.value
-                                , \_ -> Expect.equal (Just "EXISTING_KEY") updatedDetailState.envVarForm.editingKey
+                                [ \_ -> Expect.equal "EXISTING_KEY" updatedDetailState.envVarsModel.envVarForm.key
+                                , \_ -> Expect.equal "existing_value" updatedDetailState.envVarsModel.envVarForm.value
+                                , \_ -> Expect.equal (Just "EXISTING_KEY") updatedDetailState.envVarsModel.envVarForm.editingKey
                                 ]
                                 ()
 
@@ -1339,9 +1357,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "KEY", value = "value", editingKey = Just "KEY" }
+                                }
                             }
 
                         model =
@@ -1355,7 +1375,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.DeleteEnvVar "KEY_TO_DELETE") model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.DeleteEnvVar "KEY_TO_DELETE")) model
                     in
                     effectContainsSetEnvVar effect
                         |> Expect.equal True
@@ -1388,9 +1408,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1404,7 +1426,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( _, effect ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Ok "Success")) model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Ok "Success"))) model
                     in
                     effectContainsFetchEnvVars effect
                         |> Expect.equal True
@@ -1435,9 +1457,11 @@ suite =
                             , error = Nothing
                             , streamingBuildId = Nothing
                             , buildLogsStreaming = False
-                            , envVars = []
-                            , envVarsLoading = False
-                            , envVarForm = { key = "", value = "", editingKey = Nothing }
+                            , envVarsModel =
+                                { envVars = []
+                                , envVarsLoading = False
+                                , envVarForm = { key = "", value = "", editingKey = Nothing }
+                                }
                             }
 
                         model =
@@ -1451,7 +1475,7 @@ suite =
                             testSharedModel (Just "test-token")
 
                         ( updatedModel, _ ) =
-                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Err "Failed to set env var")) model
+                            Dashboard.update shared (Dashboard.EnvVarsMsg (EnvVars.GotEnvVarSet (Err "Failed to set env var"))) model
                     in
                     case updatedModel.view of
                         Dashboard.AppDetailView updatedDetailState ->
