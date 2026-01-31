@@ -26,6 +26,7 @@ import Html.Attributes exposing (class, disabled, for, href, id, placeholder, re
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Page.Dashboard.Data as Data
 import Page.Dashboard.EnvVars as EnvVars
 import Page.Dashboard.Layout as Layout
 import Page.Dashboard.Settings as Settings
@@ -505,7 +506,7 @@ update shared msg model =
 
                         -- Update SSE filters to only receive messages for this app
                         sseFilterEffect =
-                            Effect.UpdateSSEFilters (Just (encodeAppFilter app.name))
+                            Effect.UpdateSSEFilters (Just (Data.encodeAppFilter app.name))
                         
                         -- Fetch env vars if we have a token
                         envVarsEffect =
@@ -966,28 +967,28 @@ update shared msg model =
 
         HandleSSEEvent value ->
             -- Decode the unified SSE message and route to appropriate handler
-            case Decode.decodeValue unifiedSSEDecoder value of
-                Ok (GitHubOAuthMessage eventType data) ->
+            case Decode.decodeValue Data.unifiedSSEDecoder value of
+                Ok (Data.GitHubOAuthMessage eventType data) ->
                     -- Route to GitHub OAuth handler
                     handleGitHubOAuthEvent model shared eventType data
 
-                Ok (BuildLogsMessage appName buildId eventType data) ->
+                Ok (Data.BuildLogsMessage appName buildId eventType data) ->
                     -- Route to build logs handler
                     handleBuildLogsEvent model shared appName buildId eventType data
 
-                Ok (BuildStatusMessage appName buildId status) ->
+                Ok (Data.BuildStatusMessage appName buildId status) ->
                     -- Route to build status handler
                     handleBuildStatusEvent model shared appName buildId status
 
-                Ok (ContainerLogsMessage appName data) ->
+                Ok (Data.ContainerLogsMessage appName data) ->
                     -- Route to container logs handler
                     handleContainerLogsEvent model shared appName data
 
-                Ok HeartbeatMessage ->
+                Ok Data.HeartbeatMessage ->
                     -- Heartbeat, no action needed
                     ( model, Effect.none )
 
-                Ok (SystemNotificationMessage level message) ->
+                Ok (Data.SystemNotificationMessage level message) ->
                     -- Could display a toast notification
                     ( model, Effect.none )
 
@@ -1358,81 +1359,6 @@ handleGotGitHubStatus result createState maybeToken =
             ( createState.step
             , Nothing
             , Effect.none
-            )
-
-
--- DECODERS
-
-
-type alias SSEEvent =
-    { eventType : String
-    , data : String
-    }
-
-
-sseEventDecoder : Decode.Decoder SSEEvent
-sseEventDecoder =
-    Decode.map2 SSEEvent
-        (Decode.field "type" Decode.string)
-        (Decode.field "data" Decode.string)
-
-
--- Unified SSE Message Types
-type UnifiedSSEMessage
-    = GitHubOAuthMessage String String  -- eventType, data
-    | BuildLogsMessage String String String String  -- appName, buildId, eventType, data
-    | BuildStatusMessage String String String  -- appName, buildId, status
-    | ContainerLogsMessage String String  -- appName, data
-    | AppStateMessage String String  -- appName, state
-    | SystemNotificationMessage String String  -- level, message
-    | HeartbeatMessage
-
-
--- Unified SSE Decoder
-unifiedSSEDecoder : Decode.Decoder UnifiedSSEMessage
-unifiedSSEDecoder =
-    Decode.field "type" Decode.string
-        |> Decode.andThen
-            (\msgType ->
-                case msgType of
-                    "github_oauth" ->
-                        Decode.map2 GitHubOAuthMessage
-                            (Decode.at [ "data", "payload", "event_type" ] Decode.string)
-                            (Decode.at [ "data", "payload", "data" ] Decode.string)
-
-                    "build_logs" ->
-                        Decode.map4 BuildLogsMessage
-                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
-                            (Decode.at [ "data", "payload", "build_id" ] Decode.string)
-                            (Decode.at [ "data", "payload", "event_type" ] Decode.string)
-                            (Decode.at [ "data", "payload", "data" ] Decode.string)
-
-                    "build_status" ->
-                        Decode.map3 BuildStatusMessage
-                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
-                            (Decode.at [ "data", "payload", "build_id" ] Decode.string)
-                            (Decode.at [ "data", "payload", "status" ] Decode.string)
-
-                    "container_logs" ->
-                        Decode.map2 ContainerLogsMessage
-                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
-                            (Decode.at [ "data", "payload", "data" ] Decode.string)
-
-                    "app_state" ->
-                        Decode.map2 AppStateMessage
-                            (Decode.at [ "data", "payload", "app_name" ] Decode.string)
-                            (Decode.at [ "data", "payload", "state" ] Decode.string)
-
-                    "system_notification" ->
-                        Decode.map2 SystemNotificationMessage
-                            (Decode.at [ "data", "payload", "level" ] Decode.string)
-                            (Decode.at [ "data", "payload", "message" ] Decode.string)
-
-                    "heartbeat" ->
-                        Decode.succeed HeartbeatMessage
-
-                    _ ->
-                        Decode.fail ("Unknown SSE message type: " ++ msgType)
             )
 
 
@@ -2060,18 +1986,6 @@ viewError maybeError =
 
         Nothing ->
             text ""
-
-
--- HELPER FUNCTIONS
-
-
-{-| Encode SSE filter for a specific app name
--}
-encodeAppFilter : String -> Encode.Value
-encodeAppFilter appName =
-    Encode.object
-        [ ( "app_names", Encode.list Encode.string [ appName ] )
-        ]
 
 
 -- PAGE LIFECYCLE
