@@ -222,15 +222,35 @@ update msg model =
                 Just (Route.AppDetail appName) ->
                     case model.page of
                         Dashboard dashModel ->
-                            -- Stay on dashboard, it will handle the app detail view
-                            ( { model | shared = newShared }
-                            , Effect.none
+                            -- Already on dashboard, send ViewAppDetail message
+                            let
+                                ( newDashModel, dashEffect ) =
+                                    Page.Dashboard.update newShared (Page.Dashboard.ViewAppDetail appName) dashModel
+                            in
+                            ( { model
+                                | page = Dashboard newDashModel
+                                , shared = newShared
+                              }
+                            , Effect.map DashboardMsg dashEffect
                             )
 
                         _ ->
-                            -- Not on dashboard, redirect
-                            ( { model | shared = newShared }
-                            , Effect.none
+                            -- Not on dashboard, initialize it first then navigate to app
+                            let
+                                ( dashModel, initEffect ) =
+                                    Page.Dashboard.init newShared
+
+                                ( newDashModel, viewEffect ) =
+                                    Page.Dashboard.update newShared (Page.Dashboard.ViewAppDetail appName) dashModel
+                            in
+                            ( { model
+                                | page = Dashboard newDashModel
+                                , shared = newShared
+                              }
+                            , Effect.batch
+                                [ Effect.map DashboardMsg initEffect
+                                , Effect.map DashboardMsg viewEffect
+                                ]
                             )
 
                 Just Route.Settings ->
