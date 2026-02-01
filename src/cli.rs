@@ -23,6 +23,30 @@ enum Commands {
         /// Skip the final verification step
         #[arg(long)]
         skip_verify: bool,
+
+        /// S3 Access Key ID for backups
+        #[arg(long)]
+        s3_access_key: Option<String>,
+
+        /// S3 Secret Access Key for backups
+        #[arg(long)]
+        s3_secret_key: Option<String>,
+
+        /// S3 Bucket name for backups
+        #[arg(long)]
+        s3_bucket: Option<String>,
+
+        /// S3 Region (default: us-east-1)
+        #[arg(long)]
+        s3_region: Option<String>,
+
+        /// S3 Endpoint URL (optional, for S3-compatible services)
+        #[arg(long)]
+        s3_endpoint: Option<String>,
+
+        /// S3 Path Prefix (default: litehouse)
+        #[arg(long)]
+        s3_path_prefix: Option<String>,
     },
 
     /// Upgrade litehouse binary and container image (run as root)
@@ -272,7 +296,23 @@ pub async fn run() -> Result<()> {
         Commands::Install {
             domain,
             skip_verify,
-        } => crate::commands::install::execute(&domain, skip_verify).await,
+            s3_access_key,
+            s3_secret_key,
+            s3_bucket,
+            s3_region,
+            s3_endpoint,
+            s3_path_prefix,
+        } => crate::commands::install::execute(
+            &domain,
+            skip_verify,
+            s3_access_key.as_deref(),
+            s3_secret_key.as_deref(),
+            s3_bucket.as_deref(),
+            s3_region.as_deref(),
+            s3_endpoint.as_deref(),
+            s3_path_prefix.as_deref(),
+        )
+        .await,
         Commands::Upgrade { version, from_path } => {
             crate::commands::upgrade::execute(version.as_deref(), from_path.as_deref()).await
         }

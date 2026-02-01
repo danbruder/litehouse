@@ -40,6 +40,71 @@ die() {
 # Parse arguments
 DOMAIN=""
 SKIP_VERIFY=""
+S3_FLAGS=""
+
+# Function to prompt for S3 credentials
+prompt_s3_credentials() {
+    printf "${YELLOW}Configure S3 backup? (y/n) [default: n]: ${NC}"
+    read -r configure_s3
+
+    case "$configure_s3" in
+        y|Y|yes|YES)
+            info "Enter S3 credentials for backups:"
+
+            # Prompt for required fields
+            printf "  S3 Access Key ID: "
+            read -r s3_access_key
+            if [ -z "$s3_access_key" ]; then
+                error "S3 Access Key ID is required"
+                return 1
+            fi
+
+            printf "  S3 Secret Access Key: "
+            read -r s3_secret_key
+            if [ -z "$s3_secret_key" ]; then
+                error "S3 Secret Access Key is required"
+                return 1
+            fi
+
+            printf "  S3 Bucket: "
+            read -r s3_bucket
+            if [ -z "$s3_bucket" ]; then
+                error "S3 Bucket is required"
+                return 1
+            fi
+
+            printf "  S3 Region (default: us-east-1): "
+            read -r s3_region
+            s3_region="${s3_region:-us-east-1}"
+
+            # Optional fields
+            printf "  S3 Endpoint (optional, for S3-compatible services): "
+            read -r s3_endpoint
+
+            printf "  S3 Path Prefix (optional, default: litehouse): "
+            read -r s3_path_prefix
+            s3_path_prefix="${s3_path_prefix:-litehouse}"
+
+            # Build flags
+            S3_FLAGS="--s3-access-key '$s3_access_key' --s3-secret-key '$s3_secret_key' --s3-bucket '$s3_bucket' --s3-region '$s3_region'"
+
+            if [ -n "$s3_endpoint" ]; then
+                S3_FLAGS="$S3_FLAGS --s3-endpoint '$s3_endpoint'"
+            fi
+
+            if [ -n "$s3_path_prefix" ]; then
+                S3_FLAGS="$S3_FLAGS --s3-path-prefix '$s3_path_prefix'"
+            fi
+
+            info "S3 credentials configured"
+            return 0
+            ;;
+        *)
+            info "Skipping S3 configuration"
+            return 0
+            ;;
+    esac
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,6 +128,54 @@ while [ $# -gt 0 ]; do
             VERSION="${1#*=}"
             shift
             ;;
+        --s3-access-key)
+            S3_FLAGS="$S3_FLAGS --s3-access-key '$2'"
+            shift 2
+            ;;
+        --s3-access-key=*)
+            S3_FLAGS="$S3_FLAGS --s3-access-key '${1#*=}'"
+            shift
+            ;;
+        --s3-secret-key)
+            S3_FLAGS="$S3_FLAGS --s3-secret-key '$2'"
+            shift 2
+            ;;
+        --s3-secret-key=*)
+            S3_FLAGS="$S3_FLAGS --s3-secret-key '${1#*=}'"
+            shift
+            ;;
+        --s3-bucket)
+            S3_FLAGS="$S3_FLAGS --s3-bucket '$2'"
+            shift 2
+            ;;
+        --s3-bucket=*)
+            S3_FLAGS="$S3_FLAGS --s3-bucket '${1#*=}'"
+            shift
+            ;;
+        --s3-region)
+            S3_FLAGS="$S3_FLAGS --s3-region '$2'"
+            shift 2
+            ;;
+        --s3-region=*)
+            S3_FLAGS="$S3_FLAGS --s3-region '${1#*=}'"
+            shift
+            ;;
+        --s3-endpoint)
+            S3_FLAGS="$S3_FLAGS --s3-endpoint '$2'"
+            shift 2
+            ;;
+        --s3-endpoint=*)
+            S3_FLAGS="$S3_FLAGS --s3-endpoint '${1#*=}'"
+            shift
+            ;;
+        --s3-path-prefix)
+            S3_FLAGS="$S3_FLAGS --s3-path-prefix '$2'"
+            shift 2
+            ;;
+        --s3-path-prefix=*)
+            S3_FLAGS="$S3_FLAGS --s3-path-prefix '${1#*=}'"
+            shift
+            ;;
         --help|-h)
             cat <<EOF
 Litehouse Installation Script
@@ -71,13 +184,27 @@ Usage:
   curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sh -s -- --domain <domain>
 
 Options:
-  --domain <domain>    Base domain for wildcard routing (e.g., lh.example.com) [required]
-  --skip-verify        Skip the final verification step
-  --version <version>  Specific version to install (default: latest)
-  --help, -h           Show this help message
+  --domain <domain>              Base domain for wildcard routing (e.g., lh.example.com) [required]
+  --skip-verify                  Skip the final verification step
+  --version <version>            Specific version to install (default: latest)
+  --s3-access-key <key>          S3 Access Key ID for backups
+  --s3-secret-key <key>          S3 Secret Access Key for backups
+  --s3-bucket <bucket>           S3 Bucket name for backups
+  --s3-region <region>           S3 Region (default: us-east-1)
+  --s3-endpoint <endpoint>       S3 Endpoint URL (optional, for S3-compatible services)
+  --s3-path-prefix <prefix>      S3 Path Prefix (default: litehouse)
+  --help, -h                     Show this help message
 
 Example:
   curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sh -s -- --domain lh.example.com
+
+Example with S3:
+  curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sh -s -- \\
+    --domain lh.example.com \\
+    --s3-access-key AKIA... \\
+    --s3-secret-key ... \\
+    --s3-bucket my-backups \\
+    --s3-region us-west-2
 EOF
             exit 0
             ;;
@@ -106,6 +233,13 @@ info "Litehouse Installer"
 info "==================="
 info "Domain: $DOMAIN"
 info "Version: $VERSION"
+
+# Prompt for S3 credentials if not already provided via flags
+if [ -z "$S3_FLAGS" ]; then
+    echo ""
+    prompt_s3_credentials || die "Failed to configure S3 credentials"
+fi
+
 echo ""
 
 # Check OS
@@ -190,4 +324,5 @@ echo ""
 info "Running litehouse install..."
 echo ""
 
-exec /usr/local/bin/lh install --domain "$DOMAIN" $SKIP_VERIFY
+# Use eval to properly expand S3_FLAGS (which may contain quoted strings)
+eval exec /usr/local/bin/lh install --domain "$DOMAIN" $SKIP_VERIFY $S3_FLAGS

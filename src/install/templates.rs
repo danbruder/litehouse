@@ -289,11 +289,32 @@ else
   echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
 fi
 
+# Copy S3 credentials if they exist
+if [ -f /opt/litehouse/config/s3-credentials.env ]; then
+  echo "Copying S3 credentials into Docker volume..."
+  docker run --rm \
+    -v litehouse_config:/target \
+    -v /opt/litehouse/config/s3-credentials.env:/source/s3-credentials.env:ro \
+    alpine:latest \
+    sh -c 'cp /source/s3-credentials.env /target/s3-credentials.env && chown 1000:1000 /target/s3-credentials.env && chmod 600 /target/s3-credentials.env'
+  echo "S3 credentials copied successfully"
+fi
+
+# Load S3 credentials from file if it exists in the volume
+S3_ENV_ARGS=""
+if docker run --rm -v litehouse_config:/config alpine:latest test -f /config/s3-credentials.env 2>/dev/null; then
+  echo "Loading S3 credentials from configuration file..."
+  # Extract S3 vars from the file and pass them as -e flags
+  S3_ENV_ARGS=$(docker run --rm -v litehouse_config:/config alpine:latest cat /config/s3-credentials.env 2>/dev/null | \
+    awk 'NF && !/^#/ {print "-e " $0}' | tr '\n' ' ')
+fi
+
 # Get Docker socket group ID for permissions
 DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
 
 # Start litehouse-server container with restart policy
 # Use Docker volumes instead of bind mounts to avoid permission issues
+# shellcheck disable=SC2086
 docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
@@ -307,6 +328,7 @@ docker run -d \
   -e DOCKER_HOST=unix:///var/run/docker.sock \
   -e CADDY_API_URL=http://caddy-container:2019/load \
   -e RUST_LOG=info \
+  $S3_ENV_ARGS \
   litehouse:latest
 
 echo "litehouse-server container started"

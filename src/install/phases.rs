@@ -170,8 +170,18 @@ pub fn phase6c_pull_litestream_image(litehouse_uid: &str, log_window: Option<&Pr
 }
 
 /// Phase 7: Server Configuration
-#[instrument]
-pub fn phase7_server_configuration(domain: &str) -> Result<()> {
+#[instrument(skip(s3_config))]
+pub fn phase7_server_configuration(
+    domain: &str,
+    s3_config: (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+) -> Result<()> {
     info!("Phase 7: Server Configuration");
 
     // Write server config
@@ -188,6 +198,31 @@ pub fn phase7_server_configuration(domain: &str) -> Result<()> {
     // Create litestream replicas directory
     run_command("mkdir -p /opt/litehouse/data/litestream-replicas")?;
     run_command("chown litehouse:litehouse /opt/litehouse/data/litestream-replicas")?;
+
+    // Write S3 credentials if provided
+    if let (Some(access_key), Some(secret_key), Some(bucket), Some(region)) =
+        (&s3_config.0, &s3_config.1, &s3_config.2, &s3_config.3)
+    {
+        info!("Writing S3 credentials");
+
+        let mut s3_env = format!(
+            "S3_ACCESS_KEY_ID={}\nS3_SECRET_ACCESS_KEY={}\nS3_BUCKET={}\nS3_REGION={}\n",
+            access_key, secret_key, bucket, region
+        );
+
+        if let Some(endpoint) = &s3_config.4 {
+            s3_env.push_str(&format!("S3_ENDPOINT={}\n", endpoint));
+        }
+
+        if let Some(path_prefix) = &s3_config.5 {
+            s3_env.push_str(&format!("S3_PATH_PREFIX={}\n", path_prefix));
+        }
+
+        sudo_write_file("/opt/litehouse/config/s3-credentials.env", &s3_env)?;
+        run_command("chown root:root /opt/litehouse/config/s3-credentials.env")?;
+        run_command("chmod 600 /opt/litehouse/config/s3-credentials.env")?;
+        info!("S3 credentials file created with 600 permissions");
+    }
 
     info!("Phase 7 completed successfully");
     Ok(())

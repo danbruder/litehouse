@@ -1,13 +1,13 @@
 use crate::message_bus::{Message, MessageBus};
 use crate::models::{App, EnvVar};
 use bollard::Docker;
-use bollard::image::BuildImageOptions;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use futures_util::StreamExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::process::Command;
 use tracing::{info, instrument};
 
 type Result<T> = std::result::Result<T, DockerError>;
@@ -77,58 +77,120 @@ pub async fn build_with_log(
         return Err(DockerError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    publish_log("Starting container image build with Bollard API...");
-    info!("Starting container image build with Bollard API...");
+    publish_log("Starting container image build with Docker CLI...");
+    info!("Starting container image build with Docker CLI...");
 
-    // Create a tar archive of the build context
-    let tar_gz = create_build_context_tar(directory)?;
+    // Check if S3 credentials are available
+    let s3_access_key = std::env::var("S3_ACCESS_KEY_ID").ok();
+    let s3_secret_key = std::env::var("S3_SECRET_ACCESS_KEY").ok();
+    let s3_bucket = std::env::var("S3_BUCKET").ok();
+    let s3_region = std::env::var("S3_REGION").ok();
 
-    let docker = connect().await?;
+    let has_s3_config = s3_access_key.is_some()
+        && s3_secret_key.is_some()
+        && s3_bucket.is_some()
+        && s3_region.is_some();
 
-    let build_options = BuildImageOptions {
-        t: tag,
-        rm: true,
-        ..Default::default()
-    };
-
-    // Build the image using Bollard API
-    let mut build_stream = docker.build_image(build_options, None, Some(tar_gz.into()));
-
-    let mut last_error: Option<String> = None;
-
-    while let Some(result) = build_stream.next().await {
-        match result {
-            Ok(output) => {
-                if let Some(stream) = output.stream {
-                    let msg = stream.trim();
-                    if !msg.is_empty() {
-                        info!("Build: {}", msg);
-                        publish_log(msg);
-                    }
-                }
-                if let Some(error) = output.error {
-                    tracing::error!("Build error: {}", error);
-                    publish_log(&format!("ERROR: {}", error));
-                    last_error = Some(error);
-                }
-            }
-            Err(e) => {
-                tracing::error!("Build stream error: {}", e);
-                publish_log(&format!("ERROR: Build stream error: {}", e));
-                return Err(DockerError::BuildStreamError(e.to_string()).into());
-            }
-        }
+    if has_s3_config {
+        publish_log("S3 credentials detected, build cache will use S3 backend");
+        info!("S3 credentials available for build cache");
     }
 
-    if let Some(error) = last_error {
-        publish_log(&format!("Build failed: {}", error));
-        return Err(DockerError::BuildError(error).into());
-    }
+    // Build using Docker CLI with optional S3 cache support
+    let image_id = build_with_docker_cli(
+        directory,
+        tag,
+        app_name,
+        has_s3_config,
+        message_bus.clone(),
+        build_id.to_string(),
+    )
+    .await?;
 
     publish_log("Container image build completed successfully");
     info!("Container image build completed successfully");
+    publish_log(&format!("Built image ID: {}", image_id));
+    info!("Built image ID: {}", image_id);
+    Ok(image_id)
+}
 
-    // Get the image ID by inspecting the built image using Bollard API
+/// Build using Docker CLI with optional S3 caching
+async fn build_with_docker_cli(
+    directory: &str,
+    tag: &str,
+    app_name: &str,
+    use_s3_cache: bool,
+    message_bus: Arc<MessageBus>,
+    build_id: String,
+) -> Result<String> {
+    let app_name_str = app_name.to_string();
+
+    let publish_log = |data: &str| {
+        message_bus.publish(Message::BuildLogs {
+            app_name: app_name_str.clone(),
+            build_id: build_id.clone(),
+            event_type: "message".to_string(),
+            data: data.to_string(),
+        });
+    };
+
+    let mut cmd = Command::new("docker");
+    cmd.current_dir(directory);
+
+    // Use buildx build if available, fall back to regular build
+    cmd.arg("buildx")
+        .arg("build")
+        .arg("--load")
+        .arg("-t")
+        .arg(tag);
+
+    // Add S3 cache flags if credentials are available
+    if use_s3_cache {
+        let bucket = std::env::var("S3_BUCKET").ok();
+        let region = std::env::var("S3_REGION").ok();
+
+        if let (Some(bucket), Some(region)) = (bucket, region) {
+            let cache_name = app_name.replace('_', "-");
+            let cache_from = format!("type=s3,region={},bucket={},name={}", region, bucket, cache_name);
+            let cache_to = format!(
+                "type=s3,region={},bucket={},name={},mode=max",
+                region, bucket, cache_name
+            );
+
+            cmd.arg(format!("--cache-from={}", cache_from))
+                .arg(format!("--cache-to={}", cache_to));
+        }
+    }
+
+    cmd.arg(".");
+
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| {
+        publish_log(&format!("ERROR: Failed to start docker build: {}", e));
+        DockerError::BuildError(format!("Failed to start docker build: {}", e))
+    })?;
+
+    // Wait for process to complete
+    let status = child.wait().await.map_err(|e| {
+        publish_log(&format!("ERROR: Docker build process error: {}", e));
+        DockerError::BuildError(format!("Docker build process error: {}", e))
+    })?;
+
+    if !status.success() {
+        publish_log(&format!(
+            "ERROR: Docker build failed with exit code: {}",
+            status.code().unwrap_or(-1)
+        ));
+        return Err(DockerError::BuildError(format!(
+            "Docker build failed with exit code: {}",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    // Get image ID by inspecting the image
+    let docker = connect().await?;
     let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
         let err_msg = format!("Failed to inspect built image: {}", e);
         publish_log(&format!("ERROR: {}", err_msg));
@@ -136,11 +198,11 @@ pub async fn build_with_log(
     })?;
 
     let image_id = image_inspect.id.ok_or_else(|| {
-        DockerError::BuildError("Failed to get image ID from build result".to_string())
+        let err = "Failed to get image ID from build result".to_string();
+        publish_log(&format!("ERROR: {}", err));
+        DockerError::BuildError(err)
     })?;
 
-    publish_log(&format!("Built image ID: {}", image_id));
-    info!("Built image ID: {}", image_id);
     Ok(image_id)
 }
 

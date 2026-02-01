@@ -765,3 +765,196 @@ async fn wait_for_container_stable(docker: &Docker, container_id: &str) -> Resul
     }
     Err(anyhow::anyhow!("Container did not stabilize in time"))
 }
+
+/// Restore all databases from S3 if needed (main DB + all app DBs)
+/// Called before db::init_pool() on server startup
+#[instrument]
+pub async fn restore_all_databases_if_needed() -> Result<()> {
+    info!("Checking if database restore is needed");
+
+    // Get database path
+    let db_path = get_db_path()?;
+
+    // Check if database already exists
+    if db_path.exists() {
+        info!("Main database already exists, skipping restore");
+        return Ok(());
+    }
+
+    info!("Main database does not exist, checking for S3 credentials");
+
+    // Read S3 credentials from environment variables
+    let access_key_id = std::env::var("S3_ACCESS_KEY_ID").ok();
+    let secret_access_key = std::env::var("S3_SECRET_ACCESS_KEY").ok();
+    let bucket = std::env::var("S3_BUCKET").ok();
+    let region = std::env::var("S3_REGION").ok();
+
+    // If any required credential is missing, skip restore
+    if access_key_id.is_none() || secret_access_key.is_none() || bucket.is_none() || region.is_none()
+    {
+        info!("S3 credentials not found in environment, starting with fresh database");
+        return Ok(());
+    }
+
+    let s3_config = S3Config {
+        access_key_id: access_key_id.unwrap(),
+        secret_access_key: secret_access_key.unwrap(),
+        bucket: bucket.unwrap(),
+        region: region.unwrap(),
+        endpoint: std::env::var("S3_ENDPOINT").ok(),
+        path_prefix: std::env::var("S3_PATH_PREFIX").ok(),
+    };
+
+    info!("S3 credentials found, attempting restore from S3");
+
+    // Step 1: Restore the main database
+    match restore_main_database(&s3_config).await {
+        Ok(_) => {
+            info!("Main database restored successfully from S3");
+        }
+        Err(e) => {
+            // If restore fails (e.g., no backup exists), log warning but continue
+            // This allows fresh installs without a backup
+            warn!("Main database restore failed (this is OK for fresh installs): {}", e);
+            return Ok(());
+        }
+    }
+
+    info!("Main database restored, attempting to restore app databases");
+    // Note: App database restore will be done after db::init_pool() is called
+    // by the server startup code
+    Ok(())
+}
+
+/// Restore the main database from S3
+async fn restore_main_database(s3_config: &S3Config) -> Result<()> {
+    info!("Restoring main database from S3");
+
+    let docker = crate::docker::connect().await?;
+
+    // Build S3 URL for main database
+    let path_prefix = s3_config.path_prefix.as_deref().unwrap_or("litehouse");
+    let s3_url = build_s3_url(s3_config, &format!("{}/main/db", path_prefix));
+
+    info!("Restoring from S3 URL: {}", s3_url);
+
+    let container_name = "litehouse-restore-main";
+    let _db_path = get_db_path()?;
+
+    // Prepare environment variables
+    let mut env_vars = vec![
+        format!("LITESTREAM_ACCESS_KEY_ID={}", s3_config.access_key_id),
+        format!("LITESTREAM_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
+        format!("AWS_ACCESS_KEY_ID={}", s3_config.access_key_id),
+        format!("AWS_SECRET_ACCESS_KEY={}", s3_config.secret_access_key),
+        format!("AWS_REGION={}", s3_config.region),
+    ];
+
+    if let Some(endpoint) = &s3_config.endpoint {
+        env_vars.push(format!("AWS_ENDPOINT_URL={}", endpoint));
+    }
+
+    // Create litehouse_config volume if it doesn't exist
+    ensure_litehouse_volumes_exist(&docker).await?;
+
+    let container_config = Config {
+        image: Some("litestream/litestream:latest".to_string()),
+        cmd: Some(vec![
+            "restore".to_string(),
+            "-replica".to_string(),
+            s3_url,
+            format!("/config/litehouse.db"),
+        ]),
+        env: Some(env_vars),
+        host_config: Some(HostConfig {
+            binds: Some(vec!["litehouse_config:/config".to_string()]),
+            auto_remove: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // Ensure Litestream image exists
+    ensure_image_exists(&docker, "litestream/litestream").await?;
+
+    // Create and start restore container
+    let create_options = bollard::container::CreateContainerOptions {
+        name: container_name.to_string(),
+        ..Default::default()
+    };
+
+    let container_info = docker
+        .create_container(Some(create_options), container_config)
+        .await?;
+
+    docker
+        .start_container::<String>(&container_info.id, None)
+        .await?;
+
+    // Wait for container to finish (5 minute timeout)
+    let timeout = tokio::time::Duration::from_secs(300);
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        if start_time.elapsed() > timeout {
+            return Err(anyhow::anyhow!(
+                "Restore container timed out after 5 minutes"
+            ));
+        }
+
+        let container = docker.inspect_container(&container_info.id, None).await?;
+
+        if let Some(state) = container.state {
+            if let Some(running) = state.running {
+                if !running {
+                    // Container finished
+                    if let Some(exit_code) = state.exit_code {
+                        if exit_code == 0 {
+                            info!("Main database restored successfully");
+                            return Ok(());
+                        } else {
+                            // Get logs for error details
+                            let logs = docker
+                                .logs::<String>(
+                                    &container_info.id,
+                                    Some(bollard::container::LogsOptions {
+                                        stdout: true,
+                                        stderr: true,
+                                        tail: "all".to_string(),
+                                        ..Default::default()
+                                    }),
+                                )
+                                .collect::<Vec<_>>()
+                                .await;
+
+                            let log_output: String = logs
+                                .into_iter()
+                                .filter_map(|r| r.ok())
+                                .map(|log| log.to_string())
+                                .collect::<Vec<_>>()
+                                .join("");
+
+                            return Err(anyhow::anyhow!(
+                                "Restore failed with exit code {}: {}",
+                                exit_code,
+                                log_output
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+}
+
+/// Get the main database path
+fn get_db_path() -> Result<std::path::PathBuf> {
+    let litehouse_dir = std::env::var("LITEHOUSE_DIR")
+        .unwrap_or_else(|_| format!("{}/.local/share/litehouse", std::env::var("HOME").unwrap_or_default()));
+    Ok(std::path::PathBuf::from(format!(
+        "{}/litehouse.db",
+        litehouse_dir
+    )))
+}

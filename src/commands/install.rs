@@ -39,10 +39,22 @@ use crate::install::phases::*;
 ///              v
 /// Phase 11: Verification (optional)
 
-#[instrument]
-pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
+#[instrument(skip_all)]
+pub async fn execute(
+    domain: &str,
+    skip_verify: bool,
+    s3_access_key: Option<&str>,
+    s3_secret_key: Option<&str>,
+    s3_bucket: Option<&str>,
+    s3_region: Option<&str>,
+    s3_endpoint: Option<&str>,
+    s3_path_prefix: Option<&str>,
+) -> Result<()> {
     info!("Starting litehouse installation");
     info!("Domain: {}", domain);
+    if s3_bucket.is_some() {
+        info!("S3 backup configured");
+    }
 
     // Create multi-progress container
     let multi = MultiProgress::new();
@@ -142,6 +154,16 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
     let uid_for_litestream = litehouse_uid.clone();
     let domain_for_config = domain.to_string();
 
+    // Prepare S3 config for phase7
+    let s3_config = (
+        s3_access_key.map(|s| s.to_string()),
+        s3_secret_key.map(|s| s.to_string()),
+        s3_bucket.map(|s| s.to_string()),
+        s3_region.map(|s| s.to_string()),
+        s3_endpoint.map(|s| s.to_string()),
+        s3_path_prefix.map(|s| s.to_string()),
+    );
+
     let (litehouse_result, caddy_result, litestream_result, config_result, logrotate_result) = {
         let log_window_litehouse = log_window.clone();
         let log_window_caddy = log_window.clone();
@@ -160,7 +182,7 @@ pub async fn execute(domain: &str, skip_verify: bool) -> Result<()> {
         });
 
         let config_handle = tokio::task::spawn_blocking(move || {
-            phase7_server_configuration(&domain_for_config)
+            phase7_server_configuration(&domain_for_config, s3_config)
         });
 
         let logrotate_handle = tokio::task::spawn_blocking(move || {
