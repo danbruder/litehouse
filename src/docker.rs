@@ -114,6 +114,19 @@ pub async fn build_with_log(
     Ok(image_id)
 }
 
+/// Check if docker buildx is available
+async fn check_buildx_available() -> bool {
+    let output = Command::new("docker")
+        .args(["buildx", "version"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    }
+}
+
 /// Build using Docker CLI with optional S3 caching
 async fn build_with_docker_cli(
     directory: &str,
@@ -137,28 +150,59 @@ async fn build_with_docker_cli(
     let mut cmd = Command::new("docker");
     cmd.current_dir(directory);
 
-    // Use buildx build if available, fall back to regular build
-    cmd.arg("buildx")
-        .arg("build")
-        .arg("--load")
-        .arg("-t")
-        .arg(tag);
+    // Check if buildx is available
+    let buildx_available = check_buildx_available().await;
 
-    // Add S3 cache flags if credentials are available
-    if use_s3_cache {
+    if buildx_available {
+        cmd.arg("buildx").arg("build").arg("--load");
+    } else {
+        if use_s3_cache {
+            publish_log("WARNING: buildx not available, S3 cache disabled");
+        }
+        cmd.arg("build");
+    }
+
+    cmd.arg("-t").arg(tag);
+
+    // Add S3 cache flags if buildx available and credentials present
+    if use_s3_cache && buildx_available {
         let bucket = std::env::var("S3_BUCKET").ok();
         let region = std::env::var("S3_REGION").ok();
+        let access_key = std::env::var("S3_ACCESS_KEY_ID").ok();
+        let secret_key = std::env::var("S3_SECRET_ACCESS_KEY").ok();
+        let path_prefix = std::env::var("S3_PATH_PREFIX").unwrap_or_else(|_| "litehouse".to_string());
 
-        if let (Some(bucket), Some(region)) = (bucket, region) {
-            let cache_name = app_name.replace('_', "-");
-            let cache_from = format!("type=s3,region={},bucket={},name={}", region, bucket, cache_name);
+        if let (Some(bucket), Some(region), Some(ak), Some(sk)) =
+            (bucket, region, access_key, secret_key)
+        {
+            // Build cache path: {path_prefix}/build-cache/{app_name}
+            let cache_path = format!("{}/build-cache/{}", path_prefix, app_name);
+
+            let cache_from = format!(
+                "type=s3,region={},bucket={},name={}",
+                region, bucket, cache_path
+            );
             let cache_to = format!(
                 "type=s3,region={},bucket={},name={},mode=max",
-                region, bucket, cache_name
+                region, bucket, cache_path
             );
 
             cmd.arg(format!("--cache-from={}", cache_from))
                 .arg(format!("--cache-to={}", cache_to));
+
+            // CRITICAL: Pass AWS credentials to Docker CLI subprocess
+            cmd.env("AWS_ACCESS_KEY_ID", ak)
+                .env("AWS_SECRET_ACCESS_KEY", sk)
+                .env("AWS_REGION", &region);
+
+            if let Ok(endpoint) = std::env::var("S3_ENDPOINT") {
+                cmd.env("AWS_ENDPOINT_URL", endpoint);
+            }
+
+            publish_log(&format!(
+                "Using S3 build cache: s3://{}/{}",
+                bucket, cache_path
+            ));
         }
     }
 

@@ -320,6 +320,20 @@ INSTALLED_VERSION=$(/usr/local/bin/lh --version 2>&1 || echo "unknown")
 info "Installed: $INSTALLED_VERSION"
 echo ""
 
+# Install Docker buildx (for S3 build cache support)
+info "Installing Docker buildx..."
+if ! docker buildx version &>/dev/null; then
+    # Create buildx builder instance
+    if docker buildx create --name litehouse-builder --use --bootstrap >/dev/null 2>&1; then
+        info "Docker buildx installed and configured"
+    else
+        warn "Failed to create buildx builder, S3 build cache may not work"
+    fi
+else
+    info "Docker buildx already installed"
+fi
+echo ""
+
 # Run the install command
 info "Running litehouse install..."
 echo ""

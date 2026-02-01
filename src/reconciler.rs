@@ -189,6 +189,56 @@ impl Reconciler {
         }
     }
 
+    /// Check and restore app databases from S3
+    async fn check_app_databases_restored(&self) -> PhaseResult {
+        // Check if S3 is configured
+        let s3_config = match db_system_config::get_s3_config(&self.db_pool).await {
+            Ok(config) => config,
+            Err(e) => return PhaseResult::Failed(format!("failed to check S3 config: {}", e)),
+        };
+
+        if s3_config.is_none() {
+            return PhaseResult::Skipped("S3 not configured".to_string());
+        }
+
+        // Get all apps from database
+        let apps = match crate::db::app::get_all(&self.db_pool).await {
+            Ok(apps) => apps,
+            Err(e) => return PhaseResult::Failed(format!("failed to get apps: {}", e)),
+        };
+
+        if apps.is_empty() {
+            return PhaseResult::Healthy;
+        }
+
+        // Restore each app database
+        let mut checked_count = 0;
+        for app in apps {
+            let volume_name = crate::volume::get_app_volume_name(&app.id);
+
+            // Create volume if needed (idempotent)
+            if let Err(e) = crate::volume::create_app_volume(&self.docker, &app.id).await {
+                warn!("Failed to create volume for app {}: {}", app.name, e);
+                continue;
+            }
+
+            // Restore if needed (idempotent - checks if DB exists first)
+            match crate::litestream::restore_if_needed(
+                &self.docker,
+                &self.db_pool,
+                &app.id,
+                &volume_name,
+            )
+            .await
+            {
+                Ok(_) => checked_count += 1,
+                Err(e) => warn!("Failed to restore database for app {}: {}", app.name, e),
+            }
+        }
+
+        PhaseResult::Fixed(format!("checked {} app databases", checked_count))
+    }
+
     /// Helper to check if a container is currently running
     async fn is_container_running(&self, container_name: &str) -> bool {
         let list_options = bollard::container::ListContainersOptions::<String> {
@@ -290,6 +340,28 @@ impl Reconciler {
             phases.push(PhaseReport {
                 name: "Litestream config".to_string(),
                 result: PhaseResult::Skipped(skip_reason),
+                duration: Duration::ZERO,
+            });
+        }
+
+        // Phase 5: App database restore (only if Litestream is configured)
+        let litestream_configured = phases
+            .iter()
+            .find(|p| p.name == "Litestream config")
+            .map(|p| !p.result.is_skipped())
+            .unwrap_or(false);
+
+        if litestream_configured {
+            let report = self
+                .run_phase("App database restore", || {
+                    self.check_app_databases_restored()
+                })
+                .await;
+            phases.push(report);
+        } else {
+            phases.push(PhaseReport {
+                name: "App database restore".to_string(),
+                result: PhaseResult::Skipped("S3 not configured".to_string()),
                 duration: Duration::ZERO,
             });
         }
