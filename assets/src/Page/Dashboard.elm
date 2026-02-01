@@ -435,10 +435,7 @@ update shared msg model =
             case shared.token of
                 Just token ->
                     ( model
-                    , Effect.batch
-                        [ Effect.PushUrl ("/apps/" ++ appName)
-                        , Effect.FetchAppDetail token appName GotAppDetail
-                        ]
+                    , Effect.FetchAppDetail token appName GotAppDetail
                     )
 
                 Nothing ->
@@ -1429,7 +1426,6 @@ viewAppCard app =
     a
         [ class "block bg-litehouse-surface rounded-2xl shadow-soft border border-litehouse-border p-5 hover:border-litehouse-amber transition-colors cursor-pointer"
         , href ("/apps/" ++ app.name)
-        , onClick (ViewAppDetail app.name)
         ]
         [ div [ class "flex justify-between items-start mb-3" ]
             [ h3 [ class "text-base font-semibold text-litehouse-text" ] [ text app.name ]
