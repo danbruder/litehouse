@@ -861,14 +861,13 @@ async fn restore_main_database(s3_config: &S3Config) -> Result<()> {
         image: Some("litestream/litestream:latest".to_string()),
         cmd: Some(vec![
             "restore".to_string(),
-            "-replica".to_string(),
+            "-o".to_string(),
+            "/config/litehouse.db".to_string(),
             s3_url,
-            format!("/config/litehouse.db"),
         ]),
         env: Some(env_vars),
         host_config: Some(HostConfig {
             binds: Some(vec!["litehouse_config:/config".to_string()]),
-            auto_remove: Some(true),
             ..Default::default()
         }),
         ..Default::default()
@@ -897,6 +896,16 @@ async fn restore_main_database(s3_config: &S3Config) -> Result<()> {
 
     loop {
         if start_time.elapsed() > timeout {
+            // Clean up on timeout
+            let _ = docker
+                .remove_container(
+                    &container_info.id,
+                    Some(bollard::container::RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
             return Err(anyhow::anyhow!(
                 "Restore container timed out after 5 minutes"
             ));
@@ -907,33 +916,44 @@ async fn restore_main_database(s3_config: &S3Config) -> Result<()> {
         if let Some(state) = container.state {
             if let Some(running) = state.running {
                 if !running {
-                    // Container finished
+                    // Container finished - get logs before cleanup
+                    let logs = docker
+                        .logs::<String>(
+                            &container_info.id,
+                            Some(bollard::container::LogsOptions {
+                                stdout: true,
+                                stderr: true,
+                                tail: "all".to_string(),
+                                ..Default::default()
+                            }),
+                        )
+                        .collect::<Vec<_>>()
+                        .await;
+
+                    let log_output: String = logs
+                        .into_iter()
+                        .filter_map(|r| r.ok())
+                        .map(|log| log.to_string())
+                        .collect::<Vec<_>>()
+                        .join("");
+
+                    // Clean up the container
+                    let _ = docker
+                        .remove_container(
+                            &container_info.id,
+                            Some(bollard::container::RemoveContainerOptions {
+                                force: true,
+                                ..Default::default()
+                            }),
+                        )
+                        .await;
+
                     if let Some(exit_code) = state.exit_code {
                         if exit_code == 0 {
                             info!("Main database restored successfully");
+                            info!("Restore output: {}", log_output);
                             return Ok(());
                         } else {
-                            // Get logs for error details
-                            let logs = docker
-                                .logs::<String>(
-                                    &container_info.id,
-                                    Some(bollard::container::LogsOptions {
-                                        stdout: true,
-                                        stderr: true,
-                                        tail: "all".to_string(),
-                                        ..Default::default()
-                                    }),
-                                )
-                                .collect::<Vec<_>>()
-                                .await;
-
-                            let log_output: String = logs
-                                .into_iter()
-                                .filter_map(|r| r.ok())
-                                .map(|log| log.to_string())
-                                .collect::<Vec<_>>()
-                                .join("");
-
                             return Err(anyhow::anyhow!(
                                 "Restore failed with exit code {}: {}",
                                 exit_code,
