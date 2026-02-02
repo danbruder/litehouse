@@ -56,68 +56,6 @@ pub async fn execute(
         ))
     })?;
 
-    // Try to get current commit hash to check if image already exists
-    let build_dir = config::get_app_build_dir(app_name)?;
-    let commit_hash = match git::get_current_commit(&build_dir) {
-        Ok(hash) => hash,
-        Err(_) => {
-            // If we can't get commit (repo not cloned yet), proceed with build
-            tracing::debug!("Could not get commit hash, proceeding with build");
-            "unknown".to_string()
-        }
-    };
-
-    // Construct image tag
-    let image_tag = if commit_hash != "unknown" {
-        format!("{}:{}", app.name, commit_hash)
-    } else {
-        format!("{}:latest", app.name)
-    };
-
-    // Check if image already exists (unless force flag is set)
-    if !force && commit_hash != "unknown" {
-        match docker::image_exists(&image_tag).await {
-            Ok(true) => {
-                info!("Image {} already exists, skipping build", image_tag);
-
-                // Check if we have a build record for this commit
-                let existing_build = db::build::get_by_commit(pool, &app.id, &commit_hash).await?;
-
-                if existing_build.is_none() {
-                    // Image exists but no DB record - create one
-                    info!("Creating build record for existing image {}", image_tag);
-                    let build = Build::new_success(
-                        app.id.clone(),
-                        image_tag.clone(),
-                        commit_hash.clone(),
-                    );
-                    db::build::save(pool, &build).await?;
-                    return Ok(build);
-                } else {
-                    // Return existing build record
-                    return Ok(existing_build.unwrap());
-                }
-            }
-            Ok(false) => {
-                // Image doesn't exist
-                // Check if DB says we have a successful build
-                if let Ok(Some(db_build)) = db::build::get_by_commit(pool, &app.id, &commit_hash).await {
-                    if db_build.status.to_string() == "success" {
-                        warn!(
-                            "Build record exists for commit {} but image {} is missing. Rebuilding...",
-                            commit_hash, image_tag
-                        );
-                    }
-                }
-                // Proceed with build
-            }
-            Err(e) => {
-                // If image check fails, log warning and proceed with build (fail-safe)
-                warn!("Failed to check if image exists: {}. Proceeding with build.", e);
-            }
-        }
-    }
-
     // Save original state to restore on failure
     let original_state = app.state.clone();
 
@@ -155,6 +93,7 @@ pub async fn execute(
             &remote,
             github_token_owned.as_deref(),
             message_bus_clone.clone(),
+            force,
         )
         .await;
 
@@ -201,11 +140,12 @@ pub async fn execute(
 async fn do_build(
     pool: &Pool<Sqlite>,
     build_id: &str,
-    _app_id: &str,
+    app_id: &str,
     app_name: &str,
     remote: &crate::models::Remote,
     github_token: Option<&str>,
     message_bus: Arc<MessageBus>,
+    force: bool,
 ) -> BuildResult<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -311,8 +251,65 @@ async fn do_build(
         }
     };
 
-    // Build the Docker image
+    // Construct image tag based on the commit we just pulled
     let tag = format!("{}:{}", app_name, &git_result.commit);
+
+    // Check if image already exists (unless force flag is set)
+    let mut should_skip_build = false;
+
+    if !force {
+        match docker::image_exists(&tag).await {
+            Ok(true) => {
+                info!("Image {} already exists, skipping build", tag);
+
+                // Check if we have a build record for this commit
+                let existing_build = db::build::get_by_commit(pool, app_id, &git_result.commit).await?;
+
+                if existing_build.is_none() {
+                    // Image exists but no DB record - create one
+                    info!("Creating build record for existing image {}", tag);
+                    let mut success_build = Build::new_success(
+                        app_id.to_string(),
+                        tag.clone(),
+                        git_result.commit.clone(),
+                    );
+                    // Set exposed port if we can get it
+                    if let Ok(port) = docker::get_exposed_port(&tag).await {
+                        success_build.set_exposed_port(port);
+                    }
+                    db::build::save(pool, &success_build).await?;
+                }
+                // Mark that we should skip the actual build
+                should_skip_build = true;
+            }
+            Ok(false) => {
+                // Image doesn't exist
+                info!("Image {} does not exist, will proceed with build", tag);
+
+                // Check if DB says we have a successful build (image was deleted/lost)
+                if let Ok(Some(db_build)) = db::build::get_by_commit(pool, app_id, &git_result.commit).await {
+                    if db_build.status.to_string() == "success" {
+                        warn!(
+                            "Build record exists for commit {} but image {} is missing. This can happen after VM restore or docker system prune. Rebuilding automatically...",
+                            git_result.commit, tag
+                        );
+                    }
+                }
+                // Don't skip - fall through to rebuild
+            }
+            Err(e) => {
+                // If image check fails, log warning and proceed with build (fail-safe)
+                warn!("Failed to check if image exists: {}. Proceeding with build.", e);
+            }
+        }
+    }
+
+    // Skip the actual build if image already exists and is valid
+    if should_skip_build {
+        return Ok(());
+    }
+
+    // Build the Docker image
     let image_id = match docker::build_with_log(
         build_dir.to_str().unwrap(),
         &tag,
