@@ -88,4 +88,25 @@ impl Build {
         self.exposed_port = Some(port);
         self.updated_at = now();
     }
+
+    /// Create a successful build record (without building)
+    pub fn new_success(
+        app_id: String,
+        image_tag: String,
+        git_commit: String,
+    ) -> Self {
+        let now_val = now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            app_id,
+            image_id: None,
+            image_tag: Some(image_tag),
+            git_commit: Some(git_commit),
+            log_path: None,
+            exposed_port: None,
+            status: BuildStatus::Success,
+            created_at: now_val.clone(),
+            updated_at: now_val,
+        }
+    }
 }

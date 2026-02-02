@@ -36,6 +36,7 @@ pub async fn execute(
     app_name: &str,
     github_token: Option<&str>,
     message_bus: Arc<MessageBus>,
+    force: bool,
 ) -> BuildResult<Build> {
     // Get app
     let mut app = db::app::get_by_name(pool, app_name)
@@ -54,6 +55,68 @@ pub async fn execute(
             app.name
         ))
     })?;
+
+    // Try to get current commit hash to check if image already exists
+    let build_dir = config::get_app_build_dir(app_name)?;
+    let commit_hash = match git::get_current_commit(&build_dir) {
+        Ok(hash) => hash,
+        Err(_) => {
+            // If we can't get commit (repo not cloned yet), proceed with build
+            tracing::debug!("Could not get commit hash, proceeding with build");
+            "unknown".to_string()
+        }
+    };
+
+    // Construct image tag
+    let image_tag = if commit_hash != "unknown" {
+        format!("{}:{}", app.name, commit_hash)
+    } else {
+        format!("{}:latest", app.name)
+    };
+
+    // Check if image already exists (unless force flag is set)
+    if !force && commit_hash != "unknown" {
+        match docker::image_exists(&image_tag).await {
+            Ok(true) => {
+                info!("Image {} already exists, skipping build", image_tag);
+
+                // Check if we have a build record for this commit
+                let existing_build = db::build::get_by_commit(pool, &app.id, &commit_hash).await?;
+
+                if existing_build.is_none() {
+                    // Image exists but no DB record - create one
+                    info!("Creating build record for existing image {}", image_tag);
+                    let build = Build::new_success(
+                        app.id.clone(),
+                        image_tag.clone(),
+                        commit_hash.clone(),
+                    );
+                    db::build::save(pool, &build).await?;
+                    return Ok(build);
+                } else {
+                    // Return existing build record
+                    return Ok(existing_build.unwrap());
+                }
+            }
+            Ok(false) => {
+                // Image doesn't exist
+                // Check if DB says we have a successful build
+                if let Ok(Some(db_build)) = db::build::get_by_commit(pool, &app.id, &commit_hash).await {
+                    if db_build.status.to_string() == "success" {
+                        warn!(
+                            "Build record exists for commit {} but image {} is missing. Rebuilding...",
+                            commit_hash, image_tag
+                        );
+                    }
+                }
+                // Proceed with build
+            }
+            Err(e) => {
+                // If image check fails, log warning and proceed with build (fail-safe)
+                warn!("Failed to check if image exists: {}. Proceeding with build.", e);
+            }
+        }
+    }
 
     // Save original state to restore on failure
     let original_state = app.state.clone();
@@ -335,7 +398,7 @@ mod tests {
         let pool = get_test_pool().await;
         let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
-        let result = execute(&pool, "nonexistent-app", None, message_bus).await;
+        let result = execute(&pool, "nonexistent-app", None, message_bus, false).await;
 
         assert!(matches!(result, Err(BuildError::AppNotFound(_))));
     }
@@ -350,7 +413,7 @@ mod tests {
         app.state = AppState::Building;
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-building-app", None, message_bus).await;
+        let result = execute(&pool, "test-building-app", None, message_bus, false).await;
 
         assert!(matches!(result, Err(BuildError::AlreadyBuilding(_))));
     }
@@ -364,7 +427,7 @@ mod tests {
         let app = App::new("test-no-remote-app").unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-no-remote-app", None, message_bus).await;
+        let result = execute(&pool, "test-no-remote-app", None, message_bus, false).await;
 
         assert!(matches!(result, Err(BuildError::AppNotConfigured(_))));
     }
@@ -390,7 +453,7 @@ mod tests {
 
         // Execute build - this should start the build and return immediately
         let message_bus = Arc::new(crate::message_bus::MessageBus::new());
-        let result = execute(&pool, "test-build-app", None, message_bus).await;
+        let result = execute(&pool, "test-build-app", None, message_bus, false).await;
 
         // Build should start successfully (returns a build record)
         assert!(result.is_ok(), "Build should start: {:?}", result.err());

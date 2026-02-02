@@ -95,6 +95,23 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .await
         .map_err(|e| StartError::AppStartFailed(format!("Volume already in use: {}", e)))?;
 
+    // Verify image exists before trying to start
+    match docker::image_exists(image_tag).await {
+        Ok(false) => {
+            return Err(StartError::AppBuildMissing(format!(
+                "Docker image '{}' not found. The build record exists but the image is missing. \
+                Run 'lh build {}' to rebuild.",
+                image_tag, app_name
+            )));
+        }
+        Err(e) => {
+            tracing::warn!("Failed to check image existence: {}. Attempting to start anyway.", e);
+        }
+        Ok(true) => {
+            // Image exists, proceed
+        }
+    }
+
     // Mount app volume at /data
     let volume_binds = vec![format!("{}:/data", volume_name)];
 

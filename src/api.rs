@@ -717,10 +717,17 @@ async fn remove_remote(
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct BuildQuery {
+    #[serde(default)]
+    force: bool,
+}
+
 async fn build_app(
     State(state): State<Arc<RwLock<AppState>>>,
     axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
     Path(name): Path<String>,
+    Query(query): Query<BuildQuery>,
 ) -> impl IntoResponse {
     let (pool, message_bus) = {
         let state = state.read().await;
@@ -734,7 +741,7 @@ async fn build_app(
         _ => None,
     };
 
-    match build::execute(&pool, &name, github_token.as_deref(), message_bus).await {
+    match build::execute(&pool, &name, github_token.as_deref(), message_bus, query.force).await {
         Ok(build_record) => Json(serde_json::json!({
             "message": format!("App '{}' built", name),
             "build_id": build_record.id

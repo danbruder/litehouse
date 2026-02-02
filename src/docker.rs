@@ -22,6 +22,8 @@ pub enum DockerError {
     BuildStreamError(String),
     #[error("Log error: {0}")]
     LogError(String),
+    #[error("Failed to list images: {0}")]
+    ListImagesError(String),
     #[error("Bollard error: {0}")]
     BollardError(#[from] bollard::errors::Error),
     #[error("IO error: {0}")]
@@ -655,6 +657,23 @@ fn resolve_docker_socket_path() -> Result<String> {
     // Fallback to default
     info!("Using default Docker socket path: {}", docker_sock);
     Ok(docker_sock.to_string())
+}
+
+/// Check if a Docker image with the given tag exists
+#[instrument]
+pub async fn image_exists(tag: &str) -> Result<bool> {
+    let docker = connect().await?;
+    let images = docker
+        .list_images::<String>(None)
+        .await
+        .map_err(|e| DockerError::ListImagesError(e.to_string()))?;
+
+    Ok(images.iter().any(|image| {
+        image
+            .repo_tags
+            .iter()
+            .any(|t| t == tag)
+    }))
 }
 
 #[cfg(test)]

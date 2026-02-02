@@ -523,9 +523,13 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn build(&self, app_name: &str) -> Result<()> {
-        let url = format!("{}/apps/{}/build", self.config.base_url, app_name);
-        
+    pub async fn build(&self, app_name: &str, force: bool) -> Result<()> {
+        let url = if force {
+            format!("{}/apps/{}/build?force=true", self.config.base_url, app_name)
+        } else {
+            format!("{}/apps/{}/build", self.config.base_url, app_name)
+        };
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url);
             if let Some(header) = auth_header {

@@ -84,6 +84,31 @@ pub async fn pull(
     Ok(GitPullResult { commit })
 }
 
+/// Get the current commit hash of a git repository
+#[instrument]
+pub fn get_current_commit(directory: &Path) -> GitResult<String> {
+    info!("Getting current commit for directory: {}", directory.display());
+
+    let output = Command::new("git")
+        .args(["-C", directory.to_str().unwrap(), "rev-parse", "HEAD"])
+        .output()?;
+
+    if !output.status.success() {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(GitError::GitError(format!(
+            "Failed to get commit hash: {}",
+            error_msg
+        )));
+    }
+
+    let commit = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_string();
+
+    info!("Current commit: {}", commit);
+    Ok(commit)
+}
+
 /// Inject a GitHub token into an HTTPS GitHub URL
 /// Converts `https://github.com/user/repo` to `https://x-access-token:TOKEN@github.com/user/repo`
 fn inject_github_token(url: &str, token: &str) -> String {

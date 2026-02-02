@@ -151,6 +151,7 @@ pub async fn handle_github_webhook(
         &app.name,
         github_token.as_deref(),
         message_bus.clone(),
+        false, // force=false for webhooks
     )
     .await
     {

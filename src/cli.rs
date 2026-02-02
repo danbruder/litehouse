@@ -89,6 +89,10 @@ enum Commands {
     Build {
         /// Name of the app
         app_name: String,
+
+        /// Force rebuild even if image already exists
+        #[arg(long, short)]
+        force: bool,
     },
 
     /// Deploy a binary to an app
@@ -437,7 +441,7 @@ pub async fn run() -> Result<()> {
                     RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
                     RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
                 },
-                Commands::Build { app_name } => api_client.build(&app_name).await,
+                Commands::Build { app_name, force } => api_client.build(&app_name, force).await,
                 Commands::Github { command } => match command {
                     GithubCmd::Connect => {
                         crate::commands::github::connect::execute(&api_client).await

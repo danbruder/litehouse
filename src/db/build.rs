@@ -65,6 +65,30 @@ pub async fn get_latest_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Opti
     Ok(row.map(|r| build_from_row(&r)))
 }
 
+/// Get build by app id and git commit
+#[instrument(skip(pool))]
+pub async fn get_by_commit(
+    pool: &Pool<Sqlite>,
+    app_id: &str,
+    git_commit: &str,
+) -> Result<Option<Build>> {
+    let row = sqlx::query(
+        r#"
+            SELECT id, app_id, image_id, image_tag, git_commit, log_path, exposed_port, status, created_at, updated_at
+            FROM build
+            WHERE app_id = ? AND git_commit = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+    )
+    .bind(app_id)
+    .bind(git_commit)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| build_from_row(&r)))
+}
+
 /// Get build by id
 #[instrument(skip(pool))]
 pub async fn get_by_id(pool: &Pool<Sqlite>, build_id: &str) -> Result<Option<Build>> {
