@@ -240,14 +240,57 @@ async fn do_build(
         }
     });
 
-    // Pull the git repo
-    let git_result = match git::pull(remote, &build_dir, github_token).await {
-        Ok(result) => result,
-        Err(e) => {
+    // Pull or clone the git repo
+    // Check if this is a valid git repository by looking for .git directory
+    let is_git_repo = build_dir.join(".git").exists();
+
+    let git_result = if is_git_repo {
+        // Valid git repo exists, try to pull
+        match git::pull(remote, &build_dir, github_token).await {
+            Ok(result) => result,
+            Err(e) => {
+                // Mark build as failed
+                build.mark_failed();
+                let _ = db::build::save(pool, &build).await;
+                return Err(BuildError::GitError(e));
+            }
+        }
+    } else {
+        // Not a git repo, need to clone it
+        info!("Git repository not found at {:?}, cloning from {}", build_dir, remote.remote);
+
+        // Remove the build directory if it's empty so git clone can create it fresh
+        // git clone requires the target directory to either not exist or be empty
+        if build_dir.exists() {
+            match std::fs::remove_dir(&build_dir) {
+                Ok(_) => {
+                    info!("Removed empty build directory to prepare for clone");
+                }
+                Err(e) => {
+                    warn!("Failed to remove empty build directory: {}, attempting clone anyway", e);
+                }
+            }
+        }
+
+        if let Err(e) = git::clone(&remote.remote, &build_dir, github_token).await {
             // Mark build as failed
             build.mark_failed();
             let _ = db::build::save(pool, &build).await;
             return Err(BuildError::GitError(e));
+        }
+
+        // Now get the current commit after cloning
+        match git::get_current_commit(&build_dir) {
+            Ok(commit) => {
+                info!("Repository cloned successfully, current commit: {}", commit);
+                crate::git::GitPullResult { commit }
+            }
+            Err(e) => {
+                // Mark build as failed
+                build.mark_failed();
+                let _ = db::build::save(pool, &build).await;
+                return Err(BuildError::GitError(e));
+            }
         }
     };
 

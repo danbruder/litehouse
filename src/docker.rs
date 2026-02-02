@@ -79,31 +79,14 @@ pub async fn build_with_log(
         return Err(DockerError::DockerfileNotFound(directory.to_string()).into());
     }
 
-    publish_log("Starting container image build with Docker CLI...");
-    info!("Starting container image build with Docker CLI...");
+    publish_log("Starting container image build...");
+    info!("Starting container image build via Bollard API...");
 
-    // Check if S3 credentials are available
-    let s3_access_key = std::env::var("S3_ACCESS_KEY_ID").ok();
-    let s3_secret_key = std::env::var("S3_SECRET_ACCESS_KEY").ok();
-    let s3_bucket = std::env::var("S3_BUCKET").ok();
-    let s3_region = std::env::var("S3_REGION").ok();
-
-    let has_s3_config = s3_access_key.is_some()
-        && s3_secret_key.is_some()
-        && s3_bucket.is_some()
-        && s3_region.is_some();
-
-    if has_s3_config {
-        publish_log("S3 credentials detected, build cache will use S3 backend");
-        info!("S3 credentials available for build cache");
-    }
-
-    // Build using Docker CLI with optional S3 cache support
-    let image_id = build_with_docker_cli(
+    // Build using Bollard API (no docker CLI required!)
+    let image_id = build_with_bollard_api(
         directory,
         tag,
         app_name,
-        has_s3_config,
         message_bus.clone(),
         build_id.to_string(),
     )
@@ -129,7 +112,102 @@ async fn check_buildx_available() -> bool {
     }
 }
 
-/// Build using Docker CLI with optional S3 caching
+/// Build using Bollard Docker API (no CLI required)
+async fn build_with_bollard_api(
+    directory: &str,
+    tag: &str,
+    app_name: &str,
+    message_bus: Arc<MessageBus>,
+    build_id: String,
+) -> Result<String> {
+    use bollard::image::BuildImageOptions;
+    use std::fs::File;
+
+    let app_name_str = app_name.to_string();
+
+    let publish_log = |data: &str| {
+        message_bus.publish(Message::BuildLogs {
+            app_name: app_name_str.clone(),
+            build_id: build_id.clone(),
+            event_type: "message".to_string(),
+            data: data.to_string(),
+        });
+    };
+
+    publish_log(&format!("Building Docker image using Bollard API..."));
+
+    let docker = connect().await?;
+
+    // Create TAR context from directory
+    let dockerfile_path = std::path::Path::new(directory).join("Dockerfile");
+    if !dockerfile_path.exists() {
+        return Err(DockerError::DockerfileNotFound(directory.to_string()).into());
+    }
+
+    // Use docker build context - read the directory as a tar
+    let tar = std::process::Command::new("tar")
+        .arg("-C").arg(directory)
+        .arg("-czf").arg("-")
+        .arg(".")
+        .output()
+        .map_err(|e| {
+            publish_log(&format!("ERROR: Failed to create tar context: {}", e));
+            DockerError::BuildError(format!("Failed to create tar context: {}", e))
+        })?;
+
+    if !tar.status.success() {
+        let err = String::from_utf8_lossy(&tar.stderr);
+        return Err(DockerError::BuildError(format!("tar failed: {}", err)).into());
+    }
+
+    let build_context = tar.stdout;
+
+    let options = BuildImageOptions {
+        dockerfile: "Dockerfile".to_string(),
+        t: tag.to_string(),
+        ..Default::default()
+    };
+
+    let mut build_stream = docker.build_image(options, None, Some(build_context.into()));
+    let mut image_id = String::new();
+
+    use futures_util::stream::StreamExt;
+    while let Some(result) = build_stream.next().await {
+        match result {
+            Ok(output) => {
+                if let Some(error) = output.error {
+                    publish_log(&format!("Build error: {}", error));
+                } else if let Some(msg) = output.stream {
+                    let msg_str = msg.trim();
+                    if !msg_str.is_empty() {
+                        publish_log(&msg_str);
+                    }
+                    // Try to extract image ID from success message
+                    if msg_str.contains("Successfully tagged") || msg_str.contains("Successfully built") {
+                        if let Some(id) = msg_str.split_whitespace().last() {
+                            image_id = id.to_string();
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                publish_log(&format!("ERROR: Build stream error: {}", e));
+                return Err(e.into());
+            }
+        }
+    }
+
+    if image_id.is_empty() {
+        publish_log("WARNING: Could not extract image ID from build output, using tag as identifier");
+        image_id = tag.to_string();
+    }
+
+    publish_log(&format!("Build completed successfully!"));
+    info!("Built image ID: {}", image_id);
+    Ok(image_id)
+}
+
+/// Build using Docker CLI with optional S3 caching (legacy fallback)
 async fn build_with_docker_cli(
     directory: &str,
     tag: &str,

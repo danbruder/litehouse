@@ -45,11 +45,13 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies (git for cloning repos)
-# Note: podman/docker builds are done via the Bollard API through a mounted socket
+# Install runtime dependencies
+# - git: for git operations
+# - tar: for creating build context
 RUN apk add --no-cache \
     ca-certificates \
-    git
+    git \
+    tar
 
 # Create litehouse user and directories
 RUN addgroup -g 1000 litehouse && \
