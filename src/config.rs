@@ -6,8 +6,10 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use tracing::instrument;
 
-static TEST_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
-static TEST_CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
+thread_local! {
+    static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+    static TEST_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+}
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum ConfigError {
@@ -68,20 +70,19 @@ impl Default for ClientConfig {
 }
 
 /// Set test directories
-/// Returns Ok if set successfully, Err if already set
+/// Can be called multiple times to reset directories between tests
 pub fn set_test_dirs(data_dir: PathBuf, config_dir: PathBuf) -> Result<(), PathBuf> {
-    TEST_DATA_DIR.set(data_dir).map_err(|_| PathBuf::new())?;
-    TEST_CONFIG_DIR
-        .set(config_dir)
-        .map_err(|_| PathBuf::new())?;
+    TEST_DATA_DIR.with(|dir| *dir.borrow_mut() = Some(data_dir));
+    TEST_CONFIG_DIR.with(|dir| *dir.borrow_mut() = Some(config_dir));
     Ok(())
 }
 
 /// Get the config directory
 #[instrument]
 pub fn get_config_dir() -> Result<PathBuf, ConfigError> {
-    if let Some(dir) = TEST_CONFIG_DIR.get() {
-        return Ok(dir.clone());
+    let test_dir = TEST_CONFIG_DIR.with(|dir| dir.borrow().clone());
+    if let Some(dir) = test_dir {
+        return Ok(dir);
     }
     let config_dir = get_base_dir().join("config");
 
@@ -95,8 +96,9 @@ pub fn get_config_dir() -> Result<PathBuf, ConfigError> {
 
 /// Get the data directory
 pub fn get_data_dir() -> Result<PathBuf, ConfigError> {
-    if let Some(dir) = TEST_DATA_DIR.get() {
-        return Ok(dir.clone());
+    let test_dir = TEST_DATA_DIR.with(|dir| dir.borrow().clone());
+    if let Some(dir) = test_dir {
+        return Ok(dir);
     }
 
     let data_dir = get_base_dir().join("data");
@@ -343,11 +345,10 @@ mod tests {
         // Ensure directories exist
         std::fs::create_dir_all(data_dir.path()).unwrap();
         std::fs::create_dir_all(config_dir.path()).unwrap();
-        // Only set if not already set (for parallel test execution)
-        let _ = set_test_dirs(
+        set_test_dirs(
             data_dir.path().to_path_buf(),
             config_dir.path().to_path_buf(),
-        );
+        ).unwrap();
         (data_dir, config_dir)
     }
 
