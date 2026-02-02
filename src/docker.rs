@@ -1,13 +1,10 @@
 use crate::message_bus::{Message, MessageBus};
 use crate::models::{App, EnvVar};
 use bollard::Docker;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use futures_util::StreamExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::process::Command;
 use tracing::{info, instrument};
 
 type Result<T> = std::result::Result<T, DockerError>;
@@ -99,20 +96,8 @@ pub async fn build_with_log(
     Ok(image_id)
 }
 
-/// Check if docker buildx is available
-async fn check_buildx_available() -> bool {
-    let output = Command::new("docker")
-        .args(["buildx", "version"])
-        .output()
-        .await;
 
-    match output {
-        Ok(out) => out.status.success(),
-        Err(_) => false,
-    }
-}
-
-/// Build using Bollard Docker API (no CLI required)
+/// Build using Bollard Docker API with BuildKit and S3 caching support
 async fn build_with_bollard_api(
     directory: &str,
     tag: &str,
@@ -120,8 +105,7 @@ async fn build_with_bollard_api(
     message_bus: Arc<MessageBus>,
     build_id: String,
 ) -> Result<String> {
-    use bollard::image::BuildImageOptions;
-    use std::fs::File;
+    use bollard::image::{BuildImageOptions, BuilderVersion};
 
     let app_name_str = app_name.to_string();
 
@@ -134,7 +118,7 @@ async fn build_with_bollard_api(
         });
     };
 
-    publish_log(&format!("Building Docker image using Bollard API..."));
+    publish_log(&format!("Building Docker image using Bollard BuildKit API..."));
 
     let docker = connect().await?;
 
@@ -162,11 +146,37 @@ async fn build_with_bollard_api(
 
     let build_context = tar.stdout;
 
-    let options = BuildImageOptions {
+    // Check if S3 caching is configured
+    let s3_config = get_s3_cache_config(app_name);
+
+    if let Some(config) = &s3_config {
+        publish_log(&format!(
+            "Using S3 build cache: s3://{}/{}",
+            config.bucket, config.cache_path
+        ));
+    }
+
+    // BuildKit requires a session ID and supports advanced cache backends
+    let _session_id = format!("litehouse-{}-{}", app_name, uuid::Uuid::new_v4());
+
+    #[cfg_attr(not(feature = "buildkit"), allow(unused_mut))]
+    let mut options = BuildImageOptions {
         dockerfile: "Dockerfile".to_string(),
         t: tag.to_string(),
+        version: BuilderVersion::BuilderBuildKit,
+        pull: true,
+        #[cfg(feature = "buildkit")]
+        session: Some(_session_id.clone()),
         ..Default::default()
     };
+
+    // Configure cache outputs with S3 backend if available
+    #[cfg(feature = "buildkit")]
+    {
+        if let Some(config) = &s3_config {
+            options.outputs = Some(vec![build_cache_output(&config)?]);
+        }
+    }
 
     let mut build_stream = docker.build_image(options, None, Some(build_context.into()));
     let mut image_id = String::new();
@@ -207,167 +217,49 @@ async fn build_with_bollard_api(
     Ok(image_id)
 }
 
-/// Build using Docker CLI with optional S3 caching (legacy fallback)
-async fn build_with_docker_cli(
-    directory: &str,
-    tag: &str,
-    app_name: &str,
-    use_s3_cache: bool,
-    message_bus: Arc<MessageBus>,
-    build_id: String,
-) -> Result<String> {
-    let app_name_str = app_name.to_string();
-
-    let publish_log = |data: &str| {
-        message_bus.publish(Message::BuildLogs {
-            app_name: app_name_str.clone(),
-            build_id: build_id.clone(),
-            event_type: "message".to_string(),
-            data: data.to_string(),
-        });
-    };
-
-    let mut cmd = Command::new("docker");
-    cmd.current_dir(directory);
-
-    // Check if buildx is available
-    let buildx_available = check_buildx_available().await;
-
-    if buildx_available {
-        cmd.arg("buildx").arg("build").arg("--load");
-    } else {
-        if use_s3_cache {
-            publish_log("WARNING: buildx not available, S3 cache disabled");
-        }
-        cmd.arg("build");
-    }
-
-    cmd.arg("-t").arg(tag);
-
-    // Add S3 cache flags if buildx available and credentials present
-    if use_s3_cache && buildx_available {
-        let bucket = std::env::var("S3_BUCKET").ok();
-        let region = std::env::var("S3_REGION").ok();
-        let access_key = std::env::var("S3_ACCESS_KEY_ID").ok();
-        let secret_key = std::env::var("S3_SECRET_ACCESS_KEY").ok();
-        let path_prefix = std::env::var("S3_PATH_PREFIX").unwrap_or_else(|_| "litehouse".to_string());
-
-        if let (Some(bucket), Some(region), Some(ak), Some(sk)) =
-            (bucket, region, access_key, secret_key)
-        {
-            // Build cache path: {path_prefix}/build-cache/{app_name}
-            let cache_path = format!("{}/build-cache/{}", path_prefix, app_name);
-
-            let cache_from = format!(
-                "type=s3,region={},bucket={},name={}",
-                region, bucket, cache_path
-            );
-            let cache_to = format!(
-                "type=s3,region={},bucket={},name={},mode=max",
-                region, bucket, cache_path
-            );
-
-            cmd.arg(format!("--cache-from={}", cache_from))
-                .arg(format!("--cache-to={}", cache_to));
-
-            // CRITICAL: Pass AWS credentials to Docker CLI subprocess
-            cmd.env("AWS_ACCESS_KEY_ID", ak)
-                .env("AWS_SECRET_ACCESS_KEY", sk)
-                .env("AWS_REGION", &region);
-
-            if let Ok(endpoint) = std::env::var("S3_ENDPOINT") {
-                cmd.env("AWS_ENDPOINT_URL", endpoint);
-            }
-
-            publish_log(&format!(
-                "Using S3 build cache: s3://{}/{}",
-                bucket, cache_path
-            ));
-        }
-    }
-
-    cmd.arg(".");
-
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(|e| {
-        publish_log(&format!("ERROR: Failed to start docker build: {}", e));
-        DockerError::BuildError(format!("Failed to start docker build: {}", e))
-    })?;
-
-    // Wait for process to complete
-    let status = child.wait().await.map_err(|e| {
-        publish_log(&format!("ERROR: Docker build process error: {}", e));
-        DockerError::BuildError(format!("Docker build process error: {}", e))
-    })?;
-
-    if !status.success() {
-        publish_log(&format!(
-            "ERROR: Docker build failed with exit code: {}",
-            status.code().unwrap_or(-1)
-        ));
-        return Err(DockerError::BuildError(format!(
-            "Docker build failed with exit code: {}",
-            status.code().unwrap_or(-1)
-        )));
-    }
-
-    // Get image ID by inspecting the image
-    let docker = connect().await?;
-    let image_inspect = docker.inspect_image(tag).await.map_err(|e| {
-        let err_msg = format!("Failed to inspect built image: {}", e);
-        publish_log(&format!("ERROR: {}", err_msg));
-        DockerError::BuildError(err_msg)
-    })?;
-
-    let image_id = image_inspect.id.ok_or_else(|| {
-        let err = "Failed to get image ID from build result".to_string();
-        publish_log(&format!("ERROR: {}", err));
-        DockerError::BuildError(err)
-    })?;
-
-    Ok(image_id)
+/// S3 cache configuration
+#[derive(Debug, Clone)]
+struct S3CacheConfig {
+    bucket: String,
+    region: String,
+    cache_path: String,
 }
 
-/// Create a gzipped tar archive of the build context directory
-fn create_build_context_tar(directory: &str) -> Result<Vec<u8>> {
-    use std::fs;
-    use walkdir::WalkDir;
+/// Parse S3 configuration from environment variables
+fn get_s3_cache_config(app_name: &str) -> Option<S3CacheConfig> {
+    let bucket = std::env::var("S3_BUCKET").ok()?;
+    let region = std::env::var("S3_REGION").ok()?;
+    let path_prefix = std::env::var("S3_PATH_PREFIX").unwrap_or_else(|_| "litehouse".to_string());
 
-    let dir_path = Path::new(directory);
+    // Verify credentials are also present
+    let _access_key = std::env::var("S3_ACCESS_KEY_ID").ok()?;
+    let _secret_key = std::env::var("S3_SECRET_ACCESS_KEY").ok()?;
 
-    let mut tar_data = Vec::new();
-    {
-        let encoder = GzEncoder::new(&mut tar_data, Compression::default());
-        let mut tar_builder = tar::Builder::new(encoder);
+    let cache_path = format!("{}/build-cache/{}", path_prefix, app_name);
 
-        for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let relative_path = path.strip_prefix(dir_path)?;
+    Some(S3CacheConfig {
+        bucket,
+        region,
+        cache_path,
+    })
+}
 
-            // Skip empty relative paths (the root directory itself)
-            if relative_path.as_os_str().is_empty() {
-                continue;
-            }
+/// Build cache output for BuildKit with S3 backend
+#[cfg(feature = "buildkit")]
+fn build_cache_output(config: &S3CacheConfig) -> Result<bollard::image::ImageBuildOutput<String>> {
+    use std::collections::HashMap;
 
-            // Skip .git directory
-            if relative_path.components().any(|c| c.as_os_str() == ".git") {
-                continue;
-            }
+    let mut attrs = HashMap::new();
+    attrs.insert("type".to_string(), "s3".to_string());
+    attrs.insert("region".to_string(), config.region.clone());
+    attrs.insert("bucket".to_string(), config.bucket.clone());
+    attrs.insert("name".to_string(), config.cache_path.clone());
+    attrs.insert("mode".to_string(), "max".to_string());
 
-            if path.is_file() {
-                let mut file = fs::File::open(path)?;
-                tar_builder.append_file(relative_path, &mut file)?;
-            } else if path.is_dir() {
-                tar_builder.append_dir(relative_path, path)?;
-            }
-        }
-
-        tar_builder.into_inner()?.finish()?;
-    }
-
-    Ok(tar_data)
+    Ok(bollard::image::ImageBuildOutput {
+        typ: "s3".to_string(),
+        attrs,
+    })
 }
 
 /// Get the exposed port from a Docker image

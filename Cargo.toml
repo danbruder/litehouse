@@ -52,5 +52,6 @@ name = "lh"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["buildkit"]
 vendored-openssl = []
+buildkit = ["bollard/buildkit"]
