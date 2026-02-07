@@ -5,3 +5,4 @@ assets/elm-stuff
 assets/dist
 assets/node_modules
 assets/public/app.js
+.beads/export-state/
