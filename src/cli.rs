@@ -76,19 +76,39 @@ enum Commands {
         app_name: String,
     },
 
-    /// Deploy a binary to an app
+    /// Deploy a Docker image tarball to an app
     Deploy {
         /// Name of the app
         app_name: String,
 
-        /// Path to the binary file
-        binary_path: String,
+        /// Path to the Docker image tarball
+        image_path: String,
+
+        /// Image tag (e.g. myapp:abc123)
+        #[arg(long)]
+        image_tag: Option<String>,
+
+        /// Git commit hash
+        #[arg(long)]
+        git_commit: Option<String>,
+
+        /// Don't auto-start the app after deploying
+        #[arg(long)]
+        no_start: bool,
     },
 
-    /// Build an app
+    /// Build an app locally and deploy to server
     Build {
         /// Name of the app
         app_name: String,
+
+        /// Path to the directory containing the Dockerfile (defaults to current directory)
+        #[arg(long, short, default_value = ".")]
+        path: String,
+
+        /// Don't auto-start the app after deploying
+        #[arg(long)]
+        no_start: bool,
 
         /// Force rebuild even if image already exists
         #[arg(long, short)]
@@ -366,8 +386,21 @@ pub async fn run() -> Result<()> {
                 Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
                 Commands::Deploy {
                     app_name,
-                    binary_path,
-                } => api_client.deploy_app(&app_name, &binary_path).await,
+                    image_path,
+                    image_tag,
+                    git_commit,
+                    no_start,
+                } => {
+                    api_client
+                        .deploy_app(
+                            &app_name,
+                            &image_path,
+                            image_tag.as_deref(),
+                            git_commit.as_deref(),
+                            no_start,
+                        )
+                        .await
+                }
                 Commands::Env {
                     app_name,
                     key,
@@ -441,7 +474,21 @@ pub async fn run() -> Result<()> {
                     RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
                     RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
                 },
-                Commands::Build { app_name, force } => api_client.build(&app_name, force).await,
+                Commands::Build {
+                    app_name,
+                    path,
+                    no_start,
+                    force,
+                } => {
+                    crate::commands::build::execute_local(
+                        &api_client,
+                        &app_name,
+                        &path,
+                        no_start,
+                        force,
+                    )
+                    .await
+                }
                 Commands::Github { command } => match command {
                     GithubCmd::Connect => {
                         crate::commands::github::connect::execute(&api_client).await

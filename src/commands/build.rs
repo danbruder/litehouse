@@ -1,3 +1,4 @@
+use crate::api_client::ApiClient;
 use crate::config;
 use crate::message_bus::{Message, MessageBus, SubscriptionFilter};
 use sqlx::{Pool, Sqlite};
@@ -416,6 +417,80 @@ async fn cleanup_old_builds(pool: &Pool<Sqlite>, app_id: &str) {
             info!("Failed to cleanup old builds: {}", e);
         }
     }
+}
+
+/// Client-side build: build Docker image locally, then upload to server via deploy endpoint.
+pub async fn execute_local(
+    api_client: &ApiClient,
+    app_name: &str,
+    path: &str,
+    no_start: bool,
+    _force: bool,
+) -> anyhow::Result<()> {
+    use std::path::Path;
+
+    let build_dir = Path::new(path);
+
+    // Verify Dockerfile exists
+    let dockerfile = build_dir.join("Dockerfile");
+    if !dockerfile.exists() {
+        anyhow::bail!(
+            "No Dockerfile found in '{}'. Make sure you're in the right directory or use --path.",
+            build_dir.display()
+        );
+    }
+
+    // Get git commit hash from the build directory
+    let git_commit = match git::get_current_commit(build_dir) {
+        Ok(commit) => {
+            println!("Git commit: {}", &commit[..8.min(commit.len())]);
+            commit
+        }
+        Err(_) => {
+            // Not a git repo — use a timestamp-based tag
+            let ts = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
+            println!("Not a git repository, using timestamp: {}", ts);
+            ts
+        }
+    };
+
+    let image_tag = format!("{}:{}", app_name, &git_commit[..12.min(git_commit.len())]);
+
+    // Build Docker image locally
+    println!("Building Docker image: {}", image_tag);
+    let build_output = std::process::Command::new("docker")
+        .args(["build", "-t", &image_tag, "."])
+        .current_dir(build_dir)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()?;
+
+    if !build_output.success() {
+        anyhow::bail!("Docker build failed");
+    }
+
+    println!("Build complete. Exporting image...");
+
+    // Save image to temp file
+    let temp_dir = tempfile::tempdir()?;
+    let tarball_path = temp_dir.path().join(format!("{}.tar", app_name));
+    let tarball_str = tarball_path.to_string_lossy().to_string();
+
+    docker::save_image(&image_tag, &tarball_str).await?;
+
+    let file_size = std::fs::metadata(&tarball_path)?.len();
+    println!(
+        "Image exported ({:.1} MB). Uploading to server...",
+        file_size as f64 / 1_048_576.0
+    );
+
+    // Upload to server
+    api_client
+        .deploy_app(app_name, &tarball_str, Some(&image_tag), Some(&git_commit), no_start)
+        .await?;
+
+    println!("Deploy complete!");
+    Ok(())
 }
 
 #[cfg(test)]

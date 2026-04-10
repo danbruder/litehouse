@@ -629,6 +629,60 @@ fn resolve_docker_socket_path() -> Result<String> {
     Ok(docker_sock.to_string())
 }
 
+/// Save a Docker image to a tarball file using `docker save`
+#[instrument]
+pub async fn save_image(image_tag: &str, output_path: &str) -> Result<()> {
+    info!("Saving Docker image {} to {}", image_tag, output_path);
+
+    let output = std::process::Command::new("docker")
+        .args(["save", "-o", output_path, image_tag])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DockerError::BuildError(format!(
+            "docker save failed: {}",
+            stderr
+        )));
+    }
+
+    info!("Successfully saved image {} to {}", image_tag, output_path);
+    Ok(())
+}
+
+/// Load a Docker image from a tarball file using `docker load`
+/// Returns the loaded image tag
+#[instrument]
+pub async fn load_image(tarball_path: &str) -> Result<String> {
+    info!("Loading Docker image from {}", tarball_path);
+
+    let output = std::process::Command::new("docker")
+        .args(["load", "-i", tarball_path])
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DockerError::BuildError(format!(
+            "docker load failed: {}",
+            stderr
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    info!("docker load output: {}", stdout);
+
+    // Parse the loaded image tag from output like "Loaded image: myapp:abc123"
+    let image_tag = stdout
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Loaded image: ")
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    Ok(image_tag)
+}
+
 /// Check if a Docker image with the given tag exists
 #[instrument]
 pub async fn image_exists(tag: &str) -> Result<bool> {

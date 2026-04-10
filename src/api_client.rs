@@ -315,16 +315,33 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn deploy_app(&self, app_name: &str, binary_path: &str) -> Result<()> {
-        // Create multipart form
-        let form = reqwest::multipart::Form::new()
-            .file("binary", binary_path)
+    pub async fn deploy_app(
+        &self,
+        app_name: &str,
+        tarball_path: &str,
+        image_tag: Option<&str>,
+        git_commit: Option<&str>,
+        no_start: bool,
+    ) -> Result<()> {
+        // Build multipart form with image tarball and metadata
+        let mut form = reqwest::multipart::Form::new()
+            .file("image", tarball_path)
             .await
-            .map_err(|e| anyhow!("Failed to create multipart form: {}", e))?;
+            .map_err(|e| anyhow!("Failed to read image tarball: {}", e))?;
+
+        if let Some(tag) = image_tag {
+            form = form.text("image_tag", tag.to_string());
+        }
+        if let Some(commit) = git_commit {
+            form = form.text("git_commit", commit.to_string());
+        }
+        if no_start {
+            form = form.text("no_start", "true".to_string());
+        }
 
         let url = format!("{}/apps/{}/deploy", self.config.base_url, app_name);
         let auth_header = self.get_auth_header()?;
-        
+
         let mut request = self.client.post(&url).multipart(form);
         if let Some(header) = auth_header {
             request = request.header("Authorization", header);
@@ -337,31 +354,49 @@ impl ApiClient {
             if let Some(_refresh_token) = self.get_refresh_token()? {
                 if let Ok(new_tokens) = self.refresh_token().await {
                     // Recreate form and retry
-                    let form = reqwest::multipart::Form::new()
-                        .file("binary", binary_path)
+                    let mut form = reqwest::multipart::Form::new()
+                        .file("image", tarball_path)
                         .await
-                        .map_err(|e| anyhow!("Failed to create multipart form: {}", e))?;
+                        .map_err(|e| anyhow!("Failed to read image tarball: {}", e))?;
+                    if let Some(tag) = image_tag {
+                        form = form.text("image_tag", tag.to_string());
+                    }
+                    if let Some(commit) = git_commit {
+                        form = form.text("git_commit", commit.to_string());
+                    }
+                    if no_start {
+                        form = form.text("no_start", "true".to_string());
+                    }
+
                     let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    let retry_response = self.client
+                    let retry_response = self
+                        .client
                         .post(&url)
                         .header("Authorization", new_auth_header)
                         .multipart(form)
                         .send()
                         .await?;
-                    
+
                     if retry_response.status().is_success() {
                         println!("App '{}' deployed successfully", app_name);
                         return Ok(());
                     } else {
-                        let error = retry_response.text().await.unwrap_or_else(|_| "Deploy failed".to_string());
+                        let error = retry_response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Deploy failed".to_string());
                         return Err(anyhow!("Failed to deploy app: {}", error));
                     }
                 } else {
                     self.clear_tokens()?;
-                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
+                    return Err(anyhow!(
+                        "Authentication failed. Please run 'lh auth login' to authenticate."
+                    ));
                 }
             } else {
-                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
+                return Err(anyhow!(
+                    "Authentication required. Please run 'lh auth login' to authenticate."
+                ));
             }
         }
 

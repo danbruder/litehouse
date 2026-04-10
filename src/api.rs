@@ -88,7 +88,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
     Router::new()
         .merge(public_routes)
         .merge(protected_routes)
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024)) // 100MB limit
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB limit for image uploads
 }
 
 #[instrument(skip(state))]
@@ -333,51 +333,177 @@ async fn deploy_app(
     Path(name): Path<String>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let _pool = state.read().await.db_pool.clone();
-    // Get the binary file from the multipart form
-    let mut binary_data: Option<Bytes> = None;
+    let (pool, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone())
+    };
 
-    // Process all fields in the multipart form
+    // Parse multipart form: image tarball + metadata fields
+    let mut image_data: Option<Bytes> = None;
+    let mut image_tag: Option<String> = None;
+    let mut git_commit: Option<String> = None;
+    let mut no_start = false;
+
     while let Ok(Some(field)) = multipart.next_field().await {
-        tracing::info!("Processing field: {:?}", field.name());
-        if field.name() == Some("binary") {
-            match field.bytes().await {
+        match field.name() {
+            Some("image") => match field.bytes().await {
                 Ok(bytes) => {
-                    tracing::info!("Successfully read binary data");
-                    binary_data = Some(bytes);
-                    break;
+                    tracing::info!("Received image tarball: {} bytes", bytes.len());
+                    image_data = Some(bytes);
                 }
                 Err(e) => {
-                    tracing::error!("Error reading binary field: {}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Error reading binary file",
-                    )
+                    tracing::error!("Error reading image field: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading image data")
                         .into_response();
                 }
+            },
+            Some("image_tag") => {
+                if let Ok(text) = field.text().await {
+                    image_tag = Some(text);
+                }
+            }
+            Some("git_commit") => {
+                if let Ok(text) = field.text().await {
+                    git_commit = Some(text);
+                }
+            }
+            Some("no_start") => {
+                if let Ok(text) = field.text().await {
+                    no_start = text == "true";
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let image_bytes = match image_data {
+        Some(data) => data,
+        None => {
+            return (StatusCode::BAD_REQUEST, "No image tarball provided").into_response();
+        }
+    };
+
+    // Verify app exists
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("App '{}' not found", name),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Database error: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Save tarball to temp file
+    let temp_dir = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create temp dir: {}", e),
+            )
+                .into_response();
+        }
+    };
+    let tarball_path = temp_dir.path().join("image.tar");
+    if let Err(e) = std::fs::write(&tarball_path, &image_bytes) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to write tarball: {}", e),
+        )
+            .into_response();
+    }
+
+    // Load image into Docker
+    let tarball_str = tarball_path.to_string_lossy().to_string();
+    let loaded_tag = match crate::docker::load_image(&tarball_str).await {
+        Ok(tag) => {
+            tracing::info!("Loaded Docker image: {}", tag);
+            tag
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to load Docker image: {}", e),
+            )
+                .into_response();
+        }
+    };
+
+    // Use provided image_tag or fall back to what docker load reported
+    let final_tag = image_tag.unwrap_or(loaded_tag);
+
+    // Detect exposed port from the loaded image
+    let exposed_port = match crate::docker::get_exposed_port(&final_tag).await {
+        Ok(port) => {
+            tracing::info!("Detected exposed port {} for image {}", port, final_tag);
+            Some(port)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to detect exposed port: {}", e);
+            None
+        }
+    };
+
+    // Create build record
+    let mut build_record = crate::models::Build::new_success(
+        app.id.clone(),
+        final_tag.clone(),
+        git_commit.unwrap_or_default(),
+    );
+    if let Some(port) = exposed_port {
+        build_record.set_exposed_port(port);
+    }
+
+    if let Err(e) = db::build::save(&pool, &build_record).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save build record: {}", e),
+        )
+            .into_response();
+    }
+
+    tracing::info!("Created build record {} for app '{}'", build_record.id, name);
+
+    // Auto-start unless --no-start
+    if !no_start {
+        // Stop existing container if running
+        let _ = stop::execute(&name).await;
+
+        match start::execute(&pool, &docker, &name).await {
+            Ok(_) => {
+                tracing::info!("App '{}' started after deploy", name);
+            }
+            Err(e) => {
+                tracing::error!("Failed to auto-start app '{}': {}", name, e);
+                return Json(serde_json::json!({
+                    "message": format!("Image deployed but failed to start: {}", e),
+                    "build_id": build_record.id,
+                    "image_tag": final_tag,
+                    "started": false
+                }))
+                .into_response();
             }
         }
     }
 
-    let _binary_data = match binary_data {
-        Some(data) => data,
-        None => {
-            return (StatusCode::BAD_REQUEST, "No binary file provided").into_response();
-        }
-    };
-
-    tracing::info!("Passing binary data to deploy command");
-
-    // TODO: Implement deploy functionality
-    // For now, just return success
-    (
-        StatusCode::OK,
-        format!("App '{}' deployment received (not yet implemented)", name),
-    )
-        .into_response()
+    Json(serde_json::json!({
+        "message": format!("App '{}' deployed successfully", name),
+        "build_id": build_record.id,
+        "image_tag": final_tag,
+        "started": !no_start
+    }))
+    .into_response()
 }
 
-#[instrument(skip(state))]
 #[instrument(skip(state))]
 async fn delete_app(
     State(state): State<Arc<RwLock<AppState>>>,
