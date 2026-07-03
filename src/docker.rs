@@ -8,12 +8,8 @@ type Result<T> = std::result::Result<T, DockerError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DockerError {
-    #[error("Dockerfile not found in directory: {0}")]
-    DockerfileNotFound(String),
     #[error("Build error: {0}")]
     BuildError(String),
-    #[error("Build stream error: {0}")]
-    BuildStreamError(String),
     #[error("Log error: {0}")]
     LogError(String),
     #[error("Failed to list images: {0}")]

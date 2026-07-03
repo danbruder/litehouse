@@ -94,8 +94,7 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
     match docker::image_exists(image_tag).await {
         Ok(false) => {
             return Err(StartError::AppBuildMissing(format!(
-                "Docker image '{}' not found. The build record exists but the image is missing. \
-                Run 'lh build {}' to rebuild.",
+                "Docker image '{}' not found for app '{}'. Push to the app's GitHub repo (or run 'lh deploy') to produce a new image.",
                 image_tag, app_name
             )));
         }
