@@ -246,7 +246,12 @@ docker network create litehouse-network 2>/dev/null || true
 # Create Docker volumes if they don't exist
 docker volume create litehouse_config 2>/dev/null || true
 docker volume create litehouse_data 2>/dev/null || true
-docker volume create litehouse_backups 2>/dev/null || true
+
+# Backups staging area is a HOST directory (not a named volume) so the server
+# container and the one-shot snapshot containers it spawns can share it by
+# absolute path: the server passes this same path as a bind to siblings.
+mkdir -p /opt/litehouse/backups
+chmod 777 /opt/litehouse/backups
 
 # Fix volume ownership for litehouse user (UID 1000)
 # Docker creates volumes as root by default, but container runs as litehouse (UID 1000)
@@ -254,9 +259,8 @@ echo "Setting correct ownership on Docker volumes..."
 docker run --rm \
   -v litehouse_config:/config \
   -v litehouse_data:/data \
-  -v litehouse_backups:/backups \
   alpine:3.20 \
-  sh -c 'chown -R 1000:1000 /config /data /backups && chmod 755 /config /data /backups'
+  sh -c 'chown -R 1000:1000 /config /data && chmod 755 /config /data'
 
 # Copy server-config.toml from host into the Docker volume
 # This ensures the container sees the production configuration
@@ -283,7 +287,7 @@ docker run -d \
   --network litehouse-network \
   -v litehouse_config:/opt/litehouse/config \
   -v litehouse_data:/opt/litehouse/data \
-  -v litehouse_backups:/opt/litehouse/backups \
+  -v /opt/litehouse/backups:/opt/litehouse/backups \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
@@ -371,7 +375,7 @@ mod tests {
     fn litehouse_run_script_uses_ghcr_image_and_backups_volume() {
         let script = start_litehouse_container_script("1000", "1.2.3");
         assert!(script.contains("ghcr.io/danbruder/litehouse"));
-        assert!(script.contains("litehouse_backups:/opt/litehouse/backups"));
+        assert!(script.contains("-v /opt/litehouse/backups:/opt/litehouse/backups"));
         assert!(script.contains("LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups"));
         assert!(!script.to_lowercase().contains("litestream"));
         assert!(!script.contains("docker build"));
