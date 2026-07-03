@@ -38,6 +38,8 @@ urlencoding = "2.1"
 tar = "0.4"
 flate2 = "1.0"
 walkdir = "2.4"
+crypto_box = { version = "0.9", features = ["seal"] }
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = "0.4"
