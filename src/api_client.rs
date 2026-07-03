@@ -605,7 +605,7 @@ impl ApiClient {
         }).await?;
 
         println!("S3 configuration saved successfully");
-        println!("Litestream will now back up all databases to S3 bucket: {}", bucket);
+        println!("Daily backups will be uploaded to S3 bucket: {}", bucket);
         Ok(())
     }
 

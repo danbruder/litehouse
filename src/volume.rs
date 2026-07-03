@@ -372,7 +372,7 @@ pub async fn init_app_database_in_volume(
 
 /// Verify no running container has RW mount on this volume
 /// Checks all running containers, returns error if volume is already mounted RW
-/// Read-only mounts (like Litestream) are allowed
+/// Read-only mounts are allowed
 #[instrument]
 pub async fn verify_volume_single_writer(
     docker: &Docker,
