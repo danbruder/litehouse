@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT *\n            FROM deploy\n            WHERE app_id = ?\n            ORDER BY created_at DESC\n            LIMIT 1\n            ",
+  "query": "\n            SELECT *\n            FROM deploy\n            WHERE app_id = ?\n            ORDER BY created_at DESC, rowid DESC\n            LIMIT ?\n            ",
   "describe": {
     "columns": [
       {
@@ -45,7 +45,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
@@ -58,5 +58,5 @@
       false
     ]
   },
-  "hash": "3a998edc6950abcb14c757bd8438b4064d494efb81c2a30ebe8bc7633c2f6446"
+  "hash": "72b9594106dfc61b70d0082e6904122abc7b5e8d53e08e0d332195541aed6ed7"
 }

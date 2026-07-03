@@ -62,7 +62,7 @@ pub async fn latest_for_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Option<
             SELECT *
             FROM deploy
             WHERE app_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT 1
             "#,
         app_id
@@ -82,7 +82,7 @@ pub async fn list_for_app(pool: &Pool<Sqlite>, app_id: &str, limit: i64) -> Resu
             SELECT *
             FROM deploy
             WHERE app_id = ?
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, rowid DESC
             LIMIT ?
             "#,
         app_id,

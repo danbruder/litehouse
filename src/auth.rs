@@ -25,21 +25,15 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// Accepts `Authorization: Bearer <token>` or a `litehouse_token` cookie (for the UI).
-pub async fn admin_auth_middleware<B>(
-    State(state): State<Arc<RwLock<AppState>>>,
-    req: Request<B>,
-    next: Next<B>,
-) -> Result<Response, StatusCode> {
-    let expected = state.read().await.admin_token_hash.clone();
-    let bearer = req
-        .headers()
+/// Extract the presented token from `Authorization: Bearer <token>` or a
+/// `litehouse_token` cookie. Bearer wins if both are present.
+fn extract_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|h| h.strip_prefix("Bearer "))
         .map(str::to_string);
-    let cookie = req
-        .headers()
+    let cookie = headers
         .get(header::COOKIE)
         .and_then(|h| h.to_str().ok())
         .and_then(|c| {
@@ -48,8 +42,28 @@ pub async fn admin_auth_middleware<B>(
                 .find_map(|kv| kv.strip_prefix("litehouse_token="))
         })
         .map(str::to_string);
-    let provided = bearer.or(cookie).ok_or(StatusCode::UNAUTHORIZED)?;
-    if constant_time_eq(&hash_token(&provided), &expected) {
+    bearer.or(cookie)
+}
+
+/// True when the presented token hashes to the expected (non-empty) hash.
+fn token_authorized(provided: Option<&str>, expected_hash: &str) -> bool {
+    match provided {
+        Some(token) if !expected_hash.is_empty() => {
+            constant_time_eq(&hash_token(token), expected_hash)
+        }
+        _ => false,
+    }
+}
+
+/// Accepts `Authorization: Bearer <token>` or a `litehouse_token` cookie (for the UI).
+pub async fn admin_auth_middleware<B>(
+    State(state): State<Arc<RwLock<AppState>>>,
+    req: Request<B>,
+    next: Next<B>,
+) -> Result<Response, StatusCode> {
+    let expected = state.read().await.admin_token_hash.clone();
+    let provided = extract_token(req.headers());
+    if token_authorized(provided.as_deref(), &expected) {
         Ok(next.run(req).await)
     } else {
         Err(StatusCode::UNAUTHORIZED)
@@ -74,5 +88,55 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.len(), 64);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    fn headers(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
+        let mut map = axum::http::HeaderMap::new();
+        for (k, v) in pairs {
+            map.insert(
+                axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn extract_token_from_bearer_header() {
+        let h = headers(&[("authorization", "Bearer tok123")]);
+        assert_eq!(extract_token(&h).as_deref(), Some("tok123"));
+    }
+
+    #[test]
+    fn extract_token_from_cookie() {
+        let h = headers(&[("cookie", "theme=dark; litehouse_token=tok456; other=1")]);
+        assert_eq!(extract_token(&h).as_deref(), Some("tok456"));
+    }
+
+    #[test]
+    fn extract_token_bearer_wins_over_cookie() {
+        let h = headers(&[
+            ("authorization", "Bearer header-tok"),
+            ("cookie", "litehouse_token=cookie-tok"),
+        ]);
+        assert_eq!(extract_token(&h).as_deref(), Some("header-tok"));
+    }
+
+    #[test]
+    fn extract_token_rejects_malformed() {
+        assert_eq!(extract_token(&headers(&[])), None);
+        assert_eq!(extract_token(&headers(&[("authorization", "Basic abc")])), None);
+        assert_eq!(extract_token(&headers(&[("cookie", "litehouse=nope")])), None);
+    }
+
+    #[test]
+    fn token_authorized_semantics() {
+        let expected = hash_token("secret");
+        assert!(token_authorized(Some("secret"), &expected));
+        assert!(!token_authorized(Some("wrong"), &expected));
+        assert!(!token_authorized(None, &expected));
+        // Empty expected hash must never authorize anything.
+        assert!(!token_authorized(Some(""), ""));
+        assert!(!token_authorized(Some("anything"), ""));
     }
 }
