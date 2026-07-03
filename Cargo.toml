@@ -22,7 +22,7 @@ tempfile = "3.9"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
-bollard = {version = "0.15", features=["buildkit"]}
+bollard = {version = "0.15"}
 axum = { version = "0.6", features = ["multipart"] }
 tower = "0.4"
 hyper = { version = "0.14", features = ["full"] }
@@ -52,6 +52,5 @@ name = "lh"
 path = "src/main.rs"
 
 [features]
-default = ["buildkit"]
+default = []
 vendored-openssl = []
-buildkit = ["bollard/buildkit"]

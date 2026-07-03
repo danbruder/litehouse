@@ -1,12 +1,11 @@
 use crate::config::ClientConfig;
-use crate::github::RepoInfo;
 use crate::models::{AuthResponse, AuthenticatedUser, LoginRequest, RegisterRequest, RefreshTokenRequest, TokenPair};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 pub enum LogStream {
     Lines(BoxStream<'static, anyhow::Result<String>>),
@@ -527,56 +526,6 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn remote_add(&self, app_name: &str, remote: &str) -> Result<()> {
-        let url = format!("{}/apps/{}/remote", self.config.base_url, app_name);
-        let payload = serde_json::json!({ "remote": remote });
-        
-        self.execute_request_text(|client, auth_header| {
-            let mut req = client.post(&url).json(&payload);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await?;
-
-        println!("Remote configured for app '{}'", app_name);
-        Ok(())
-    }
-
-    pub async fn remote_remove(&self, app_name: &str) -> Result<()> {
-        let url = format!("{}/apps/{}/remote", self.config.base_url, app_name);
-        
-        self.execute_request_text(|client, auth_header| {
-            let mut req = client.delete(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await?;
-
-        println!("Remote removed for app '{}'", app_name);
-        Ok(())
-    }
-
-    pub async fn build(&self, app_name: &str, force: bool) -> Result<()> {
-        let url = if force {
-            format!("{}/apps/{}/build?force=true", self.config.base_url, app_name)
-        } else {
-            format!("{}/apps/{}/build", self.config.base_url, app_name)
-        };
-
-        self.execute_request_text(|client, auth_header| {
-            let mut req = client.post(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await?;
-
-        println!("App '{}' built successfully", app_name);
-        Ok(())
-    }
-
     pub async fn set_s3_config(
         &self,
         access_key_id: &str,
@@ -667,168 +616,6 @@ impl ApiClient {
         Ok(())
     }
 
-    // ===== GitHub Methods =====
-
-    pub async fn github_connect_start(&self) -> Result<DeviceFlowStartResponse> {
-        let url = format!("{}/github/connect/start", self.config.base_url);
-        self.execute_request(|client, auth_header| {
-            let mut req = client.post(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await
-    }
-
-    pub async fn github_connect_poll(
-        &self,
-        device_code: &str,
-        interval: u64,
-        expires_in: u64,
-    ) -> Result<GitHubConnectResponse> {
-        let url = format!("{}/github/connect/poll", self.config.base_url);
-        let payload = serde_json::json!({
-            "device_code": device_code,
-            "interval": interval,
-            "expires_in": expires_in
-        });
-        
-        let auth_header = self.get_auth_header()?;
-        let mut request = self.client.post(&url).json(&payload);
-        if let Some(header) = &auth_header {
-            request = request.header("Authorization", header);
-        }
-        
-        let mut response = request.send().await?;
-
-        // Handle 401 with refresh
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(_refresh_token) = self.get_refresh_token()? {
-                if let Ok(new_tokens) = self.refresh_token().await {
-                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    response = self.client.post(&url)
-                        .header("Authorization", new_auth_header)
-                        .json(&payload)
-                        .send()
-                        .await?;
-                } else {
-                    self.clear_tokens()?;
-                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
-                }
-            } else {
-                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
-            }
-        }
-
-        if response.status().is_success() {
-            let data: GitHubConnectResponse = response.json().await?;
-            Ok(data)
-        } else {
-            let status = response.status();
-            let error = response.text().await?;
-            if status.as_u16() == 408 {
-                return Err(anyhow!("Authorization timed out"));
-            }
-            if status.as_u16() == 403 {
-                return Err(anyhow!("Authorization was denied"));
-            }
-            Err(anyhow!("Failed to complete GitHub connection: {}", error))
-        }
-    }
-
-    pub async fn github_disconnect(&self) -> Result<()> {
-        let url = format!("{}/github/connection", self.config.base_url);
-        
-        self.execute_request_text(|client, auth_header| {
-            let mut req = client.delete(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await?;
-
-        Ok(())
-    }
-
-    pub async fn github_status(&self) -> Result<GitHubStatusResponse> {
-        let url = format!("{}/github/status", self.config.base_url);
-        self.execute_request(|client, auth_header| {
-            let mut req = client.get(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await
-    }
-
-    pub async fn github_list_repos(&self, limit: u32) -> Result<Vec<RepoInfo>> {
-        let url = format!("{}/github/repos?limit={}", self.config.base_url, limit);
-        self.execute_request(|client, auth_header| {
-            let mut req = client.get(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await
-    }
-
-    pub async fn github_search_repos(&self, query: &str) -> Result<Vec<RepoInfo>> {
-        let url = format!(
-            "{}/github/repos/search?q={}",
-            self.config.base_url,
-            urlencoding::encode(query)
-        );
-        self.execute_request(|client, auth_header| {
-            let mut req = client.get(&url);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await
-    }
-
-    pub async fn create_app_from_github(&self, app_name: &str, github_repo: &str) -> Result<()> {
-        let url = format!("{}/apps", self.config.base_url);
-        let payload = serde_json::json!({
-            "name": app_name,
-            "from_github": github_repo
-        });
-        
-        self.execute_request_text(|client, auth_header| {
-            let mut req = client.post(&url).json(&payload);
-            if let Some(header) = auth_header {
-                req = req.header("Authorization", header);
-            }
-            req
-        }).await?;
-
-        println!("App '{}' created from GitHub repo '{}'", app_name, github_repo);
-        Ok(())
-    }
-}
-
-// GitHub response types
-#[derive(Debug, Deserialize)]
-pub struct DeviceFlowStartResponse {
-    pub user_code: String,
-    pub verification_uri: String,
-    pub device_code: String,
-    pub expires_in: u64,
-    pub interval: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GitHubConnectResponse {
-    pub username: String,
-    pub email: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct GitHubStatusResponse {
-    pub connected: bool,
-    pub username: Option<String>,
-    pub email: Option<String>,
-    pub scopes: Option<String>,
 }
 
 #[cfg(test)]

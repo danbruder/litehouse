@@ -1,13 +1,10 @@
 pub mod app_env;
 pub mod auth;
-pub mod build;
 pub mod check_dns;
 pub mod create;
 pub mod delete;
-pub mod github;
 pub mod install;
 pub mod logs;
-pub mod remote;
 pub mod server;
 pub mod start;
 pub mod status;

@@ -1,10 +1,9 @@
 use crate::caddy;
 use crate::db;
 use crate::docker;
-use crate::github;
 use anyhow::Result;
 use sqlx::{Pool, Sqlite};
-use tracing::{info, instrument, warn};
+use tracing::{info, instrument};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeleteError {
@@ -64,12 +63,6 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         tracing::warn!("Failed to delete app volume: {}. Continuing with delete.", e);
     }
 
-    // Delete GitHub webhook if configured
-    if let Err(e) = delete_github_webhook(pool, &app.id).await {
-        warn!("Failed to delete GitHub webhook for app '{}': {}", app_name, e);
-        // Don't fail the delete operation if webhook deletion fails
-    }
-
     // Delete environment variables
     info!("Deleting environment variables for app {}", app.id);
     db::env_var::delete_by_app(pool, &app.id).await?;
@@ -92,57 +85,6 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         );
         // Don't fail the stop operation if Caddy sync fails
     }
-
-    Ok(())
-}
-
-/// Delete GitHub webhook for an app
-async fn delete_github_webhook(pool: &Pool<Sqlite>, app_id: &str) -> Result<(), DeleteError> {
-    // Get webhook configuration
-    let webhook_config = match db::webhook::get_webhook_config_by_app(pool, app_id).await? {
-        Some(config) => config,
-        None => {
-            // No webhook configured, nothing to do
-            return Ok(());
-        }
-    };
-
-    // Only try to delete from GitHub if we have a webhook ID
-    if let Some(webhook_id) = webhook_config.github_webhook_id {
-        // Get remote to extract repo info
-        if let Ok(remote) = db::remote::get_by_app(pool, app_id).await {
-            if let Ok((owner, repo_name)) = github::parse_repo_url(&remote.remote) {
-                // Try to find any user's GitHub connection to get a token
-                // In the future, we should track which user created the app
-                if let Ok(connections) = db::github_connection::get_all(pool).await {
-                    if let Some(conn) = connections.first() {
-                        // Attempt to delete webhook (ignore errors - webhook may already be deleted)
-                        if let Err(e) = github::delete_webhook(
-                            &conn.access_token,
-                            &owner,
-                            &repo_name,
-                            webhook_id,
-                        )
-                        .await
-                        {
-                            warn!(
-                                "Failed to delete webhook {} from GitHub: {}",
-                                webhook_id, e
-                            );
-                        } else {
-                            info!(
-                                "Successfully deleted webhook {} from GitHub",
-                                webhook_id
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Delete webhook config from database (cascade will handle deliveries)
-    db::webhook::delete_webhook_config_by_app(pool, app_id).await?;
 
     Ok(())
 }

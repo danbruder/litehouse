@@ -62,12 +62,8 @@ enum Commands {
 
     /// Create a new app
     Create {
-        /// Name of the app (optional if using --from-github)
-        app_name: Option<String>,
-
-        /// Create from a GitHub repository (format: owner/repo)
-        #[arg(long)]
-        from_github: Option<String>,
+        /// Name of the app
+        app_name: String,
     },
 
     /// Delete an app
@@ -95,24 +91,6 @@ enum Commands {
         /// Don't auto-start the app after deploying
         #[arg(long)]
         no_start: bool,
-    },
-
-    /// Build an app locally and deploy to server
-    Build {
-        /// Name of the app
-        app_name: String,
-
-        /// Path to the directory containing the Dockerfile (defaults to current directory)
-        #[arg(long, short, default_value = ".")]
-        path: String,
-
-        /// Don't auto-start the app after deploying
-        #[arg(long)]
-        no_start: bool,
-
-        /// Force rebuild even if image already exists
-        #[arg(long, short)]
-        force: bool,
     },
 
     /// Deploy a binary to an app
@@ -180,21 +158,6 @@ enum Commands {
     /// Seed the database for testing
     Seed,
 
-    /// Configure a remote for an app
-    Remote {
-        /// Name of the app
-        app_name: String,
-
-        #[command(subcommand)]
-        command: RemoteCmd,
-    },
-
-    /// Manage GitHub integration
-    Github {
-        #[command(subcommand)]
-        command: GithubCmd,
-    },
-
     /// Authentication commands
     Auth {
         #[command(subcommand)]
@@ -203,42 +166,6 @@ enum Commands {
 
     /// Check DNS configuration for the configured domain
     CheckDns,
-}
-
-#[derive(Subcommand)]
-enum RemoteCmd {
-    /// Add a remote
-    Add {
-        /// Remote name
-        remote: String,
-    },
-    /// Remove a remote
-    Remove,
-}
-
-#[derive(Subcommand)]
-enum GithubCmd {
-    /// Connect your GitHub account
-    Connect,
-
-    /// Disconnect GitHub account
-    Disconnect,
-
-    /// Show connection status
-    Status,
-
-    /// List your repositories
-    Repos {
-        /// Maximum number of repositories to list
-        #[arg(short, long, default_value = "30")]
-        limit: u32,
-    },
-
-    /// Search repositories
-    Search {
-        /// Search query
-        query: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -350,33 +277,7 @@ pub async fn run() -> Result<()> {
             let api_client = ApiClient::new(config);
 
             match cli.command {
-                Commands::Create {
-                    app_name,
-                    from_github,
-                } => {
-                    match (app_name, from_github) {
-                        (Some(name), Some(repo)) => {
-                            // Create app with explicit name from GitHub repo
-                            api_client.create_app_from_github(&name, &repo).await?;
-                            println!("Run 'lh build {}' to build and deploy", name);
-                            Ok(())
-                        }
-                        (None, Some(repo)) => {
-                            // Derive app name from repo name
-                            let name = repo.split('/').last().unwrap_or(&repo);
-                            api_client.create_app_from_github(name, &repo).await?;
-                            println!("Run 'lh build {}' to build and deploy", name);
-                            Ok(())
-                        }
-                        (Some(name), None) => {
-                            // Standard app creation
-                            api_client.create_app(&name).await
-                        }
-                        (None, None) => {
-                            anyhow::bail!("Either app_name or --from-github must be provided");
-                        }
-                    }
-                }
+                Commands::Create { app_name } => api_client.create_app(&app_name).await,
                 Commands::Start { app_name } => api_client.start_app(&app_name).await,
                 Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
                 Commands::Restart { app_name } => {
@@ -470,42 +371,6 @@ pub async fn run() -> Result<()> {
 
                     Ok(())
                 }
-                Commands::Remote { app_name, command } => match command {
-                    RemoteCmd::Add { remote } => api_client.remote_add(&app_name, &remote).await,
-                    RemoteCmd::Remove => api_client.remote_remove(&app_name).await,
-                },
-                Commands::Build {
-                    app_name,
-                    path,
-                    no_start,
-                    force,
-                } => {
-                    crate::commands::build::execute_local(
-                        &api_client,
-                        &app_name,
-                        &path,
-                        no_start,
-                        force,
-                    )
-                    .await
-                }
-                Commands::Github { command } => match command {
-                    GithubCmd::Connect => {
-                        crate::commands::github::connect::execute(&api_client).await
-                    }
-                    GithubCmd::Disconnect => {
-                        crate::commands::github::disconnect::execute(&api_client).await
-                    }
-                    GithubCmd::Status => {
-                        crate::commands::github::status::execute(&api_client).await
-                    }
-                    GithubCmd::Repos { limit } => {
-                        crate::commands::github::repos::execute(&api_client, limit).await
-                    }
-                    GithubCmd::Search { query } => {
-                        crate::commands::github::search::execute(&api_client, &query).await
-                    }
-                },
                 Commands::Auth { command } => match command {
                     AuthCmd::Login { email, password } => {
                         crate::commands::auth::cli::login::execute(&api_client, &email, &password).await
