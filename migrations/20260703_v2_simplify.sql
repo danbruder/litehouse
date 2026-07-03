@@ -41,7 +41,7 @@ DROP TABLE IF EXISTS state_change;
 
 CREATE TABLE deploy (
     id TEXT PRIMARY KEY NOT NULL,
-    app_id TEXT NOT NULL REFERENCES app(id) ON DELETE CASCADE,
+    app_id TEXT NOT NULL REFERENCES app(id),
     image TEXT NOT NULL,
     git_sha TEXT,
     status TEXT NOT NULL DEFAULT 'in_progress',    -- in_progress | succeeded | failed
