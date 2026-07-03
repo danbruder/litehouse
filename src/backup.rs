@@ -326,6 +326,24 @@ async fn run_snapshot_container(
     let staged_dir = backups_dir.join(app_name);
     std::fs::create_dir_all(&staged_dir)
         .with_context(|| format!("failed to create staging dir {}", staged_dir.display()))?;
+    // The snapshot container image (keinos/sqlite3) runs as a non-root user
+    // (`sqlite`), but this staging dir is created by litehouse-server as root
+    // with the default 0755 umask, so the container can't write into its
+    // `/backup` bind mount (`mkdir /backup/dbs: Permission denied`). Make the
+    // staging dir world-writable so the snapshot container — whatever UID it
+    // runs as — can stage its output here. `create_dir_all` above won't relax
+    // permissions on an already-existing dir, so set them explicitly.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staged_dir, std::fs::Permissions::from_mode(0o777))
+            .with_context(|| {
+                format!(
+                    "failed to make staging dir {} world-writable",
+                    staged_dir.display()
+                )
+            })?;
+    }
     let staged_dir_str = staged_dir
         .to_str()
         .context("staging dir path is not valid UTF-8")?;
