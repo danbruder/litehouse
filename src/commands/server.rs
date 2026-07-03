@@ -33,13 +33,6 @@ pub struct AppState {
 /// Start the Litehouse server
 #[instrument]
 pub async fn execute(config: ServerConfig) -> Result<()> {
-    // Attempt to restore all databases from S3 if needed
-    // This must happen before db::init_pool() so the database is available
-    if let Err(e) = crate::litestream::restore_all_databases_if_needed().await {
-        tracing::warn!("Database restore check failed: {}", e);
-        // Continue anyway - system may start with fresh database
-    }
-
     // Connect to database
     let pool = db::init_pool().await?;
     let docker_conn = docker::connect().await?;

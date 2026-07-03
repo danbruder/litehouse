@@ -10,7 +10,6 @@ use crate::db;
 use crate::db::env_var;
 use crate::db::system_config as db_system_config;
 use crate::github;
-use crate::litestream;
 use crate::models::{GitHubConnection, S3Config, S3ConfigRedacted, SystemConfig};
 use crate::message_bus::{Message, SubscriptionFilter};
 use crate::sse::start_sse_stream;
@@ -1159,7 +1158,6 @@ async fn set_s3_config(
     Json(payload): Json<SetS3ConfigRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    let docker = state.read().await.docker.clone();
 
     // Create S3 config
     let s3_config = S3Config {
@@ -1176,24 +1174,7 @@ async fn set_s3_config(
 
     // Save to database
     match db_system_config::save_s3_config(&pool, &system_config).await {
-        Ok(_) => {
-            // Sync Litestream configuration to apply new S3 settings
-            match litestream::sync_configuration(&docker, &pool).await {
-                Ok(_) => (
-                    StatusCode::OK,
-                    "S3 configuration saved and Litestream updated successfully",
-                )
-                    .into_response(),
-                Err(e) => {
-                    tracing::error!("S3 config saved but failed to update Litestream: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("S3 config saved but failed to update Litestream: {}", e),
-                    )
-                        .into_response()
-                }
-            }
-        }
+        Ok(_) => (StatusCode::OK, "S3 configuration saved successfully").into_response(),
         Err(e) => {
             tracing::error!("Failed to save S3 config: {}", e);
             (
@@ -1229,27 +1210,9 @@ async fn get_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoR
 #[instrument(skip(state))]
 async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
-    let docker = state.read().await.docker.clone();
 
     match db_system_config::delete_s3_config(&pool).await {
-        Ok(_) => {
-            // Sync Litestream configuration to remove S3 settings
-            match litestream::sync_configuration(&docker, &pool).await {
-                Ok(_) => (
-                    StatusCode::OK,
-                    "S3 configuration deleted and Litestream updated successfully",
-                )
-                    .into_response(),
-                Err(e) => {
-                    tracing::error!("S3 config deleted but failed to update Litestream: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("S3 config deleted but failed to update Litestream: {}", e),
-                    )
-                        .into_response()
-                }
-            }
-        }
+        Ok(_) => (StatusCode::OK, "S3 configuration deleted successfully").into_response(),
         Err(e) => {
             tracing::error!("Failed to delete S3 config: {}", e);
             (

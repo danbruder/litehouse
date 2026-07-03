@@ -10,7 +10,6 @@ pub mod db;
 pub mod git;
 pub mod github;
 pub mod install;
-pub mod litestream;
 pub mod message_bus;
 pub mod models;
 pub mod docker;

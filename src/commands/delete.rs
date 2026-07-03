@@ -93,11 +93,6 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
         // Don't fail the stop operation if Caddy sync fails
     }
 
-    // Sync Litestream to remove app from config
-    if let Err(e) = crate::litestream::sync_configuration(&docker_conn, &pool).await {
-        tracing::warn!("Failed to sync Litestream after deleting app: {}", e);
-    }
-
     Ok(())
 }
 

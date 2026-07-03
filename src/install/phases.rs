@@ -154,21 +154,6 @@ pub fn phase6b_pull_caddy_image(litehouse_uid: &str, log_window: Option<&Progres
     Ok(())
 }
 
-/// Phase 6c: Pull litestream image
-#[instrument(skip(log_window))]
-pub fn phase6c_pull_litestream_image(litehouse_uid: &str, log_window: Option<&ProgressBar>) -> Result<()> {
-    info!("Phase 6c: Pull litestream image");
-
-    let script = templates::pull_litestream_image_script(litehouse_uid);
-    std::fs::write("/tmp/pull_litestream.sh", &script)?;
-    run_command("chmod +x /tmp/pull_litestream.sh")?;
-    run_command_with_log("/tmp/pull_litestream.sh", log_window)?;
-    run_command("rm /tmp/pull_litestream.sh")?;
-
-    info!("Phase 6c completed successfully");
-    Ok(())
-}
-
 /// Phase 7: Server Configuration
 #[instrument(skip(s3_config))]
 pub fn phase7_server_configuration(
@@ -188,16 +173,6 @@ pub fn phase7_server_configuration(
     let config_content = templates::server_config_template(domain);
     sudo_write_file("/opt/litehouse/config/server-config.toml", &config_content)?;
     run_command("chown litehouse:litehouse /opt/litehouse/config/server-config.toml")?;
-
-    // Create initial Litestream config
-    info!("Creating initial Litestream configuration");
-    let litestream_config = templates::initial_litestream_config();
-    sudo_write_file("/opt/litehouse/data/litestream.yml", litestream_config)?;
-    run_command("chown litehouse:litehouse /opt/litehouse/data/litestream.yml")?;
-
-    // Create litestream replicas directory
-    run_command("mkdir -p /opt/litehouse/data/litestream-replicas")?;
-    run_command("chown litehouse:litehouse /opt/litehouse/data/litestream-replicas")?;
 
     // Write S3 credentials if provided
     if let (Some(access_key), Some(secret_key), Some(bucket), Some(region)) =

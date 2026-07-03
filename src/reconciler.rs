@@ -1,7 +1,5 @@
 use crate::caddy;
 use crate::config::ServerConfig;
-use crate::db::system_config as db_system_config;
-use crate::litestream;
 use bollard::Docker;
 use sqlx::{Pool, Sqlite};
 use std::time::{Duration, Instant};
@@ -139,106 +137,6 @@ impl Reconciler {
         }
     }
 
-    /// Check and reconcile the Litestream container
-    async fn check_litestream_container(&self) -> PhaseResult {
-        // Check if S3 is configured
-        let s3_config = match db_system_config::get_s3_config(&self.db_pool).await {
-            Ok(config) => config,
-            Err(e) => {
-                return PhaseResult::Failed(format!("failed to check S3 config: {}", e));
-            }
-        };
-
-        if s3_config.is_none() {
-            return PhaseResult::Skipped("S3 not configured".to_string());
-        }
-
-        // Check current state before attempting to start
-        let container_name = "litestream-container";
-        let was_running = self.is_container_running(container_name).await;
-
-        match litestream::start_with_pool(&self.docker, &self.db_pool).await {
-            Ok(()) => {
-                if was_running {
-                    PhaseResult::Healthy
-                } else {
-                    PhaseResult::Fixed("started container".to_string())
-                }
-            }
-            Err(e) => PhaseResult::Failed(e.to_string()),
-        }
-    }
-
-    /// Check and reconcile Litestream configuration
-    async fn check_litestream_config(&self) -> PhaseResult {
-        // Check if S3 is configured
-        let s3_config = match db_system_config::get_s3_config(&self.db_pool).await {
-            Ok(config) => config,
-            Err(e) => {
-                return PhaseResult::Failed(format!("failed to check S3 config: {}", e));
-            }
-        };
-
-        if s3_config.is_none() {
-            return PhaseResult::Skipped("S3 not configured".to_string());
-        }
-
-        match litestream::sync_configuration(&self.docker, &self.db_pool).await {
-            Ok(()) => PhaseResult::Fixed("synced configuration".to_string()),
-            Err(e) => PhaseResult::Failed(e.to_string()),
-        }
-    }
-
-    /// Check and restore app databases from S3
-    async fn check_app_databases_restored(&self) -> PhaseResult {
-        // Check if S3 is configured
-        let s3_config = match db_system_config::get_s3_config(&self.db_pool).await {
-            Ok(config) => config,
-            Err(e) => return PhaseResult::Failed(format!("failed to check S3 config: {}", e)),
-        };
-
-        if s3_config.is_none() {
-            return PhaseResult::Skipped("S3 not configured".to_string());
-        }
-
-        // Get all apps from database
-        let apps = match crate::db::app::get_all(&self.db_pool).await {
-            Ok(apps) => apps,
-            Err(e) => return PhaseResult::Failed(format!("failed to get apps: {}", e)),
-        };
-
-        if apps.is_empty() {
-            return PhaseResult::Healthy;
-        }
-
-        // Restore each app database
-        let mut checked_count = 0;
-        for app in apps {
-            let volume_name = crate::volume::get_app_volume_name(&app.id);
-
-            // Create volume if needed (idempotent)
-            if let Err(e) = crate::volume::create_app_volume(&self.docker, &app.id).await {
-                warn!("Failed to create volume for app {}: {}", app.name, e);
-                continue;
-            }
-
-            // Restore if needed (idempotent - checks if DB exists first)
-            match crate::litestream::restore_if_needed(
-                &self.docker,
-                &self.db_pool,
-                &app.id,
-                &volume_name,
-            )
-            .await
-            {
-                Ok(_) => checked_count += 1,
-                Err(e) => warn!("Failed to restore database for app {}: {}", app.name, e),
-            }
-        }
-
-        PhaseResult::Fixed(format!("checked {} app databases", checked_count))
-    }
-
     /// Helper to check if a container is currently running
     async fn is_container_running(&self, container_name: &str) -> bool {
         let list_options = bollard::container::ListContainersOptions::<String> {
@@ -301,67 +199,6 @@ impl Reconciler {
             phases.push(PhaseReport {
                 name: "Caddy config".to_string(),
                 result: PhaseResult::Skipped("container not running".to_string()),
-                duration: Duration::ZERO,
-            });
-        }
-
-        // Phase 3: Litestream container
-        let report = self
-            .run_phase("Litestream container", || {
-                self.check_litestream_container()
-            })
-            .await;
-        phases.push(report);
-
-        // Phase 4: Litestream config (only if container is healthy/fixed)
-        let litestream_container_ok = phases
-            .last()
-            .map(|p| !p.result.is_failed() && !p.result.is_skipped())
-            .unwrap_or(false);
-
-        if litestream_container_ok {
-            let report = self
-                .run_phase("Litestream config", || self.check_litestream_config())
-                .await;
-            phases.push(report);
-        } else {
-            // Get the skip reason from the container phase
-            let skip_reason = phases
-                .iter()
-                .rev()
-                .find(|p| p.name == "Litestream container")
-                .and_then(|p| match &p.result {
-                    PhaseResult::Skipped(reason) => Some(reason.clone()),
-                    PhaseResult::Failed(_) => Some("container not running".to_string()),
-                    _ => None,
-                })
-                .unwrap_or_else(|| "container not running".to_string());
-
-            phases.push(PhaseReport {
-                name: "Litestream config".to_string(),
-                result: PhaseResult::Skipped(skip_reason),
-                duration: Duration::ZERO,
-            });
-        }
-
-        // Phase 5: App database restore (only if Litestream is configured)
-        let litestream_configured = phases
-            .iter()
-            .find(|p| p.name == "Litestream config")
-            .map(|p| !p.result.is_skipped())
-            .unwrap_or(false);
-
-        if litestream_configured {
-            let report = self
-                .run_phase("App database restore", || {
-                    self.check_app_databases_restored()
-                })
-                .await;
-            phases.push(report);
-        } else {
-            phases.push(PhaseReport {
-                name: "App database restore".to_string(),
-                result: PhaseResult::Skipped("S3 not configured".to_string()),
                 duration: Duration::ZERO,
             });
         }

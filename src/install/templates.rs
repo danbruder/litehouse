@@ -234,20 +234,6 @@ echo "Caddy container image pull completed"
     .to_string()
 }
 
-/// Script to pull Litestream container image
-pub fn pull_litestream_image_script(_litehouse_uid: &str) -> String {
-    r#"#!/bin/bash
-set -e
-
-echo "Pulling Litestream container image..."
-
-docker pull litestream/litestream:latest
-
-echo "Litestream container image pull completed"
-"#
-    .to_string()
-}
-
 /// Script to start litehouse-server container
 pub fn start_litehouse_container_script(_litehouse_uid: &str) -> String {
     r#"#!/bin/bash
@@ -397,13 +383,4 @@ pub fn initial_caddy_config(domain: &str) -> String {
 }}"#,
         domain = domain
     )
-}
-
-/// Generate initial Litestream configuration YAML
-pub fn initial_litestream_config() -> &'static str {
-    r#"dbs:
-  - path: /config/litehouse.db
-    replicas:
-      - path: /data/litestream-replicas/main
-"#
 }

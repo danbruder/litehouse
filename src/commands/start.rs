@@ -85,11 +85,6 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .await
         .map_err(|e| StartError::AppStartFailed(format!("Failed to initialize volume: {}", e)))?;
 
-    // Check if database needs restore
-    crate::litestream::restore_if_needed(docker, pool, &app.id, &volume_name)
-        .await
-        .map_err(|e| StartError::AppStartFailed(format!("Failed to restore database: {}", e)))?;
-
     // Verify no other container is using this volume (single-writer guarantee)
     crate::volume::verify_volume_single_writer(docker, &app.id, &volume_name)
         .await
@@ -140,15 +135,6 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
             e
         );
         // Don't fail the start operation if Caddy sync fails
-    }
-
-    // Sync Litestream configuration to include new app
-    if let Err(e) = crate::litestream::sync_configuration(docker, pool).await {
-        tracing::warn!(
-            "Failed to sync Litestream configuration after starting app '{}': {}",
-            app_name,
-            e
-        );
     }
 
     Ok(())

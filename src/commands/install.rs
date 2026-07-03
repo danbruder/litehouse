@@ -20,12 +20,12 @@ use crate::install::phases::*;
 ///              v
 /// Phase 5: Podman Configuration (needs user)
 ///              │
-///     ┌────────┼────────┬────────┬─────────┐
-///     v        v        v        v         v
-/// Build     Pull      Pull    Phase 7   Phase 8
-/// litehouse caddy   litestream  Config   LogRotate
-/// locally     │        │        │         │
-///     └────────┴────────┴────────┴─────────┘
+///     ┌────────┼────────┬─────────┐
+///     v        v        v         v
+/// Build     Pull      Phase 7   Phase 8
+/// litehouse caddy     Config   LogRotate
+/// locally     │        │         │
+///     └────────┴────────┴─────────┘
 ///              │
 ///              v
 /// Phase 9a: Start Caddy container
@@ -151,7 +151,6 @@ pub async fn execute(
 
     let uid_for_litehouse = litehouse_uid.clone();
     let uid_for_caddy = litehouse_uid.clone();
-    let uid_for_litestream = litehouse_uid.clone();
     let domain_for_config = domain.to_string();
 
     // Prepare S3 config for phase7
@@ -164,10 +163,9 @@ pub async fn execute(
         s3_path_prefix.map(|s| s.to_string()),
     );
 
-    let (litehouse_result, caddy_result, litestream_result, config_result, logrotate_result) = {
+    let (litehouse_result, caddy_result, config_result, logrotate_result) = {
         let log_window_litehouse = log_window.clone();
         let log_window_caddy = log_window.clone();
-        let log_window_litestream = log_window.clone();
 
         let litehouse_handle = tokio::task::spawn_blocking(move || {
             phase6a_build_litehouse_image(&uid_for_litehouse, Some(&log_window_litehouse))
@@ -175,10 +173,6 @@ pub async fn execute(
 
         let caddy_handle = tokio::task::spawn_blocking(move || {
             phase6b_pull_caddy_image(&uid_for_caddy, Some(&log_window_caddy))
-        });
-
-        let litestream_handle = tokio::task::spawn_blocking(move || {
-            phase6c_pull_litestream_image(&uid_for_litestream, Some(&log_window_litestream))
         });
 
         let config_handle = tokio::task::spawn_blocking(move || {
@@ -191,11 +185,10 @@ pub async fn execute(
 
         let litehouse_result = litehouse_handle.await.map_err(|e| anyhow::anyhow!("Litehouse image build panicked: {}", e))?;
         let caddy_result = caddy_handle.await.map_err(|e| anyhow::anyhow!("Caddy image pull panicked: {}", e))?;
-        let litestream_result = litestream_handle.await.map_err(|e| anyhow::anyhow!("Litestream image pull panicked: {}", e))?;
         let config_result = config_handle.await.map_err(|e| anyhow::anyhow!("Config task panicked: {}", e))?;
         let logrotate_result = logrotate_handle.await.map_err(|e| anyhow::anyhow!("Logrotate task panicked: {}", e))?;
 
-        (litehouse_result, caddy_result, litestream_result, config_result, logrotate_result)
+        (litehouse_result, caddy_result, config_result, logrotate_result)
     };
 
     if let Err(e) = litehouse_result {
@@ -207,12 +200,6 @@ pub async fn execute(
     if let Err(e) = caddy_result {
         pb.finish_with_message("❌ Caddy image pull failed");
         error!("Phase 6b failed: {}", e);
-        return Err(e);
-    }
-
-    if let Err(e) = litestream_result {
-        pb.finish_with_message("❌ Litestream image pull failed");
-        error!("Phase 6c failed: {}", e);
         return Err(e);
     }
 

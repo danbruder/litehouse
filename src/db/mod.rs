@@ -113,7 +113,6 @@ pub async fn init_pool() -> Result<Pool<Sqlite>> {
         .await?;
 
     // Enable WAL mode for better concurrency (allows multiple readers and one writer)
-    // This is especially important when litestream is also accessing the database
     sqlx::query("PRAGMA journal_mode=WAL")
         .execute(&pool)
         .await?;
