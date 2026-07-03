@@ -176,6 +176,47 @@ pub async fn get_last_backup_report(
     }
 }
 
+/// Record the UTC date (YYYY-MM-DD) the daily backup scheduler last
+/// successfully completed a run. Stored under its own `config_type` row
+/// (`backup_meta`), independent of `backup_report`, so scheduler bookkeeping
+/// can't be clobbered by (or clobber) the report row.
+#[instrument(skip(pool))]
+pub async fn set_last_backup_date(pool: &Pool<Sqlite>, date: &str) -> Result<()> {
+    let now = crate::models::now();
+    // id is only used on first insert; ON CONFLICT keeps the existing one.
+    let id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query!(
+        r#"
+        INSERT INTO system_config (id, config_type, last_backup_date, created_at, updated_at)
+        VALUES (?, 'backup_meta', ?, ?, ?)
+        ON CONFLICT(config_type) DO UPDATE SET
+            last_backup_date = excluded.last_backup_date,
+            updated_at = excluded.updated_at
+        "#,
+        id,
+        date,
+        now,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Get the UTC date (YYYY-MM-DD) of the last successful daily backup run,
+/// if any has completed yet.
+#[instrument(skip(pool))]
+pub async fn get_last_backup_date(pool: &Pool<Sqlite>) -> Result<Option<String>> {
+    let record = sqlx::query!(
+        r#"SELECT last_backup_date FROM system_config WHERE config_type = 'backup_meta'"#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record.and_then(|r| r.last_backup_date))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +429,46 @@ mod tests {
     async fn test_get_last_backup_report_not_found() {
         let pool = get_test_pool().await;
         assert!(get_last_backup_report(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_last_backup_date() {
+        let pool = get_test_pool().await;
+        assert!(get_last_backup_date(&pool).await.unwrap().is_none());
+
+        set_last_backup_date(&pool, "2026-07-03").await.unwrap();
+        assert_eq!(
+            get_last_backup_date(&pool).await.unwrap(),
+            Some("2026-07-03".to_string())
+        );
+
+        set_last_backup_date(&pool, "2026-07-04").await.unwrap();
+        assert_eq!(
+            get_last_backup_date(&pool).await.unwrap(),
+            Some("2026-07-04".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_backup_date_independent_of_report() {
+        let pool = get_test_pool().await;
+        let report = crate::backup::BackupReport {
+            succeeded: vec!["app1".to_string()],
+            failed: vec![],
+            ran_at: "2026-07-03T00:00:00Z".to_string(),
+        };
+        set_last_backup_report(&pool, &report).await.unwrap();
+        set_last_backup_date(&pool, "2026-07-03").await.unwrap();
+
+        // Both should still be readable after each other's writes.
+        assert_eq!(
+            get_last_backup_date(&pool).await.unwrap(),
+            Some("2026-07-03".to_string())
+        );
+        assert_eq!(
+            get_last_backup_report(&pool).await.unwrap().unwrap().ran_at,
+            "2026-07-03T00:00:00Z"
+        );
     }
 
     #[tokio::test]

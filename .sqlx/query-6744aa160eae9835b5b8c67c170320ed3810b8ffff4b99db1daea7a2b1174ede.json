@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_backup_date FROM system_config WHERE config_type = 'backup_meta'",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_backup_date",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "6744aa160eae9835b5b8c67c170320ed3810b8ffff4b99db1daea7a2b1174ede"
+}

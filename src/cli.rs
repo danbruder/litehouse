@@ -217,6 +217,27 @@ enum Commands {
         #[command(subcommand)]
         command: GithubCmd,
     },
+
+    /// Manage backups (run on-demand, check status)
+    Backup {
+        #[command(subcommand)]
+        command: BackupCmd,
+    },
+
+    /// Restore all apps from the newest S3 backup (disaster recovery)
+    Restore,
+}
+
+#[derive(Subcommand)]
+enum BackupCmd {
+    /// Run a full backup now and print the report
+    Run,
+    /// Show the last backup date and report
+    Status {
+        /// Print raw JSON instead of a human-readable summary
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -453,6 +474,52 @@ pub async fn run() -> Result<()> {
                 Commands::Github { command } => match command {
                     GithubCmd::Login => crate::commands::github_login::execute().await,
                 },
+                Commands::Backup { command } => match command {
+                    BackupCmd::Run => {
+                        let report = api_client.run_backup().await?;
+                        print_backup_report(&report);
+                        if !report.failed.is_empty() {
+                            std::process::exit(1);
+                        }
+                        Ok(())
+                    }
+                    BackupCmd::Status { json } => {
+                        let status = api_client.backup_status().await?;
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "last_backup_date": status.last_backup_date,
+                                    "last_backup_report": status.last_backup_report,
+                                }))?
+                            );
+                        } else {
+                            match &status.last_backup_date {
+                                Some(d) => println!("Last backup date: {}", d),
+                                None => println!("No backup has run yet"),
+                            }
+                            match &status.last_backup_report {
+                                Some(report) => print_backup_report(report),
+                                None => println!("No backup report available"),
+                            }
+                        }
+                        Ok(())
+                    }
+                },
+                Commands::Restore => {
+                    let report = api_client.restore().await?;
+                    println!("Restored {} app(s):", report.restored.len());
+                    for name in &report.restored {
+                        println!("  - {}", name);
+                    }
+                    if !report.skipped.is_empty() {
+                        println!("Skipped {} app(s):", report.skipped.len());
+                        for (name, reason) in &report.skipped {
+                            println!("  - {}: {}", name, reason);
+                        }
+                    }
+                    Ok(())
+                }
                 Commands::Install { .. }
                 | Commands::Upgrade { .. }
                 | Commands::Serve
@@ -460,6 +527,21 @@ pub async fn run() -> Result<()> {
                     unreachable!("Already handled above")
                 }
             }
+        }
+    }
+}
+
+/// Print a `backup::BackupReport` in a human-readable form for `lh backup
+/// run` / `lh backup status`.
+fn print_backup_report(report: &crate::backup::BackupReport) {
+    println!("Backup ran at: {}", report.ran_at);
+    println!("Succeeded ({}): {}", report.succeeded.len(), report.succeeded.join(", "));
+    if report.failed.is_empty() {
+        println!("Failed: none");
+    } else {
+        println!("Failed ({}):", report.failed.len());
+        for (name, err) in &report.failed {
+            println!("  - {}: {}", name, err);
         }
     }
 }

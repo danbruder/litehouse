@@ -1,3 +1,4 @@
+use crate::backup::{BackupReport, RestoreReport};
 use crate::config::ClientConfig;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -48,6 +49,12 @@ pub struct AppInfo {
     pub process_id: Option<u32>,
     pub binary_path: Option<String>,
     pub binary_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupStatus {
+    pub last_backup_date: Option<String>,
+    pub last_backup_report: Option<BackupReport>,
 }
 
 pub struct ApiClient {
@@ -493,6 +500,49 @@ impl ApiClient {
         Ok(())
     }
 
+    /// `POST /backups/run` — run a full backup now and return its report.
+    pub async fn run_backup(&self) -> Result<BackupReport> {
+        let url = format!("{}/backups/run", self.config.base_url);
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await
+    }
+
+    /// `GET /backups/status` — last recorded backup date + report, without
+    /// triggering a new run.
+    pub async fn backup_status(&self) -> Result<BackupStatus> {
+        let url = format!("{}/backups/status", self.config.base_url);
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await
+    }
+
+    /// `POST /restore` — run a full disaster-recovery restore from S3 and
+    /// return its report.
+    pub async fn restore(&self) -> Result<RestoreReport> {
+        let url = format!("{}/restore", self.config.base_url);
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.post(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await
+    }
 }
 
 #[cfg(test)]

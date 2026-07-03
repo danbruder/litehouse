@@ -10,6 +10,7 @@ use tracing::{info, instrument};
 
 use crate::admin_spa;
 use crate::api;
+use crate::backup;
 use crate::config::ServerConfig;
 use crate::db;
 
@@ -87,6 +88,39 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         admin_token_hash,
         server_config: config.clone(),
     }));
+
+    // Daily backup: check hourly whether today's (UTC) backup has run; retry
+    // next hour on failure. Fires immediately on the first tick (on process
+    // boot) — that's intentional, it means a fresh boot with no backup yet
+    // today catches up right away instead of waiting up to an hour.
+    //
+    // `run_backup` returns a calm, actionable error (`BackupError::S3ConfigMissing`)
+    // when no S3 config is set yet, rather than panicking — this loop just
+    // logs it and quietly retries next hour, so an un-configured server
+    // doesn't spam anything worse than a once-an-hour log line.
+    {
+        let pool = pool.clone();
+        let docker_conn = docker_conn.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                let last = db::system_config::get_last_backup_date(&pool).await.ok().flatten();
+                if last.as_deref() != Some(today.as_str()) {
+                    match backup::run_backup(&pool, &docker_conn).await {
+                        Ok(report) => {
+                            if let Err(e) = db::system_config::set_last_backup_date(&pool, &today).await {
+                                tracing::error!("failed to record last_backup_date: {e:#}");
+                            }
+                            tracing::info!(?report, "daily backup complete");
+                        }
+                        Err(e) => tracing::error!("daily backup failed, will retry next hour: {e:#}"),
+                    }
+                }
+            }
+        });
+    }
 
     // Build combined router: API routes under /api, SPA fallback for everything else
     let app = Router::new()

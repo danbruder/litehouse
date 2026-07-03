@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT OR IGNORE INTO env_var (id, app_id, key, value, created_at, updated_at)\n        VALUES (?, ?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "ae79adbdfe0d5b2722f356cf0a5653cb00cc6929371616e4ef7db71195209fbe"
+}

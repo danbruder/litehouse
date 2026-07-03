@@ -31,6 +31,30 @@ pub async fn save(pool: &Pool<Sqlite>, env_var: &EnvVar) -> Result<()> {
     Ok(())
 }
 
+/// Insert an env var row, doing nothing if a row with the same id already
+/// exists. Unlike [`save`] (which replaces by app_id+key), this never
+/// overwrites an existing row — used by disaster-recovery restore
+/// (`backup::copy_apps_from_snapshot`) to merge env vars from an S3
+/// snapshot into the live DB without clobbering current local values.
+#[instrument(skip(pool, env_var))]
+pub async fn insert_or_ignore(pool: &Pool<Sqlite>, env_var: &EnvVar) -> Result<()> {
+    sqlx::query!(
+        r#"
+        INSERT OR IGNORE INTO env_var (id, app_id, key, value, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+        env_var.id,
+        env_var.app_id,
+        env_var.key,
+        env_var.value,
+        env_var.created_at,
+        env_var.updated_at,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Get all environment variables for an app
 #[instrument(skip(pool))]
 pub async fn get_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Vec<EnvVar>> {
@@ -136,6 +160,25 @@ mod tests {
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].key, "KEY1");
         assert_eq!(retrieved[0].value, "updated_value");
+    }
+
+    #[tokio::test]
+    async fn test_insert_or_ignore_never_overwrites_existing_row() {
+        let pool = get_test_pool().await;
+        let app = App::new("testapp").unwrap();
+        app::save(&pool, &app).await.unwrap();
+
+        let env_var = EnvVar::new(&app.id, "KEY1", "value1");
+        save(&pool, &env_var).await.unwrap();
+
+        // Same id, different value (simulating a stale snapshot row).
+        let mut stale = env_var.clone();
+        stale.value = "stale-value".to_string();
+        insert_or_ignore(&pool, &stale).await.unwrap();
+
+        let retrieved = get_by_app(&pool, &app.id).await.unwrap();
+        assert_eq!(retrieved.len(), 1);
+        assert_eq!(retrieved[0].value, "value1");
     }
 
     #[tokio::test]

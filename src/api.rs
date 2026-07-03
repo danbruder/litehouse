@@ -50,6 +50,9 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/ghcr", post(set_ghcr_config))
         .route("/config/ghcr", get(get_ghcr_config))
         .route("/config/ghcr", delete(delete_ghcr_config))
+        .route("/backups/run", post(run_backup_now))
+        .route("/backups/status", get(get_backup_status))
+        .route("/restore", post(run_restore))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::admin_auth_middleware,
@@ -950,6 +953,96 @@ async fn delete_ghcr_config(State(state): State<Arc<RwLock<AppState>>>) -> impl 
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to delete GHCR token: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BackupStatusResponse {
+    last_backup_date: Option<String>,
+    last_backup_report: Option<crate::backup::BackupReport>,
+}
+
+/// `POST /api/backups/run` — run a full backup synchronously and return its
+/// report. Distinct from the hourly scheduler in `commands::server::execute`;
+/// this is for operators who want an on-demand backup (or a fresh one right
+/// after configuring S3) without waiting for the next tick.
+#[instrument(skip(state))]
+async fn run_backup_now(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    match crate::backup::run_backup(&pool, &docker).await {
+        Ok(report) => {
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            if let Err(e) = db_system_config::set_last_backup_date(&pool, &today).await {
+                tracing::warn!("failed to record last_backup_date after manual run: {e:#}");
+            }
+            Json(report).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Manual backup run failed: {e:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Backup failed: {e:#}"),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /api/backups/status` — the last recorded backup date and report,
+/// without triggering a new run.
+#[instrument(skip(state))]
+async fn get_backup_status(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    let last_backup_date = match db_system_config::get_last_backup_date(&pool).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!("Failed to get last_backup_date: {e:#}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get backup status: {e:#}"),
+            )
+                .into_response();
+        }
+    };
+    let last_backup_report = match db_system_config::get_last_backup_report(&pool).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to get last_backup_report: {e:#}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get backup status: {e:#}"),
+            )
+                .into_response();
+        }
+    };
+
+    Json(BackupStatusResponse {
+        last_backup_date,
+        last_backup_report,
+    })
+    .into_response()
+}
+
+/// `POST /api/restore` — run a full disaster-recovery restore from S3 and
+/// return its report. See `backup::restore_all`.
+#[instrument(skip(state))]
+async fn run_restore(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    match crate::backup::restore_all(&pool, &docker).await {
+        Ok(report) => Json(report).into_response(),
+        Err(e) => {
+            tracing::error!("Restore failed: {e:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Restore failed: {e:#}"),
             )
                 .into_response()
         }

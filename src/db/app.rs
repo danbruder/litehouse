@@ -46,6 +46,38 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
     Ok(())
 }
 
+/// Insert an app row, doing nothing if a row with the same id already
+/// exists. Unlike [`save`] (which upserts), this never overwrites an
+/// existing row — used by disaster-recovery restore
+/// (`backup::copy_apps_from_snapshot`) to merge apps from an S3 snapshot
+/// into the live DB without clobbering current local state.
+#[instrument(skip(pool, app))]
+pub async fn insert_or_ignore(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
+    sqlx::query!(
+        r#"
+            INSERT OR IGNORE INTO app (
+                id, name, port, organization_id, created_at, updated_at, state,
+                repo, image, exposed_port, deploy_token_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        app.id,
+        app.name,
+        app.port,
+        app.organization_id,
+        app.created_at,
+        app.updated_at,
+        app.state,
+        app.repo,
+        app.image,
+        app.exposed_port,
+        app.deploy_token_hash,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Get an app by name
 #[instrument(skip(pool))]
 pub async fn get_by_name(pool: &Pool<Sqlite>, name: &str) -> Result<Option<App>> {
@@ -347,6 +379,31 @@ mod tests {
         let reloaded = get_by_name(&pool, "rotateapp").await.unwrap().unwrap();
         assert_eq!(reloaded.deploy_token_hash.as_deref(), Some("new-hash"));
         assert_eq!(reloaded.repo.as_deref(), Some("dan/rotateapp"));
+    }
+
+    #[tokio::test]
+    async fn test_insert_or_ignore_inserts_new_row() {
+        let pool = get_test_pool().await;
+        let app = App::new("fresh-app").unwrap();
+
+        insert_or_ignore(&pool, &app).await.unwrap();
+
+        let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.name, "fresh-app");
+    }
+
+    #[tokio::test]
+    async fn test_insert_or_ignore_never_overwrites_existing_row() {
+        let pool = get_test_pool().await;
+        let mut app = App::new("existing-app").unwrap();
+        save(&pool, &app).await.unwrap();
+
+        // A "snapshot" copy of the same id with a different image.
+        app.image = Some("ghcr.io/example/stale:tag".to_string());
+        insert_or_ignore(&pool, &app).await.unwrap();
+
+        let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
+        assert_eq!(retrieved.image, None, "insert_or_ignore must not clobber the live row");
     }
 
     #[tokio::test]
