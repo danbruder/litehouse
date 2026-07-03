@@ -15,7 +15,7 @@ echo "==> 1/5 build release binary (musl)"
 BIN="${PREBUILT_LH:-target/x86_64-unknown-linux-musl/release/lh}"
 
 echo "==> 2/5 wipe node"
-ssh "root@${SERVER_IP}" 'docker ps -aq | xargs -r docker rm -f; docker volume ls -q | xargs -r docker volume rm 2>/dev/null || true; rm -rf /opt/litehouse'
+ssh "root@${SERVER_IP}" 'docker ps -aq | xargs -r docker rm -f; docker volume ls -q | grep -vE '\''^(caddy_data|caddy_config)$'\'' | xargs -r docker volume rm 2>/dev/null || true; rm -rf /opt/litehouse'
 
 echo "==> 3/5 reinstall"
 scp "$BIN" "root@${SERVER_IP}:/usr/local/bin/lh"
