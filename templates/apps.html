@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}apps - litehouse{% endblock %}
+
+{% block content %}
+<div class="card">
+  <strong>Backups:</strong>
+  <span class="muted">{{ backups_summary }}</span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>State</th>
+      <th>URL</th>
+      <th>Last Deploy</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for app in apps %}
+    <tr>
+      <td><a href="/apps/{{ app.name }}">{{ app.name }}</a></td>
+      <td><span class="badge badge-{{ app.state_class }}">{{ app.state }}</span></td>
+      <td><a href="{{ app.url }}" target="_blank" rel="noopener">{{ app.url }}</a></td>
+      <td>{{ app.last_deploy }}</td>
+      <td>
+        <form class="inline" method="post" action="/apps/{{ app.name }}/start">
+          <button type="submit">Start</button>
+        </form>
+        <form class="inline" method="post" action="/apps/{{ app.name }}/stop">
+          <button type="submit">Stop</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}litehouse{% endblock %}</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/htmx.min.js"></script>
+</head>
+<body>
+  {% block body %}
+  <header>
+    <a href="/"><h1>litehouse</h1></a>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  {% endblock %}
+</body>
+</html>

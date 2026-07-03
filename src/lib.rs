@@ -1,4 +1,3 @@
-pub mod admin_spa;
 pub mod api;
 pub mod api_client;
 pub mod auth;
@@ -13,5 +12,6 @@ pub mod github;
 pub mod install;
 pub mod models;
 pub mod docker;
+pub mod ui;
 pub mod volume;
 pub mod workflow;

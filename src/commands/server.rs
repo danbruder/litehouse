@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, instrument};
 
-use crate::admin_spa;
 use crate::api;
+use crate::ui;
 use crate::config::ServerConfig;
 use crate::db;
 
@@ -88,10 +88,10 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         server_config: config.clone(),
     }));
 
-    // Build combined router: API routes under /api, SPA fallback for everything else
+    // Build combined router: API routes under /api, admin UI for everything else
     let app = Router::new()
         .nest("/api", api::create_api_router(state.clone()))
-        .fallback_service(admin_spa::create_admin_router());
+        .fallback_service(ui::create_ui_router(state.clone()));
 
     // Parse host and port for server
     let addr: SocketAddr = format!("{}:{}", config.host, config.port)
