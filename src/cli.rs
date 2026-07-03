@@ -714,7 +714,8 @@ async fn run_create(
         .await
         .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
 
-        let workflow = crate::workflow::render_deploy_workflow(owner, repo_name, &hook_url);
+        let workflow =
+            crate::workflow::render_deploy_workflow(owner, repo_name, app_name, &hook_url);
         crate::github::actions::put_file(
             &token,
             owner,

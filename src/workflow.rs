@@ -2,7 +2,7 @@
 //! repo on `lh create`. The workflow builds and pushes a container image to
 //! GHCR, then calls the litehouse deploy hook with the freshly built image.
 //!
-//! Placeholders (`__OWNER__`, `__APP__`, `__HOOK_URL__`) are substituted via
+//! Placeholders (`__OWNER__`, `__REPO__`, `__APP__`, `__HOOK_URL__`) are substituted via
 //! plain string replacement rather than `format!`, since the template is
 //! full of literal `${{ ... }}` GitHub Actions expression syntax that would
 //! otherwise have to be escaped as `{{{{ ... }}}}`.
@@ -29,27 +29,31 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/__OWNER__/__APP__:latest
-            ghcr.io/__OWNER__/__APP__:${{ github.sha }}
+            ghcr.io/__OWNER__/__REPO__:latest
+            ghcr.io/__OWNER__/__REPO__:${{ github.sha }}
       - name: notify litehouse
         run: |
           curl -fsS -X POST "__HOOK_URL__" \
             -H "Authorization: Bearer ${{ secrets.LITEHOUSE_DEPLOY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"app\":\"__APP__\",\"image\":\"ghcr.io/__OWNER__/__APP__:${{ github.sha }}\",\"sha\":\"${{ github.sha }}\"}"
+            -d "{\"app\":\"__APP__\",\"image\":\"ghcr.io/__OWNER__/__REPO__:${{ github.sha }}\",\"sha\":\"${{ github.sha }}\"}"
 "#;
 
 /// Render the litehouse deploy workflow for `owner/app`, pointed at
 /// `hook_url`. GHCR image paths must be lowercase (GitHub requires it), so
 /// `owner` and `app` are lowercased wherever they appear in an image
 /// reference or the hook payload's `app` field.
-pub fn render_deploy_workflow(owner: &str, app: &str, hook_url: &str) -> String {
+/// `owner`/`repo` name the GHCR image (GHCR paths follow the repo and must be
+/// lowercase); `app` is the litehouse app name used in the deploy-hook payload
+/// — they are NOT the same thing (repo "litehouse-hello" may back app "hello").
+pub fn render_deploy_workflow(owner: &str, repo: &str, app: &str, hook_url: &str) -> String {
     let owner = owner.to_lowercase();
-    let app = app.to_lowercase();
+    let repo = repo.to_lowercase();
 
     TEMPLATE
         .replace("__OWNER__", &owner)
-        .replace("__APP__", &app)
+        .replace("__REPO__", &repo)
+        .replace("__APP__", app)
         .replace("__HOOK_URL__", hook_url)
 }
 
@@ -61,10 +65,14 @@ mod tests {
     fn workflow_renders_owner_app_and_hook() {
         let yml = render_deploy_workflow(
             "danbruder",
+            "litehouse-hello",
             "hello",
             "https://admin.s.danbruder.com/api/hooks/deploy",
         );
-        assert!(yml.contains("ghcr.io/danbruder/hello:${{ github.sha }}"));
+        assert!(yml.contains("ghcr.io/danbruder/litehouse-hello:${{ github.sha }}"));
+        // The hook payload names the litehouse APP, not the repo.
+        assert!(yml.contains(r#"\"app\":\"hello\""#));
+        assert!(!yml.contains(r#"\"app\":\"litehouse-hello\""#));
         assert!(yml.contains("https://admin.s.danbruder.com/api/hooks/deploy"));
         assert!(yml.contains("secrets.LITEHOUSE_DEPLOY_TOKEN"));
         assert!(!yml.contains('\t'));
@@ -72,7 +80,12 @@ mod tests {
 
     #[test]
     fn workflow_lowercases_uppercase_owner_and_app_in_image_refs() {
-        let yml = render_deploy_workflow("DanBruder", "Hello", "https://example.com/hooks/deploy");
+        let yml = render_deploy_workflow(
+            "DanBruder",
+            "Hello",
+            "myapp",
+            "https://example.com/hooks/deploy",
+        );
         assert!(yml.contains("ghcr.io/danbruder/hello:latest"));
         assert!(yml.contains("ghcr.io/danbruder/hello:${{ github.sha }}"));
         assert!(!yml.contains("ghcr.io/DanBruder"));
@@ -81,7 +94,8 @@ mod tests {
 
     #[test]
     fn workflow_contains_no_tabs_and_is_valid_yaml() {
-        let yml = render_deploy_workflow("owner", "app", "https://example.com/hooks/deploy");
+        let yml =
+            render_deploy_workflow("owner", "repo", "app", "https://example.com/hooks/deploy");
         assert!(!yml.contains('\t'));
         let parsed: serde_yaml::Value = serde_yaml::from_str(&yml).expect("valid yaml");
         assert!(parsed.get("jobs").is_some());
