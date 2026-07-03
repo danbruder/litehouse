@@ -374,9 +374,9 @@ struct HookDeployRequest {
 /// and `{"app": "...", "image": "...", "sha": "..."}`.
 ///
 /// This is the security boundary between GitHub and the server, so error
-/// responses are deliberately terse and don't distinguish "app doesn't
-/// exist" from other failures beyond the 404/401 split below — an attacker
-/// probing tokens shouldn't learn anything from the response shape.
+/// responses are deliberately uniform: a missing token, an unknown app, and
+/// a wrong token all return the same generic 401 body — an attacker probing
+/// this route learns nothing about which app names exist.
 #[instrument(skip(state, headers, payload))]
 async fn hook_deploy(
     State(state): State<Arc<RwLock<AppState>>>,
@@ -388,14 +388,15 @@ async fn hook_deploy(
         (s.db_pool.clone(), s.docker.clone())
     };
 
-    let app = match db::app::get_by_name(&pool, &payload.app).await {
-        Ok(Some(app)) => app,
-        Ok(None) => {
-            return (StatusCode::NOT_FOUND, "unknown app").into_response();
-        }
-        Err(e) => return internal(e).into_response(),
+    let unauthorized = || {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized" })),
+        )
+            .into_response()
     };
 
+    // Extract the bearer token before anything app-related is observable.
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
@@ -403,11 +404,16 @@ async fn hook_deploy(
 
     let token = match token {
         Some(t) => t,
-        None => return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response(),
+        None => return unauthorized(),
     };
 
-    if !crate::deploy::verify_deploy_token(token, app.deploy_token_hash.as_deref()) {
-        return (StatusCode::UNAUTHORIZED, "invalid deploy token").into_response();
+    let app = match db::app::get_by_name(&pool, &payload.app).await {
+        Ok(app) => app,
+        Err(e) => return internal(e).into_response(),
+    };
+
+    if !hook_authorized(token, app.as_ref()) {
+        return unauthorized();
     }
 
     match crate::deploy::deploy_app(
@@ -441,6 +447,14 @@ async fn hook_deploy(
     }
 }
 
+/// Deploy-hook authorization: true only when the app exists AND the token
+/// matches its stored deploy-token hash. An unknown app is indistinguishable
+/// from a wrong token by construction.
+fn hook_authorized(token: &str, app: Option<&crate::models::App>) -> bool {
+    app.map(|a| crate::deploy::verify_deploy_token(token, a.deploy_token_hash.as_deref()))
+        .unwrap_or(false)
+}
+
 /// Uniform 500 mapping for internal errors — never echoes anything sensitive.
 fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
     tracing::error!("internal error: {e}");
@@ -448,6 +462,41 @@ fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
         StatusCode::INTERNAL_SERVER_ERROR,
         format!("internal error: {e}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::App;
+
+    fn app_with_token(token: &str) -> App {
+        let mut app = App::new("hooktest").unwrap();
+        app.deploy_token_hash = Some(crate::auth::hash_token(token));
+        app
+    }
+
+    #[test]
+    fn hook_authorized_correct_token() {
+        let app = app_with_token("tok");
+        assert!(hook_authorized("tok", Some(&app)));
+    }
+
+    #[test]
+    fn hook_authorized_wrong_token() {
+        let app = app_with_token("tok");
+        assert!(!hook_authorized("nope", Some(&app)));
+    }
+
+    #[test]
+    fn hook_authorized_unknown_app() {
+        assert!(!hook_authorized("tok", None));
+    }
+
+    #[test]
+    fn hook_authorized_app_without_token() {
+        let app = App::new("hooktest2").unwrap();
+        assert!(!hook_authorized("tok", Some(&app)));
+    }
 }
 
 #[instrument(skip(state))]

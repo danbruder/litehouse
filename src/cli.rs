@@ -487,9 +487,15 @@ async fn run_deploys(
                 std::process::exit(2);
             }
 
+            // With --json, stdout must carry ONLY the JSON payload printed
+            // above — final status goes to stderr / the exit code.
             return match deploys.first() {
                 Some(d) if d.status == "succeeded" => {
-                    println!("Deploy {} succeeded", d.id);
+                    if json {
+                        eprintln!("Deploy {} succeeded", d.id);
+                    } else {
+                        println!("Deploy {} succeeded", d.id);
+                    }
                     Ok(())
                 }
                 Some(d) => {

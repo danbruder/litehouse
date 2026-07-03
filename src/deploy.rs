@@ -17,7 +17,9 @@ use crate::{caddy, db, docker};
 /// A missing or empty stored hash never authorizes anything.
 pub fn verify_deploy_token(provided: &str, stored_hash: Option<&str>) -> bool {
     match stored_hash {
-        Some(hash) if !hash.is_empty() => crate::auth::hash_token(provided) == hash,
+        Some(hash) if !hash.is_empty() => {
+            crate::auth::constant_time_eq(&crate::auth::hash_token(provided), hash)
+        }
         _ => false,
     }
 }
