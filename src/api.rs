@@ -576,18 +576,22 @@ async fn create_app(
                 .into_response();
         }
 
-        let token = crate::auth::generate_token();
-        let hash = crate::auth::hash_token(&token);
-        if let Err(e) = db::app::set_deploy_token_hash(&pool, &existing.id, &hash).await {
-            return internal(e).into_response();
-        }
-
+        // Order matters: persist the repo (full-row save) BEFORE minting the
+        // token hash. save() writes every column, so doing it after
+        // set_deploy_token_hash would silently revert the fresh hash and leave
+        // the GitHub secret out of sync with the server.
         if let Some(repo) = &payload.repo {
             let mut updated = existing.clone();
             updated.repo = Some(repo.clone());
             if let Err(e) = db::app::save(&pool, &updated).await {
                 return internal(e).into_response();
             }
+        }
+
+        let token = crate::auth::generate_token();
+        let hash = crate::auth::hash_token(&token);
+        if let Err(e) = db::app::set_deploy_token_hash(&pool, &existing.id, &hash).await {
+            return internal(e).into_response();
         }
 
         return (

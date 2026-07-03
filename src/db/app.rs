@@ -329,6 +329,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_token_rotation_survives_repo_save() {
+        // Regression: the create/rotate API path saves the repo (full-row
+        // upsert) and then mints a new deploy-token hash. If the order were
+        // reversed, save() would clobber the fresh hash with the stale one.
+        let pool = get_test_pool().await;
+        let app = App::new("rotateapp").unwrap();
+        save(&pool, &app).await.unwrap();
+        set_deploy_token_hash(&pool, &app.id, "old-hash").await.unwrap();
+
+        // Mirror the handler's sequence: repo save first, then rotate.
+        let mut updated = get_by_name(&pool, "rotateapp").await.unwrap().unwrap();
+        updated.repo = Some("dan/rotateapp".to_string());
+        save(&pool, &updated).await.unwrap();
+        set_deploy_token_hash(&pool, &app.id, "new-hash").await.unwrap();
+
+        let reloaded = get_by_name(&pool, "rotateapp").await.unwrap().unwrap();
+        assert_eq!(reloaded.deploy_token_hash.as_deref(), Some("new-hash"));
+        assert_eq!(reloaded.repo.as_deref(), Some("dan/rotateapp"));
+    }
+
+    #[tokio::test]
     async fn test_app_with_organization() {
         // Note: the `organization` table was dropped in the v2 simplification;
         // `organization_id` is now just an unused free-text column.
