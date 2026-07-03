@@ -1,6 +1,6 @@
 [package]
 name = "litehouse"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 edition = "2024"
 description = "A platform for deploying and running containerized applications"
 authors = ["Dan Bruder <danbruder@hey.com>"]
