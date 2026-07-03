@@ -810,11 +810,15 @@ struct GhcrConfigResponse {
     token: Option<String>,
 }
 
-/// Redact a token, keeping only a short prefix so operators can distinguish tokens
-/// without exposing the secret over the API.
+/// Redact a token, keeping only its *type* prefix (e.g. "ghp_", "github_pat_")
+/// so operators can tell what kind of token is configured without any secret
+/// material crossing the API.
 fn redact_token(token: &str) -> String {
-    let visible: String = token.chars().take(7).collect();
-    format!("{}****", visible)
+    let head: String = token.chars().take(11).collect();
+    match head.rfind('_') {
+        Some(idx) => format!("{}****", &head[..=idx]),
+        None => "****".to_string(),
+    }
 }
 
 #[instrument(skip(state, payload))]
