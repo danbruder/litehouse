@@ -2,8 +2,12 @@
 /// sha256 hex hash of the freshly generated admin token (see
 /// `crate::auth::generate_token`/`hash_token`) — the plaintext token itself
 /// is never written to disk, only printed once at the end of install.
-pub fn server_config_template(domain: &str, admin_token_hash: &str) -> String {
-    format!(
+pub fn server_config_template(
+    domain: &str,
+    admin_token_hash: &str,
+    admin_subdomain: Option<&str>,
+) -> String {
+    let mut config = format!(
         r#"host = "0.0.0.0"
 port = 3030
 caddy_http_port = 80
@@ -12,7 +16,13 @@ domain = "{}"
 admin_token_hash = "{}"
 "#,
         domain, admin_token_hash
-    )
+    );
+
+    if let Some(sub) = admin_subdomain {
+        config.push_str(&format!("admin_subdomain = \"{}\"\n", sub));
+    }
+
+    config
 }
 
 /// Template for logrotate configuration
@@ -334,7 +344,7 @@ echo "Caddy container started"
 }
 
 /// Generate initial Caddy configuration JSON
-pub fn initial_caddy_config(domain: &str) -> String {
+pub fn initial_caddy_config(domain: &str, admin_label: &str) -> String {
     format!(
         r#"{{
   "apps": {{
@@ -344,7 +354,7 @@ pub fn initial_caddy_config(domain: &str) -> String {
           "listen": [":80", ":443"],
           "routes": [
             {{
-              "match": [{{ "host": ["admin.{domain}"] }}],
+              "match": [{{ "host": ["{admin_label}.{domain}"] }}],
               "handle": [{{
                 "handler": "reverse_proxy",
                 "upstreams": [{{ "dial": "litehouse-server:3030" }}]
@@ -356,7 +366,8 @@ pub fn initial_caddy_config(domain: &str) -> String {
     }}
   }}
 }}"#,
-        domain = domain
+        domain = domain,
+        admin_label = admin_label
     )
 }
 
@@ -399,8 +410,15 @@ mod tests {
 
     #[test]
     fn server_config_template_persists_only_the_token_hash() {
-        let config = server_config_template("example.com", "deadbeef");
+        let config = server_config_template("example.com", "deadbeef", None);
         assert!(config.contains("admin_token_hash = \"deadbeef\""));
         assert!(!config.contains("plaintext"));
+        assert!(!config.contains("admin_subdomain"));
+    }
+
+    #[test]
+    fn server_config_template_includes_custom_admin_subdomain() {
+        let config = server_config_template("example.com", "deadbeef", Some("admin2"));
+        assert!(config.contains("admin_subdomain = \"admin2\""));
     }
 }

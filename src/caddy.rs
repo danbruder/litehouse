@@ -643,16 +643,17 @@ async fn build_caddy_config(
     apps: Vec<App>,
     local_dev: bool,
     domain: Option<&str>,
+    admin_label: &str,
 ) -> Result<CaddyConfig> {
     let mut routes = Vec::new();
 
     // Add admin API route
     let admin_host = if local_dev {
-        // Always add admin.localhost for local dev
-        Some("admin.localhost".to_string())
+        // Always add {admin_label}.localhost for local dev
+        Some(format!("{}.localhost", admin_label))
     } else {
         // In production, only add if domain is configured
-        domain.map(|d| format!("admin.{}", d))
+        domain.map(|d| format!("{}.{}", admin_label, d))
     };
 
     if let Some(host) = admin_host {
@@ -802,12 +803,13 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     // Load server config to get domain
     let server_config = ServerConfig::load().unwrap_or_default();
     let domain = server_config.domain.as_deref();
+    let admin_label = server_config.admin_label();
 
     match db_app::get_all(db_pool).await {
         Ok(apps) => {
             info!("Found {} apps", apps.len());
 
-            let config = build_caddy_config(apps, local_dev, domain).await?;
+            let config = build_caddy_config(apps, local_dev, domain, admin_label).await?;
             update_caddy_config(docker, config).await?;
 
             info!("Caddy configuration synchronized successfully");
@@ -836,7 +838,7 @@ mod tests {
     async fn routes_from_exposed_port_with_configured_domain() {
         let apps = vec![deployed_app("myapp", Some("8080"))];
 
-        let config = build_caddy_config(apps, false, Some("s.danbruder.com"))
+        let config = build_caddy_config(apps, false, Some("s.danbruder.com"), "admin")
             .await
             .expect("config should build");
 
@@ -856,7 +858,7 @@ mod tests {
     async fn errors_when_domain_missing_and_not_local_dev() {
         let apps = vec![deployed_app("myapp", Some("8080"))];
 
-        let result = build_caddy_config(apps, false, None).await;
+        let result = build_caddy_config(apps, false, None, "admin").await;
 
         match result {
             Ok(_) => panic!("expected error when domain is not configured"),
@@ -871,7 +873,7 @@ mod tests {
     async fn local_dev_routes_use_localhost_without_domain() {
         let apps = vec![deployed_app("myapp", Some("8080"))];
 
-        let config = build_caddy_config(apps, true, None)
+        let config = build_caddy_config(apps, true, None, "admin")
             .await
             .expect("local dev should not require a domain");
 
@@ -883,7 +885,7 @@ mod tests {
     async fn skips_apps_without_exposed_port() {
         let apps = vec![deployed_app("myapp", None)];
 
-        let config = build_caddy_config(apps, true, None)
+        let config = build_caddy_config(apps, true, None, "admin")
             .await
             .expect("config should build");
 
@@ -891,6 +893,36 @@ mod tests {
         assert!(
             !json.contains("myapp-container"),
             "app without exposed_port should not get a route: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_route_uses_default_label() {
+        let config = build_caddy_config(vec![], false, Some("s.danbruder.com"), "admin")
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(
+            json.contains("admin.s.danbruder.com") && json.contains("litehouse-server:3030"),
+            "expected default admin route in config: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_route_uses_custom_label() {
+        let config = build_caddy_config(vec![], false, Some("s.danbruder.com"), "admin2")
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(
+            json.contains("admin2.s.danbruder.com") && json.contains("litehouse-server:3030"),
+            "expected custom admin route in config: {json}"
+        );
+        assert!(
+            !json.contains("\"admin.s.danbruder.com\""),
+            "default admin host should not be present when a custom label is used: {json}"
         );
     }
 }

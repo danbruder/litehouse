@@ -29,6 +29,11 @@ pub struct ServerConfig {
     pub domain: Option<String>,
     #[serde(default)]
     pub admin_token_hash: Option<String>,
+    /// Subdomain label used for the admin API/UI, e.g. "admin" (default) or
+    /// "admin2" to dodge a Let's Encrypt per-identifier rate limit on the
+    /// default label. Full host becomes `{admin_subdomain}.{domain}`.
+    #[serde(default)]
+    pub admin_subdomain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +57,7 @@ impl Default for ServerConfig {
             caddy_https_port: Some(9091), // Use default 443 in production
             domain: None,
             admin_token_hash: None,
+            admin_subdomain: None,
         }
     }
 }
@@ -443,6 +449,11 @@ impl ServerConfig {
 
     pub fn get_config_path() -> Result<PathBuf, ConfigError> {
         Ok(get_config_dir()?.join("server-config.toml"))
+    }
+
+    /// The subdomain label used for the admin API/UI (default: "admin").
+    pub fn admin_label(&self) -> &str {
+        self.admin_subdomain.as_deref().unwrap_or("admin")
     }
 }
 

@@ -50,12 +50,15 @@ pub async fn execute(
     s3_endpoint: Option<&str>,
     s3_path_prefix: Option<&str>,
     ghcr_token: Option<&str>,
+    admin_subdomain: Option<&str>,
 ) -> Result<()> {
     info!("Starting litehouse installation");
     info!("Domain: {}", domain);
     if s3_bucket.is_some() {
         info!("S3 backup configured");
     }
+
+    let admin_label = admin_subdomain.unwrap_or("admin").to_string();
 
     // Tag we pull/run the litehouse-server image from GHCR: the exact
     // version of the binary running this install (i.e. the release tag),
@@ -159,16 +162,7 @@ pub async fn execute(
     let uid_for_caddy = litehouse_uid.clone();
     let domain_for_config = domain.to_string();
     let version_for_pull = requested_version.to_string();
-
-    // Prepare S3 config for phase7
-    let s3_config = (
-        s3_access_key.map(|s| s.to_string()),
-        s3_secret_key.map(|s| s.to_string()),
-        s3_bucket.map(|s| s.to_string()),
-        s3_region.map(|s| s.to_string()),
-        s3_endpoint.map(|s| s.to_string()),
-        s3_path_prefix.map(|s| s.to_string()),
-    );
+    let admin_subdomain_for_config = admin_subdomain.map(|s| s.to_string());
 
     let (litehouse_result, caddy_result, config_result, logrotate_result) = {
         let log_window_litehouse = log_window.clone();
@@ -183,7 +177,7 @@ pub async fn execute(
         });
 
         let config_handle = tokio::task::spawn_blocking(move || {
-            phase7_server_configuration(&domain_for_config, s3_config)
+            phase7_server_configuration(&domain_for_config, admin_subdomain_for_config.as_deref())
         });
 
         let logrotate_handle = tokio::task::spawn_blocking(move || {
@@ -231,7 +225,7 @@ pub async fn execute(
 
     // Phase 9a: Start Caddy Container (must be before litehouse-server)
     pb.set_message("Starting Caddy container...");
-    if let Err(e) = phase9a_start_caddy_container(&litehouse_uid, domain) {
+    if let Err(e) = phase9a_start_caddy_container(&litehouse_uid, domain, &admin_label) {
         pb.finish_with_message("❌ Caddy container start failed");
         error!("Phase 9a failed: {}", e);
         return Err(e);
@@ -260,6 +254,36 @@ pub async fn execute(
         }
     }
 
+    // Same idea for S3 backup credentials: the backup engine reads its S3
+    // target from the database (`system_config`), not from a file, so any
+    // --s3-* flags must be pushed via the admin API after the server is up.
+    if s3_access_key.is_some()
+        || s3_secret_key.is_some()
+        || s3_bucket.is_some()
+        || s3_region.is_some()
+    {
+        pb.set_message("Configuring S3 backup target...");
+        if let Err(e) = configure_s3(
+            s3_access_key,
+            s3_secret_key,
+            s3_bucket,
+            s3_region,
+            s3_endpoint,
+            s3_path_prefix,
+            &admin_token,
+        )
+        .await
+        {
+            // Non-fatal: the operator can always run `lh config s3 set`
+            // later once connected.
+            tracing::warn!(
+                "Failed to configure S3 backup target during install: {:#}. \
+                Run `lh config s3 set` once connected.",
+                e
+            );
+        }
+    }
+
     // Phase 10: Docker restart configuration
     pb.set_message("Configuring Docker restart policy...");
     if let Err(e) = phase10_enable_docker_restart(&litehouse_uid) {
@@ -272,7 +296,7 @@ pub async fn execute(
     // Phase 11: Verification (optional)
     if !skip_verify {
         pb.set_message("Verifying server is responding...");
-        if let Err(e) = phase11_verification(domain) {
+        if let Err(e) = phase11_verification(domain, &admin_label) {
             pb.finish_with_message("❌ Verification failed");
             error!("Phase 11 failed: {}", e);
             return Err(e);
@@ -288,10 +312,10 @@ pub async fn execute(
     // hash.
     println!("\n{}", "=".repeat(60));
     println!("✓ litehouse installed");
-    println!("  admin UI:  https://admin.{}", domain);
+    println!("  admin UI:  https://{}.{}", admin_label, domain);
     println!(
-        "  connect:   lh connect https://admin.{} --token {}",
-        domain, admin_token
+        "  connect:   lh connect https://{}.{} --token {}",
+        admin_label, domain, admin_token
     );
     println!("{}", "=".repeat(60));
     println!("\nNext steps:");
@@ -352,4 +376,72 @@ async fn configure_ghcr_token(ghcr_token: &str, admin_token: &str) -> Result<()>
     }
 
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("unknown error configuring GHCR token")))
+}
+
+/// POST the given S3 backup credentials to the local admin API using the
+/// freshly generated admin token, mirroring `configure_ghcr_token`. This is
+/// the only place S3 config actually lands anywhere the backup engine reads
+/// from — it lives in the `system_config` DB table, not a config file.
+async fn configure_s3(
+    s3_access_key: Option<&str>,
+    s3_secret_key: Option<&str>,
+    s3_bucket: Option<&str>,
+    s3_region: Option<&str>,
+    s3_endpoint: Option<&str>,
+    s3_path_prefix: Option<&str>,
+    admin_token: &str,
+) -> Result<()> {
+    let (access_key_id, secret_access_key, bucket, region) =
+        match (s3_access_key, s3_secret_key, s3_bucket, s3_region) {
+            (Some(a), Some(s), Some(b), Some(r)) => (a, s, b, r),
+            _ => {
+                anyhow::bail!(
+                    "S3 configuration requires --s3-access-key, --s3-secret-key, --s3-bucket, and --s3-region"
+                );
+            }
+        };
+
+    let client = reqwest::Client::new();
+    let url = "http://localhost:3030/api/config/s3";
+
+    let body = serde_json::json!({
+        "access_key_id": access_key_id,
+        "secret_access_key": secret_access_key,
+        "bucket": bucket,
+        "region": region,
+        "endpoint": s3_endpoint,
+        "path_prefix": s3_path_prefix,
+    });
+
+    // The container may have just started; retry briefly.
+    let max_retries = 10;
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        match client
+            .post(url)
+            .bearer_auth(admin_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!("S3 backup target configured");
+                return Ok(());
+            }
+            Ok(resp) => {
+                last_err = Some(anyhow::anyhow!(
+                    "server responded with {}",
+                    resp.status()
+                ));
+            }
+            Err(e) => {
+                last_err = Some(anyhow::anyhow!(e));
+            }
+        }
+        if attempt + 1 < max_retries {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("unknown error configuring S3 backup target")))
 }

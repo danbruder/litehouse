@@ -180,17 +180,10 @@ pub fn phase6b_pull_images(litehouse_uid: &str, log_window: Option<&ProgressBar>
 /// Generates a fresh admin token, persists only its hash in
 /// server-config.toml (never the plaintext), and returns the plaintext
 /// token so the caller can print it exactly once at the end of install.
-#[instrument(skip(s3_config))]
+#[instrument]
 pub fn phase7_server_configuration(
     domain: &str,
-    s3_config: (
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ),
+    admin_subdomain: Option<&str>,
 ) -> Result<String> {
     info!("Phase 7: Server Configuration");
 
@@ -200,34 +193,15 @@ pub fn phase7_server_configuration(
     let admin_token_hash = crate::auth::hash_token(&admin_token);
 
     // Write server config
-    let config_content = templates::server_config_template(domain, &admin_token_hash);
+    let config_content =
+        templates::server_config_template(domain, &admin_token_hash, admin_subdomain);
     sudo_write_file("/opt/litehouse/config/server-config.toml", &config_content)?;
     run_command("chown litehouse:litehouse /opt/litehouse/config/server-config.toml")?;
 
-    // Write S3 credentials if provided
-    if let (Some(access_key), Some(secret_key), Some(bucket), Some(region)) =
-        (&s3_config.0, &s3_config.1, &s3_config.2, &s3_config.3)
-    {
-        info!("Writing S3 credentials");
-
-        let mut s3_env = format!(
-            "S3_ACCESS_KEY_ID={}\nS3_SECRET_ACCESS_KEY={}\nS3_BUCKET={}\nS3_REGION={}\n",
-            access_key, secret_key, bucket, region
-        );
-
-        if let Some(endpoint) = &s3_config.4 {
-            s3_env.push_str(&format!("S3_ENDPOINT={}\n", endpoint));
-        }
-
-        if let Some(path_prefix) = &s3_config.5 {
-            s3_env.push_str(&format!("S3_PATH_PREFIX={}\n", path_prefix));
-        }
-
-        sudo_write_file("/opt/litehouse/config/s3-credentials.env", &s3_env)?;
-        run_command("chown root:root /opt/litehouse/config/s3-credentials.env")?;
-        run_command("chmod 600 /opt/litehouse/config/s3-credentials.env")?;
-        info!("S3 credentials file created with 600 permissions");
-    }
+    // Note: S3 credentials (if provided via --s3-* flags) are configured
+    // separately, after the server container is up, via a POST to
+    // /api/config/s3 (see `configure_s3` in commands/install.rs) — the
+    // backup engine reads S3 config from the database, not from a file.
 
     info!("Phase 7 completed successfully");
     Ok(admin_token)
@@ -254,7 +228,11 @@ pub fn phase8_log_rotation() -> Result<()> {
 
 /// Phase 9a: Start Caddy Container
 #[instrument]
-pub fn phase9a_start_caddy_container(litehouse_uid: &str, domain: &str) -> Result<()> {
+pub fn phase9a_start_caddy_container(
+    litehouse_uid: &str,
+    domain: &str,
+    admin_label: &str,
+) -> Result<()> {
     info!("Phase 9a: Start Caddy Container");
 
     let script = templates::start_caddy_container_script(litehouse_uid);
@@ -317,7 +295,7 @@ pub fn phase9a_start_caddy_container(litehouse_uid: &str, domain: &str) -> Resul
 
     // Load initial Caddy configuration with admin route
     info!("Loading initial Caddy configuration...");
-    let initial_config = templates::initial_caddy_config(domain);
+    let initial_config = templates::initial_caddy_config(domain, admin_label);
     let config_file = format!("/tmp/caddy_initial_config.json");
     std::fs::write(&config_file, &initial_config)?;
 
@@ -395,7 +373,7 @@ pub fn phase10_enable_docker_restart(_litehouse_uid: &str) -> Result<()> {
 
 /// Phase 11: Verification
 #[instrument]
-pub fn phase11_verification(domain: &str) -> Result<()> {
+pub fn phase11_verification(domain: &str, admin_label: &str) -> Result<()> {
     info!("Phase 11: Verification");
 
     // Step 1: Verify DNS configuration
@@ -419,9 +397,12 @@ pub fn phase11_verification(domain: &str) -> Result<()> {
 
     // Check if dig is available, otherwise use host
     let dns_command = if run_command("which dig").is_ok() {
-        format!("dig +short admin.{} A | head -1", domain)
+        format!("dig +short {}.{} A | head -1", admin_label, domain)
     } else {
-        format!("host -t A admin.{} | grep 'has address' | awk '{{print $NF}}' | head -1", domain)
+        format!(
+            "host -t A {}.{} | grep 'has address' | awk '{{print $NF}}' | head -1",
+            admin_label, domain
+        )
     };
 
     // Resolve DNS for admin subdomain
@@ -430,32 +411,31 @@ pub fn phase11_verification(domain: &str) -> Result<()> {
             let resolved_ip = resolved_ip.trim();
             if resolved_ip.is_empty() {
                 anyhow::bail!(
-                    "DNS verification failed: admin.{} does not resolve to any IP address.\n\
+                    "DNS verification failed: {admin_label}.{domain} does not resolve to any IP address.\n\
                     Please configure your DNS provider to point:\n\
-                    - admin.{} (A record) -> {}\n\
-                    - *.{} (A record) -> {}",
-                    domain, domain, server_ip, domain, server_ip
+                    - {admin_label}.{domain} (A record) -> {server_ip}\n\
+                    - *.{domain} (A record) -> {server_ip}",
+                    admin_label = admin_label, domain = domain, server_ip = server_ip
                 );
             } else if resolved_ip != server_ip {
                 anyhow::bail!(
-                    "DNS verification failed: admin.{} resolves to {} but this server's IP is {}.\n\
+                    "DNS verification failed: {admin_label}.{domain} resolves to {resolved_ip} but this server's IP is {server_ip}.\n\
                     Please update your DNS provider to point:\n\
-                    - admin.{} (A record) -> {}\n\
-                    - *.{} (A record) -> {}",
-                    domain, resolved_ip, server_ip,
-                    domain, server_ip, domain, server_ip
+                    - {admin_label}.{domain} (A record) -> {server_ip}\n\
+                    - *.{domain} (A record) -> {server_ip}",
+                    admin_label = admin_label, domain = domain, resolved_ip = resolved_ip, server_ip = server_ip
                 );
             } else {
-                info!("✓ DNS configured correctly: admin.{} -> {}", domain, resolved_ip);
+                info!("✓ DNS configured correctly: {}.{} -> {}", admin_label, domain, resolved_ip);
             }
         }
         Err(e) => {
             anyhow::bail!(
-                "DNS verification failed: Unable to resolve admin.{}: {}\n\
+                "DNS verification failed: Unable to resolve {admin_label}.{domain}: {err}\n\
                 Please configure your DNS provider to point:\n\
-                - admin.{} (A record) -> {}\n\
-                - *.{} (A record) -> {}",
-                domain, e, domain, server_ip, domain, server_ip
+                - {admin_label}.{domain} (A record) -> {server_ip}\n\
+                - *.{domain} (A record) -> {server_ip}",
+                admin_label = admin_label, domain = domain, err = e, server_ip = server_ip
             );
         }
     }

@@ -53,6 +53,12 @@ enum Commands {
         /// if provided.
         #[arg(long)]
         ghcr_token: Option<String>,
+
+        /// Subdomain label for the admin API/UI (default: "admin"). Use a
+        /// custom label (e.g. "admin2") to dodge a Let's Encrypt
+        /// per-identifier rate limit on the default label.
+        #[arg(long)]
+        admin_subdomain: Option<String>,
     },
 
     /// Upgrade litehouse binary and container image (run as root)
@@ -329,6 +335,7 @@ pub async fn run() -> Result<()> {
             s3_endpoint,
             s3_path_prefix,
             ghcr_token,
+            admin_subdomain,
         } => crate::commands::install::execute(
             &domain,
             skip_verify,
@@ -339,6 +346,7 @@ pub async fn run() -> Result<()> {
             s3_endpoint.as_deref(),
             s3_path_prefix.as_deref(),
             ghcr_token.as_deref(),
+            admin_subdomain.as_deref(),
         )
         .await,
         Commands::Upgrade { version, from_path } => {

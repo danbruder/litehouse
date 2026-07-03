@@ -517,6 +517,17 @@ async fn delete_app(
             )
                 .into_response()
         }
+        Err(crate::commands::delete::DeleteError::AppRunning(name)) => {
+            tracing::warn!("Refused to delete running app '{}'", name);
+            (
+                axum::http::StatusCode::CONFLICT,
+                format!(
+                    "App '{}' is running. Stop it first (`lh stop {}`) before deleting.",
+                    name, name
+                ),
+            )
+                .into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to delete app '{}': {}", name, e);
             (

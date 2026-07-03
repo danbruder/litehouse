@@ -8,6 +8,9 @@ set -euo pipefail
 : "${DOMAIN:?e.g. s.danbruder.com}"
 S3_ARGS="${S3_ARGS:-}"          # e.g. --s3-access-key .. --s3-secret-key .. --s3-bucket .. --s3-region ..
 GHCR_ARGS="${GHCR_ARGS:-}"      # e.g. --ghcr-token ghp_...
+ADMIN_SUBDOMAIN="${ADMIN_SUBDOMAIN:-}" # e.g. admin2, to dodge a Let's Encrypt rate limit on the default label
+ADMIN_ARGS=""
+[ -n "$ADMIN_SUBDOMAIN" ] && ADMIN_ARGS="--admin-subdomain ${ADMIN_SUBDOMAIN}"
 LH="${LH:-cargo run --quiet --}" # local lh invocation
 
 echo "==> 1/5 build release binary (musl)"
@@ -19,13 +22,15 @@ ssh "root@${SERVER_IP}" 'docker ps -aq | xargs -r docker rm -f; docker volume ls
 
 echo "==> 3/5 reinstall"
 scp "$BIN" "root@${SERVER_IP}:/usr/local/bin/lh"
-INSTALL_OUT=$(ssh "root@${SERVER_IP}" "lh install --domain ${DOMAIN} ${S3_ARGS} ${GHCR_ARGS}")
+INSTALL_OUT=$(ssh "root@${SERVER_IP}" "lh install --domain ${DOMAIN} ${S3_ARGS} ${GHCR_ARGS} ${ADMIN_ARGS}")
 echo "$INSTALL_OUT"
 TOKEN=$(echo "$INSTALL_OUT" | grep -oE -- '--token [a-f0-9]{64}' | awk '{print $2}' | tail -1)
 [ -n "$TOKEN" ] || { echo "FATAL: no admin token in install output"; exit 1; }
+CONNECT_URL=$(echo "$INSTALL_OUT" | grep -oE 'lh connect https://[^ ]+' | awk '{print $3}' | tail -1)
+[ -n "$CONNECT_URL" ] || { echo "FATAL: no connect URL in install output"; exit 1; }
 
 echo "==> 4/5 connect CLI + restore from newest S3 backup"
-$LH connect "https://admin.${DOMAIN}" --token "$TOKEN"
+$LH connect "$CONNECT_URL" --token "$TOKEN"
 $LH restore --yes
 
 echo "==> 5/5 poll until the restored app is reachable again"

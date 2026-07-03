@@ -45,8 +45,9 @@ pub async fn execute() -> Result<()> {
     }
 
     // Check admin subdomain
-    println!("\n2. Checking DNS for admin.{}...", domain);
-    check_dns_record(&format!("admin.{}", domain), &server_ip)?;
+    let admin_label = config.admin_label();
+    println!("\n2. Checking DNS for {}.{}...", admin_label, domain);
+    check_dns_record(&format!("{}.{}", admin_label, domain), &server_ip)?;
 
     // Check wildcard domain (test with a random subdomain)
     println!("\n3. Checking DNS for *.{}...", domain);
@@ -56,7 +57,7 @@ pub async fn execute() -> Result<()> {
     println!("\n{}", "=".repeat(60));
     println!("✓ DNS configuration is correct!");
     println!("\nYour litehouse server should be accessible at:");
-    println!("  - Admin: https://admin.{}", domain);
+    println!("  - Admin: https://{}.{}", admin_label, domain);
     println!("  - Apps:  https://<app-name>.{}", domain);
     println!("{}", "=".repeat(60));
 
