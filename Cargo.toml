@@ -30,8 +30,6 @@ http = "0.2"
 futures-util = "0.3"
 bytes = "1"
 indicatif = "0.17"
-rust-embed = { version = "8", features = ["mime-guess"] }
-mime_guess = "2.0"
 jsonwebtoken = "9.2"
 argon2 = "0.5"
 rand = "0.8"
