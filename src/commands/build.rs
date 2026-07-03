@@ -1,8 +1,6 @@
 use crate::api_client::ApiClient;
 use crate::config;
-use crate::message_bus::{Message, MessageBus, SubscriptionFilter};
 use sqlx::{Pool, Sqlite};
-use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 
 use crate::db;
@@ -31,12 +29,11 @@ type BuildResult<T> = Result<T, BuildError>;
 
 /// Start an async build for an app. Returns immediately with a Build record that has status=building.
 /// The actual build runs in a background task.
-#[instrument(skip(pool, github_token, message_bus))]
+#[instrument(skip(pool, github_token))]
 pub async fn execute(
     pool: &Pool<Sqlite>,
     app_name: &str,
     github_token: Option<&str>,
-    message_bus: Arc<MessageBus>,
     force: bool,
 ) -> BuildResult<Build> {
     // Get app
@@ -70,20 +67,12 @@ pub async fn execute(
     let build = Build::new_building(app.id.clone(), log_path_str);
     db::build::save(pool, &build).await?;
 
-    // Publish build started event
-    message_bus.publish(Message::BuildStatus {
-        app_name: app.name.clone(),
-        build_id: build.id.clone(),
-        status: "building".to_string(),
-    });
-
     // Spawn background task to do the actual build
     let pool_clone = pool.clone();
     let build_id = build.id.clone();
     let app_id = app.id.clone();
     let app_name_clone = app.name.clone();
     let github_token_owned = github_token.map(|s| s.to_string());
-    let message_bus_clone = message_bus.clone();
 
     tokio::spawn(async move {
         let result = do_build(
@@ -93,7 +82,6 @@ pub async fn execute(
             &app_name_clone,
             &remote,
             github_token_owned.as_deref(),
-            message_bus_clone.clone(),
             force,
         )
         .await;
@@ -107,22 +95,11 @@ pub async fn execute(
                     } else {
                         original_state
                     };
-                    // Publish build success event
-                    message_bus_clone.publish(Message::BuildStatus {
-                        app_name: app_name_clone.clone(),
-                        build_id: build_id.clone(),
-                        status: "success".to_string(),
-                    });
+                    info!("Build succeeded for app '{}'", app_name_clone);
                 }
                 Err(ref e) => {
                     error!("Build failed for app '{}': {}", app_name_clone, e);
                     app.state = AppState::Failed;
-                    // Publish build failed event
-                    message_bus_clone.publish(Message::BuildStatus {
-                        app_name: app_name_clone.clone(),
-                        build_id: build_id.clone(),
-                        status: "failed".to_string(),
-                    });
                 }
             }
             if let Err(e) = db::app::save(&pool_clone, &app).await {
@@ -145,12 +122,8 @@ async fn do_build(
     app_name: &str,
     remote: &crate::models::Remote,
     github_token: Option<&str>,
-    message_bus: Arc<MessageBus>,
     force: bool,
 ) -> BuildResult<()> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
     // Get the build record to get log path
     let mut build = db::build::get_by_id(pool, build_id)
         .await?
@@ -162,84 +135,6 @@ async fn do_build(
         .ok_or_else(|| BuildError::AppNotConfigured("Build log path not set".to_string()))?;
 
     let build_dir = config::get_app_build_dir(app_name)?;
-
-    // Spawn file writer subscriber
-    let log_path_clone = log_path.clone();
-    let build_id_clone = build_id.to_string();
-    let app_name_clone = app_name.to_string();
-    let message_bus_clone = message_bus.clone();
-    tokio::spawn(async move {
-        // Create filter for BuildLogs messages for this app
-        let filter = SubscriptionFilter::new(None)
-            .with_message_types(vec!["BuildLogs".to_string()])
-            .with_app_names(vec![app_name_clone.clone()]);
-
-        // Open log file for writing
-        let mut log_file = match OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_path_clone)
-        {
-            Ok(file) => file,
-            Err(e) => {
-                error!("Failed to open log file {}: {}", log_path_clone, e);
-                return;
-            }
-        };
-
-        // Subscribe to message bus
-        let mut rx = message_bus_clone.subscribe();
-        let mut build_complete = false;
-
-        while !build_complete {
-            match rx.recv().await {
-                Ok(msg) => {
-                    // Check if this is a build status message indicating completion
-                    if let Message::BuildStatus {
-                        build_id,
-                        status,
-                        ..
-                    } = &msg
-                    {
-                        if build_id == &build_id_clone
-                            && (status == "success" || status == "failed")
-                        {
-                            build_complete = true;
-                        }
-                    }
-
-                    // Filter and write BuildLogs messages
-                    if filter.matches(&msg) {
-                        if let Message::BuildLogs {
-                            build_id,
-                            data,
-                            ..
-                        } = msg
-                        {
-                            if build_id == build_id_clone {
-                                if let Err(e) = writeln!(log_file, "{}", data) {
-                                    error!("Failed to write to log file: {}", e);
-                                    break;
-                                }
-                                if let Err(e) = log_file.flush() {
-                                    error!("Failed to flush log file: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    warn!("File writer lagged, skipped {} messages", skipped);
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    info!("Message bus closed, stopping file writer");
-                    break;
-                }
-            }
-        }
-    });
 
     // Pull or clone the git repo
     // Check if this is a valid git repository by looking for .git directory
@@ -359,7 +254,7 @@ async fn do_build(
         &tag,
         app_name,
         build_id,
-        message_bus.clone(),
+        Some(&log_path),
     )
     .await
     {
@@ -511,9 +406,8 @@ mod tests {
     #[tokio::test]
     async fn test_build_app_not_found() {
         let pool = get_test_pool().await;
-        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
-        let result = execute(&pool, "nonexistent-app", None, message_bus, false).await;
+        let result = execute(&pool, "nonexistent-app", None, false).await;
 
         assert!(matches!(result, Err(BuildError::AppNotFound(_))));
     }
@@ -521,14 +415,13 @@ mod tests {
     #[tokio::test]
     async fn test_build_already_building() {
         let pool = get_test_pool().await;
-        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app in Building state
         let mut app = App::new("test-building-app").unwrap();
         app.state = AppState::Building;
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-building-app", None, message_bus, false).await;
+        let result = execute(&pool, "test-building-app", None, false).await;
 
         assert!(matches!(result, Err(BuildError::AlreadyBuilding(_))));
     }
@@ -536,13 +429,12 @@ mod tests {
     #[tokio::test]
     async fn test_build_no_remote_configured() {
         let pool = get_test_pool().await;
-        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
 
         // Create app without remote
         let app = App::new("test-no-remote-app").unwrap();
         db::app::save(&pool, &app).await.unwrap();
 
-        let result = execute(&pool, "test-no-remote-app", None, message_bus, false).await;
+        let result = execute(&pool, "test-no-remote-app", None, false).await;
 
         assert!(matches!(result, Err(BuildError::AppNotConfigured(_))));
     }
@@ -567,8 +459,7 @@ mod tests {
         db::remote::save(&pool, &remote).await.unwrap();
 
         // Execute build - this should start the build and return immediately
-        let message_bus = Arc::new(crate::message_bus::MessageBus::new());
-        let result = execute(&pool, "test-build-app", None, message_bus, false).await;
+        let result = execute(&pool, "test-build-app", None, false).await;
 
         // Build should start successfully (returns a build record)
         assert!(result.is_ok(), "Build should start: {:?}", result.err());

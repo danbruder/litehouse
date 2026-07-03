@@ -28,13 +28,6 @@ pub struct ServerConfig {
     pub caddy_http_port: Option<u16>,
     pub caddy_https_port: Option<u16>,
     pub domain: Option<String>,
-    /// Interval in seconds for background reconciliation. Default: 60. Set to 0 to disable.
-    #[serde(default = "default_reconcile_interval")]
-    pub reconcile_interval_secs: u64,
-}
-
-fn default_reconcile_interval() -> u64 {
-    60 * 15 // Every hour
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,7 +47,6 @@ impl Default for ServerConfig {
             caddy_http_port: Some(9090),
             caddy_https_port: Some(9091), // Use default 443 in production
             domain: None,
-            reconcile_interval_secs: default_reconcile_interval(),
         }
     }
 }

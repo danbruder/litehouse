@@ -1,11 +1,34 @@
-use crate::message_bus::{Message, MessageBus};
 use crate::models::{App, EnvVar};
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tracing::{info, instrument};
+
+/// Callback used to record build log lines (streamed to a build log file and to tracing).
+type LogFn = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// Build a log-recording closure. If `log_path` is provided, lines are also appended to that file.
+fn make_log_fn(log_path: Option<&str>) -> LogFn {
+    let log_file = log_path.and_then(|p| {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .ok()
+    });
+    let log_file = Mutex::new(log_file);
+    Arc::new(move |data: &str| {
+        info!("{}", data);
+        if let Ok(mut guard) = log_file.lock() {
+            if let Some(f) = guard.as_mut() {
+                use std::io::Write;
+                let _ = writeln!(f, "{}", data);
+            }
+        }
+    })
+}
 
 type Result<T> = std::result::Result<T, DockerError>;
 
@@ -40,34 +63,24 @@ pub async fn connect() -> Result<Docker> {
 
 #[instrument]
 pub async fn build(directory: &str, tag: &str) -> Result<String> {
-    // For builds without logging, we still need a message bus
-    // This is a temporary solution - callers should provide a message bus
-    // For now, create a dummy message bus that won't be used
-    let message_bus = Arc::new(MessageBus::new());
-    build_with_log(directory, tag, "", "", message_bus).await
+    build_with_log(directory, tag, "", "", None).await
 }
 
-#[instrument(skip(message_bus))]
+#[instrument(skip(log_path))]
 pub async fn build_with_log(
     directory: &str,
     tag: &str,
     app_name: &str,
     build_id: &str,
-    message_bus: Arc<MessageBus>,
+    log_path: Option<&str>,
 ) -> Result<String> {
     info!("Building app in: {}", directory);
 
-    // Helper to publish log message
-    let publish_log = |data: &str| {
-        message_bus.publish(Message::BuildLogs {
-            app_name: app_name.to_string(),
-            build_id: build_id.to_string(),
-            event_type: "message".to_string(),
-            data: data.to_string(),
-        });
-    };
+    // Helper to record log message (tracing + optional log file)
+    let log_fn = make_log_fn(log_path);
+    let publish_log = |data: &str| log_fn(data);
 
-    publish_log(&format!("Building app in: {}", directory));
+    publish_log(&format!("Building app in: {} (build id: {})", directory, build_id));
 
     let dockerfile_path = Path::new(directory).join("Dockerfile");
     if !dockerfile_path.exists() {
@@ -80,14 +93,7 @@ pub async fn build_with_log(
     info!("Starting container image build via Bollard API...");
 
     // Build using Bollard API (no docker CLI required!)
-    let image_id = build_with_bollard_api(
-        directory,
-        tag,
-        app_name,
-        message_bus.clone(),
-        build_id.to_string(),
-    )
-    .await?;
+    let image_id = build_with_bollard_api(directory, tag, app_name, log_fn.clone()).await?;
 
     publish_log("Container image build completed successfully");
     info!("Container image build completed successfully");
@@ -102,21 +108,11 @@ async fn build_with_bollard_api(
     directory: &str,
     tag: &str,
     app_name: &str,
-    message_bus: Arc<MessageBus>,
-    build_id: String,
+    log_fn: LogFn,
 ) -> Result<String> {
     use bollard::image::{BuildImageOptions, BuilderVersion};
 
-    let app_name_str = app_name.to_string();
-
-    let publish_log = |data: &str| {
-        message_bus.publish(Message::BuildLogs {
-            app_name: app_name_str.clone(),
-            build_id: build_id.clone(),
-            event_type: "message".to_string(),
-            data: data.to_string(),
-        });
-    };
+    let publish_log = |data: &str| log_fn(data);
 
     publish_log(&format!("Building Docker image using Bollard BuildKit API..."));
 

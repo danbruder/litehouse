@@ -1,12 +1,10 @@
 use anyhow::Result;
 use bollard::Docker;
 use sqlx::{Pool, Sqlite};
-use std::sync::Arc;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::commands::{build, start};
 use crate::db;
-use crate::message_bus::{Message, MessageBus};
 use crate::models::{
     App, GitHubPushPayload, WebhookDelivery, WebhookDeliveryStatus,
 };
@@ -27,11 +25,10 @@ pub enum WebhookError {
 }
 
 /// Handle incoming GitHub webhook
-#[instrument(skip(pool, docker, message_bus, payload))]
+#[instrument(skip(pool, docker, payload))]
 pub async fn handle_github_webhook(
     pool: &Pool<Sqlite>,
     docker: &Docker,
-    message_bus: Arc<MessageBus>,
     github_token: Option<String>,
     event_type: String,
     delivery_id: Option<String>,
@@ -150,7 +147,6 @@ pub async fn handle_github_webhook(
         pool,
         &app.name,
         github_token.as_deref(),
-        message_bus.clone(),
         false, // force=false for webhooks
     )
     .await
@@ -165,35 +161,23 @@ pub async fn handle_github_webhook(
 
             // Schedule auto-deploy if enabled
             if webhook_config.auto_deploy {
-                schedule_auto_deploy(
-                    pool.clone(),
-                    docker.clone(),
-                    message_bus.clone(),
-                    app.name.clone(),
-                    build.id,
-                );
+                schedule_auto_deploy(pool.clone(), docker.clone(), app.name.clone(), build.id);
             }
 
-            // Publish webhook received event
-            message_bus.publish(Message::WebhookReceived {
-                app_name: app.name.clone(),
-                event_type,
-                status: "build_triggered".to_string(),
-                delivery_id,
-            });
+            info!(
+                "Webhook received: app={} event={} status=build_triggered delivery_id={:?}",
+                app.name, event_type, delivery_id
+            );
         }
         Err(e) => {
             error!("Failed to trigger build for app '{}': {}", app.name, e);
             delivery.status = WebhookDeliveryStatus::BuildFailed;
             delivery.error_message = Some(e.to_string());
 
-            // Publish webhook received event
-            message_bus.publish(Message::WebhookReceived {
-                app_name: app.name.clone(),
-                event_type,
-                status: "build_failed".to_string(),
-                delivery_id,
-            });
+            warn!(
+                "Webhook received: app={} event={} status=build_failed delivery_id={:?}",
+                app.name, event_type, delivery_id
+            );
         }
     }
 
@@ -231,58 +215,48 @@ fn normalize_url(url: &str) -> String {
         .to_lowercase()
 }
 
-/// Schedule auto-deploy task that waits for build success
-fn schedule_auto_deploy(
-    pool: Pool<Sqlite>,
-    docker: Docker,
-    message_bus: Arc<MessageBus>,
-    app_name: String,
-    build_id: String,
-) {
+/// Schedule auto-deploy task that polls the build record until it succeeds or fails.
+fn schedule_auto_deploy(pool: Pool<Sqlite>, docker: Docker, app_name: String, build_id: String) {
     tokio::spawn(async move {
-        let mut rx = message_bus.subscribe();
-        let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(600)); // 10 minute timeout
-        tokio::pin!(timeout);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(600); // 10 minute timeout
+        let poll_interval = tokio::time::Duration::from_secs(3);
 
         loop {
-            tokio::select! {
-                msg_result = rx.recv() => {
-                    match msg_result {
-                        Ok(msg) => {
-                            if let Message::BuildStatus {
-                                build_id: msg_build_id,
-                                status,
-                                ..
-                            } = msg
-                            {
-                                if msg_build_id == build_id {
-                                    if status == "success" {
-                                        info!("Auto-deploying '{}' after successful build", app_name);
+            if tokio::time::Instant::now() >= deadline {
+                warn!("Auto-deploy timeout for app '{}' after 10 minutes", app_name);
+                break;
+            }
 
-                                        if let Err(e) = start::execute(&pool, &docker, &app_name).await {
-                                            error!("Auto-deploy failed for '{}': {}", app_name, e);
-                                        } else {
-                                            info!("Auto-deploy completed successfully for '{}'", app_name);
-                                        }
-                                        break;
-                                    } else if status == "failed" {
-                                        warn!("Build failed for '{}', skipping auto-deploy", app_name);
-                                        break;
-                                    }
-                                }
-                            }
+            match db::build::get_by_id(&pool, &build_id).await {
+                Ok(Some(build)) => match build.status.to_string().as_str() {
+                    "success" => {
+                        info!("Auto-deploying '{}' after successful build", app_name);
+                        if let Err(e) = start::execute(&pool, &docker, &app_name).await {
+                            error!("Auto-deploy failed for '{}': {}", app_name, e);
+                        } else {
+                            info!("Auto-deploy completed successfully for '{}'", app_name);
                         }
-                        Err(e) => {
-                            error!("Error receiving message for auto-deploy: {}", e);
-                            break;
-                        }
+                        break;
                     }
+                    "failed" => {
+                        warn!("Build failed for '{}', skipping auto-deploy", app_name);
+                        break;
+                    }
+                    _ => {
+                        // Still building - keep polling
+                    }
+                },
+                Ok(None) => {
+                    error!("Build '{}' not found while waiting for auto-deploy", build_id);
+                    break;
                 }
-                _ = &mut timeout => {
-                    warn!("Auto-deploy timeout for app '{}' after 10 minutes", app_name);
+                Err(e) => {
+                    error!("Error checking build status for auto-deploy: {}", e);
                     break;
                 }
             }
+
+            tokio::time::sleep(poll_interval).await;
         }
     });
 }

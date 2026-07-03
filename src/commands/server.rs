@@ -1,15 +1,11 @@
+use crate::caddy;
 use crate::docker;
-use crate::message_bus::{Message, MessageBus};
-use crate::reconciler::Reconciler;
 use anyhow::{Context, Result};
 use axum::Router;
 use bollard::Docker;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{oneshot, RwLock};
-use tokio::task::JoinHandle;
+use tokio::sync::RwLock;
 use tracing::{info, instrument};
 
 use crate::admin_spa;
@@ -23,11 +19,29 @@ pub struct AppState {
     pub docker: Docker,
     pub jwt_secret: String,
     pub github_client_id: Option<String>,
-    pub message_bus: Arc<MessageBus>,
-    /// Track active log streaming tasks per app name
-    pub log_streaming_tasks: Arc<RwLock<HashMap<String, (JoinHandle<()>, oneshot::Sender<()>)>>>,
     /// Webhook base URL (e.g., "https://admin.yourdomain.com")
     pub webhook_url: Option<String>,
+}
+
+/// Ensure Caddy is running and its configuration matches the database.
+///
+/// Container liveness for app containers is handled by Docker's own restart
+/// policy (`--restart unless-stopped`) — this only takes care of the reverse
+/// proxy, which the server itself is responsible for managing.
+#[instrument(skip(docker, pool, config))]
+pub async fn sync_on_boot(
+    docker: &Docker,
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    config: &ServerConfig,
+) -> Result<()> {
+    caddy::start(docker, config)
+        .await
+        .context("Failed to start Caddy container")?;
+    caddy::sync_configuration(docker, pool)
+        .await
+        .context("Failed to sync Caddy configuration")?;
+    info!("Caddy started and configuration synced");
+    Ok(())
 }
 
 /// Start the Litehouse server
@@ -37,34 +51,8 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let docker_conn = docker::connect().await?;
 
-    // Create reconciler and run initial reconciliation
-    let reconciler = Reconciler::new(pool.clone(), docker_conn.clone());
-    let report = reconciler.reconcile_all(&config).await;
-    Reconciler::log_report(&report);
-
-    // Spawn background reconciliation loop if interval > 0
-    let reconcile_interval = config.reconcile_interval_secs;
-    if reconcile_interval > 0 {
-        let reconciler_clone = reconciler.clone();
-        let config_clone = config.clone();
-        tokio::spawn(async move {
-            let interval = Duration::from_secs(reconcile_interval);
-            loop {
-                tokio::time::sleep(interval).await;
-                let report = reconciler_clone.reconcile_all(&config_clone).await;
-                // Only log if something changed (fixes or failures)
-                if report.has_fixes_or_failures() {
-                    Reconciler::log_report(&report);
-                }
-            }
-        });
-        info!(
-            "Background reconciliation enabled (interval: {}s)",
-            reconcile_interval
-        );
-    } else {
-        info!("Background reconciliation disabled");
-    }
+    // Ensure Caddy is running and configured before accepting traffic
+    sync_on_boot(&docker_conn, &pool, &config).await?;
 
     // Get JWT secret from environment or use default (warning will be logged)
     let jwt_secret = crate::auth::jwt::get_jwt_secret();
@@ -74,21 +62,6 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let github_client_id = Some(
         std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string()),
     );
-
-    // Initialize message bus for real-time messaging
-    let message_bus = Arc::new(MessageBus::new());
-
-    // Spawn background task for periodic heartbeat
-    {
-        let bus = message_bus.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(15));
-            loop {
-                interval.tick().await;
-                bus.publish(Message::Heartbeat);
-            }
-        });
-    }
 
     // Construct webhook URL from domain if available
     let webhook_url = config
@@ -102,8 +75,6 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         docker: docker_conn.clone(),
         jwt_secret,
         github_client_id,
-        message_bus,
-        log_streaming_tasks: Arc::new(RwLock::new(HashMap::new())),
         webhook_url,
     }));
 

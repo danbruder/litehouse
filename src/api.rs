@@ -11,8 +11,7 @@ use crate::db::env_var;
 use crate::db::system_config as db_system_config;
 use crate::github;
 use crate::models::{GitHubConnection, S3Config, S3ConfigRedacted, SystemConfig};
-use crate::message_bus::{Message, SubscriptionFilter};
-use crate::sse::start_sse_stream;
+use axum::body::StreamBody;
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::sse::{Event, Sse};
@@ -67,7 +66,6 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         // GitHub OAuth routes
         .route("/github/connect/start", post(github_connect_start))
         .route("/github/connect/poll", post(github_connect_poll))
-        .route("/github/connect/stream", get(github_connect_stream))
         .route("/github/connection", delete(github_disconnect))
         .route("/github/status", get(github_status))
         .route("/github/repos", get(github_list_repos))
@@ -75,8 +73,6 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         // Webhook management
         .route("/apps/:name/webhook", get(get_webhook_config_handler))
         .route("/apps/:name/webhook/deliveries", get(get_webhook_deliveries_handler))
-        // Unified SSE endpoint
-        .route("/events/stream", get(events_stream_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::auth_middleware,
@@ -210,11 +206,10 @@ async fn stop_app(
     }
 }
 
-#[instrument(skip(name, state))]
+#[instrument(skip(name))]
 async fn get_logs(
     Path(name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-    State(state): State<Arc<RwLock<AppState>>>,
 ) -> impl IntoResponse {
     let lines = params
         .get("lines")
@@ -226,83 +221,29 @@ async fn get_logs(
         .unwrap_or(false);
 
     if follow {
-        // Get message bus and log streaming tasks from state
-        let (message_bus, log_streaming_tasks) = {
-            let state_guard = state.read().await;
-            (state_guard.message_bus.clone(), state_guard.log_streaming_tasks.clone())
-        };
-
-        // Cancel any existing log streaming task for this app
-        {
-            let mut tasks = log_streaming_tasks.write().await;
-            if let Some((handle, cancel_tx)) = tasks.remove(&name) {
-                tracing::info!("Stopping existing log streaming task for app '{}'", name);
-                // Send cancellation signal
-                let _ = cancel_tx.send(());
-                // Abort the task if it's still running
-                handle.abort();
-            }
-        }
-
-        // Stream logs and publish to message bus
+        // Stream logs directly from Docker to the HTTP response body
         match logs::execute(&name, lines, true).await {
             Ok(stream) => {
                 let app_name = name.clone();
-                let message_bus_clone = message_bus.clone();
-                let log_streaming_tasks_clone = log_streaming_tasks.clone();
-                
-                // Create cancellation channel
-                let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
-                
-                // Spawn background task to publish logs to message bus
-                let handle = tokio::spawn(async move {
-                    let mut log_stream = stream;
-                    loop {
-                        tokio::select! {
-                            result = log_stream.next() => {
-                                match result {
-                                    Some(Ok(data)) => {
-                                        // Publish to message bus
-                                        message_bus_clone.publish(Message::ContainerLogs {
-                                            app_name: app_name.clone(),
-                                            data: data.clone(),
-                                        });
-                                    }
-                                    Some(Err(e)) => {
-                                        tracing::warn!("Error reading log stream for {}: {}", app_name, e);
-                                        break;
-                                    }
-                                    None => {
-                                        tracing::debug!("Log stream ended for {}", app_name);
-                                        break;
-                                    }
-                                }
-                            }
-                            _ = &mut cancel_rx => {
-                                tracing::debug!("Log streaming cancelled for {}", app_name);
-                                break;
-                            }
-                        }
+                let body_stream = stream.map(move |item| match item {
+                    Ok(data) => Ok(Bytes::from(data.into_bytes())),
+                    Err(e) => {
+                        tracing::warn!("Error reading log stream for {}: {}", app_name, e);
+                        Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
                     }
-                    // Clean up task from tracking map when done
-                    let mut tasks = log_streaming_tasks_clone.write().await;
-                    tasks.remove(&app_name);
-                    tracing::debug!("Log streaming task completed for {}", app_name);
                 });
-
-                // Store the task handle and cancellation sender
-                {
-                    let mut tasks = log_streaming_tasks.write().await;
-                    tasks.insert(name.clone(), (handle, cancel_tx));
-                }
-
-                // Return a simple OK response since logs are now streamed via message bus
-                (StatusCode::OK, "Log streaming started").into_response()
+                let body = StreamBody::new(body_stream);
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/plain; charset=utf-8")
+                    .body(axum::body::boxed(body))
+                    .unwrap()
+                    .into_response()
             }
             Err(e) => (StatusCode::NOT_FOUND, format!("Failed to get logs: {}", e)).into_response(),
         }
     } else {
-        // Get logs as a single response using podman-api
+        // Get logs as a single response
         match logs::execute(&name, lines, false).await {
             Ok(stream) => {
                 let mut logs = String::new();
@@ -854,10 +795,7 @@ async fn build_app(
     Path(name): Path<String>,
     Query(query): Query<BuildQuery>,
 ) -> impl IntoResponse {
-    let (pool, message_bus) = {
-        let state = state.read().await;
-        (state.db_pool.clone(), state.message_bus.clone())
-    };
+    let pool = state.read().await.db_pool.clone();
 
     // Get GitHub token for the user (if connected)
     let github_token = match db::github_connection::get_by_user_id(&pool, &auth_user.user_id).await
@@ -866,7 +804,7 @@ async fn build_app(
         _ => None,
     };
 
-    match build::execute(&pool, &name, github_token.as_deref(), message_bus, query.force).await {
+    match build::execute(&pool, &name, github_token.as_deref(), query.force).await {
         Ok(build_record) => Json(serde_json::json!({
             "message": format!("App '{}' built", name),
             "build_id": build_record.id
@@ -1542,134 +1480,6 @@ async fn github_connect_poll(
     .into_response()
 }
 
-#[derive(Debug, Deserialize)]
-struct DeviceFlowStreamQuery {
-    device_code: String,
-    interval: Option<u64>,
-    expires_in: Option<u64>,
-}
-
-#[instrument(skip(state))]
-async fn github_connect_stream(
-    State(state): State<Arc<RwLock<AppState>>>,
-    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
-    Query(query): Query<DeviceFlowStreamQuery>,
-) -> impl IntoResponse {
-    let (client_id, pool, message_bus) = {
-        let state = state.read().await;
-        let client_id = match state.github_client_id.clone() {
-            Some(id) => id,
-            None => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "GitHub OAuth is not configured",
-                )
-                    .into_response();
-            }
-        };
-        (client_id, state.db_pool.clone(), state.message_bus.clone())
-    };
-
-    let device_code = query.device_code;
-    let interval = query.interval.unwrap_or(5).max(5); // At least 5 seconds
-    let expires_in = query.expires_in.unwrap_or(900); // Default 15 minutes
-    let user_id = auth_user.user_id.clone();
-
-    // Spawn background task to poll GitHub and publish to message bus
-    tokio::spawn(async move {
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(expires_in);
-        let poll_interval = std::time::Duration::from_secs(interval);
-
-        loop {
-            if start.elapsed() > timeout {
-                message_bus.publish(Message::GitHubOAuth {
-                    event_type: "error".to_string(),
-                    data: "Authorization timed out".to_string(),
-                });
-                break;
-            }
-
-            // Poll GitHub
-            match github::poll_once(&client_id, &device_code).await {
-                Ok(github::PollResult::Pending) => {
-                    message_bus.publish(Message::GitHubOAuth {
-                        event_type: "pending".to_string(),
-                        data: "Waiting for authorization...".to_string(),
-                    });
-                }
-                Ok(github::PollResult::Success { access_token, scope }) => {
-                    // Get GitHub user info
-                    let gh_client = github::GitHubClient::new(&access_token);
-                    match gh_client.get_user().await {
-                        Ok(gh_user) => {
-                            // Save connection to database
-                            let connection = GitHubConnection::new(
-                                &user_id,
-                                gh_user.id,
-                                &gh_user.login,
-                                gh_user.email.clone(),
-                                &access_token,
-                                &scope,
-                            );
-
-                            if let Err(e) = db::github_connection::save(&pool, &connection).await {
-                                message_bus.publish(Message::GitHubOAuth {
-                                    event_type: "error".to_string(),
-                                    data: format!("Failed to save connection: {}", e),
-                                });
-                            } else {
-                                // Send success with username as JSON
-                                let response = serde_json::json!({
-                                    "username": gh_user.login,
-                                    "email": gh_user.email
-                                });
-                                message_bus.publish(Message::GitHubOAuth {
-                                    event_type: "success".to_string(),
-                                    data: response.to_string(),
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            message_bus.publish(Message::GitHubOAuth {
-                                event_type: "error".to_string(),
-                                data: format!("Failed to get GitHub user: {}", e),
-                            });
-                        }
-                    }
-                    break;
-                }
-                Err(github::OAuthError::AuthorizationTimeout) => {
-                    message_bus.publish(Message::GitHubOAuth {
-                        event_type: "error".to_string(),
-                        data: "Authorization timed out".to_string(),
-                    });
-                    break;
-                }
-                Err(github::OAuthError::AccessDenied) => {
-                    message_bus.publish(Message::GitHubOAuth {
-                        event_type: "error".to_string(),
-                        data: "Authorization was denied".to_string(),
-                    });
-                    break;
-                }
-                Err(e) => {
-                    message_bus.publish(Message::GitHubOAuth {
-                        event_type: "error".to_string(),
-                        data: format!("Error: {}", e),
-                    });
-                    break;
-                }
-            }
-
-            tokio::time::sleep(poll_interval).await;
-        }
-    });
-
-    // Return immediately - client will receive events via /events/stream
-    (StatusCode::ACCEPTED, "Polling started").into_response()
-}
-
 #[instrument(skip(state))]
 async fn github_disconnect(
     State(state): State<Arc<RwLock<AppState>>>,
@@ -1827,51 +1637,6 @@ async fn github_search_repos(
     }
 }
 
-// SSE Query Parameters
-#[derive(Debug, Deserialize)]
-struct SSEQueryParams {
-    message_types: Option<String>,
-    app_names: Option<String>,
-}
-
-/// Unified SSE endpoint for all real-time events
-#[instrument(skip(state, auth_user))]
-async fn events_stream_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Query(params): Query<SSEQueryParams>,
-    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let user_id = auth_user.user_id.clone();
-
-    // Build subscription filter from query params
-    let mut filter = SubscriptionFilter::new(Some(user_id.clone()));
-
-    if let Some(types) = params.message_types {
-        let types_vec: Vec<String> = types.split(',').map(|s| s.trim().to_string()).collect();
-        filter = filter.with_message_types(types_vec);
-    }
-
-    if let Some(names) = params.app_names {
-        let names_vec: Vec<String> = names.split(',').map(|s| s.trim().to_string()).collect();
-        filter = filter.with_app_names(names_vec);
-    }
-
-    // Get message bus from state
-    let message_bus = {
-        let state_guard = state.read().await;
-        state_guard.message_bus.clone()
-    };
-
-    // Create SSE stream
-    let stream = start_sse_stream(message_bus, filter, user_id);
-
-    Ok(Sse::new(stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(std::time::Duration::from_secs(15))
-            .text("keep-alive"),
-    ))
-}
-
 // ===== Webhook Handlers =====
 
 /// Public endpoint - receives webhooks from GitHub
@@ -1902,9 +1667,9 @@ async fn github_webhook_handler(
         }
     };
 
-    let (pool, docker, message_bus) = {
+    let (pool, docker) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone(), s.message_bus.clone())
+        (s.db_pool.clone(), s.docker.clone())
     };
 
     // Get GitHub token (from first user's connection - improve this later)
@@ -1913,7 +1678,6 @@ async fn github_webhook_handler(
     match crate::webhook::handle_github_webhook(
         &pool,
         &docker,
-        message_bus,
         github_token,
         event_type,
         delivery_id,
