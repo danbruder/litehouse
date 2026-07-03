@@ -6,6 +6,19 @@ use bollard::Docker;
 use std::collections::HashMap;
 use tracing::{info, instrument, warn};
 
+/// Utility image for one-shot volume-management containers. Pinned (and
+/// pre-pulled during `lh install`); callers ensure it exists via
+/// `ensure_utility_image` before running one-shots.
+pub const UTILITY_IMAGE: &str = "alpine:3.20";
+
+/// Pull the utility image if it isn't present locally.
+pub async fn ensure_utility_image(docker: &Docker) -> Result<()> {
+    if !crate::docker::image_exists(UTILITY_IMAGE).await.unwrap_or(false) {
+        crate::docker::pull(docker, UTILITY_IMAGE, None).await?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum VolumeError {
     #[error("Volume error: {0}")]
@@ -182,6 +195,7 @@ pub async fn init_app_volume(
     volume_name: &str,
     uid_gid: Option<(u32, u32)>,
 ) -> Result<()> {
+    ensure_utility_image(docker).await?;
     info!("Initializing volume {} with permissions", volume_name);
 
     let container_name = format!("litehouse-init-{}", app_id);
@@ -207,7 +221,7 @@ pub async fn init_app_volume(
     };
 
     let container_config = Config {
-        image: Some("alpine:latest".to_string()),
+        image: Some(UTILITY_IMAGE.to_string()),
         cmd: Some(cmd),
         host_config: Some(HostConfig {
             binds: Some(vec![format!("{}:/data", volume_name)]),
@@ -277,6 +291,7 @@ pub async fn init_app_database_in_volume(
     volume_name: &str,
     uid_gid: Option<(u32, u32)>,
 ) -> Result<()> {
+    ensure_utility_image(docker).await?;
     info!("Initializing database file in volume {}", volume_name);
 
     let container_name = format!("litehouse-init-db-{}", app_id);
@@ -314,7 +329,7 @@ pub async fn init_app_database_in_volume(
     };
 
     let config = Config {
-        image: Some("alpine:latest".to_string()),
+        image: Some(UTILITY_IMAGE.to_string()),
         cmd: Some(cmd),
         host_config: Some(host_config),
         ..Default::default()
@@ -527,7 +542,7 @@ mod tests {
         let docker = docker::connect().await?;
 
         // Test with alpine image (has no user set)
-        let user = discover_image_user(&docker, "alpine:latest").await?;
+        let user = discover_image_user(&docker, UTILITY_IMAGE).await?;
         assert_eq!(user, None, "Alpine should have no user set");
 
         Ok(())
@@ -605,7 +620,7 @@ mod tests {
         // Verify database file exists by running a simple test container
         let verify_container = format!("litehouse-verify-db-{}", app_id);
         let verify_config = Config {
-            image: Some("alpine:latest".to_string()),
+            image: Some(UTILITY_IMAGE.to_string()),
             cmd: Some(vec![
                 "sh".to_string(),
                 "-c".to_string(),
