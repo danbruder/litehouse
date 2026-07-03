@@ -89,18 +89,19 @@ set -e
 
 echo "Creating litehouse group and user..."
 
-# Create group if it doesn't exist
+# Create group if it doesn't exist. Don't demand a specific GID — stock
+# cloud images (e.g. Ubuntu with a default 'ubuntu' user) already occupy 1000.
 if ! getent group litehouse > /dev/null 2>&1; then
-    groupadd -g 1000 litehouse
-    echo "Created litehouse group with GID 1000"
+    groupadd litehouse
+    echo "Created litehouse group (GID $(getent group litehouse | cut -d: -f3))"
 else
     echo "Group litehouse already exists"
 fi
 
-# Create user if it doesn't exist
+# Create user if it doesn't exist; let the system pick a free UID.
 if ! id -u litehouse > /dev/null 2>&1; then
-    useradd -r -m -d /opt/litehouse -s /bin/bash -g litehouse -u 1000 litehouse
-    echo "Created litehouse user with UID 1000"
+    useradd -r -m -d /opt/litehouse -s /bin/bash -g litehouse litehouse
+    echo "Created litehouse user (UID $(id -u litehouse))"
 else
     echo "User litehouse already exists"
 fi
@@ -253,15 +254,6 @@ docker volume create litehouse_data 2>/dev/null || true
 mkdir -p /opt/litehouse/backups
 chmod 777 /opt/litehouse/backups
 
-# Fix volume ownership for litehouse user (UID 1000)
-# Docker creates volumes as root by default, but container runs as litehouse (UID 1000)
-echo "Setting correct ownership on Docker volumes..."
-docker run --rm \
-  -v litehouse_config:/config \
-  -v litehouse_data:/data \
-  alpine:3.20 \
-  sh -c 'chown -R 1000:1000 /config /data && chmod 755 /config /data'
-
 # Copy server-config.toml from host into the Docker volume
 # This ensures the container sees the production configuration
 echo "Copying server-config.toml into Docker volume..."
@@ -270,7 +262,7 @@ if [ -f /opt/litehouse/config/server-config.toml ]; then
     -v litehouse_config:/target \
     -v /opt/litehouse/config/server-config.toml:/source/server-config.toml:ro \
     alpine:3.20 \
-    sh -c 'cp /source/server-config.toml /target/server-config.toml && chown 1000:1000 /target/server-config.toml'
+    sh -c 'cp /source/server-config.toml /target/server-config.toml'
   echo "Server config copied successfully"
 else
   echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
