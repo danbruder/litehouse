@@ -100,11 +100,41 @@ async fn ui_auth_middleware<B: Send + 'static>(
         _ => false,
     };
 
-    if authorized {
-        next.run(req).await
-    } else {
-        Redirect::to("/login").into_response()
+    if !authorized {
+        return Redirect::to("/login").into_response();
     }
+
+    // CSRF guard for state-changing requests. SameSite=Lax does not protect
+    // against *same-site* origins — tenant apps live on sibling subdomains of
+    // the admin UI, so a malicious deployed app could POST here with the
+    // cookie attached. Require the Origin (or Referer) host to match ours.
+    if req.method() != axum::http::Method::GET {
+        let our_host = req
+            .headers()
+            .get(axum::http::header::HOST)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        let source = req
+            .headers()
+            .get(axum::http::header::ORIGIN)
+            .or_else(|| req.headers().get(axum::http::header::REFERER))
+            .and_then(|h| h.to_str().ok());
+        let source_host = source
+            .and_then(|s| s.split("//").nth(1))
+            .map(|rest| rest.split('/').next().unwrap_or(rest));
+        match source_host {
+            Some(host) if host == our_host && !our_host.is_empty() => {}
+            _ => {
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    "cross-origin request rejected",
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    next.run(req).await
 }
 
 // ---------------------------------------------------------------------
@@ -551,5 +581,127 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("detail-app"));
+    }
+
+    #[tokio::test]
+    async fn app_detail_never_renders_env_values() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("envapp").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            db::env_var::save(
+                &s.db_pool,
+                &crate::models::EnvVar::new(&app.id, "SECRET_KEY", "super-secret-value"),
+            )
+            .await
+            .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/envapp")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("SECRET_KEY"));
+        assert!(!body.contains("super-secret-value"));
+    }
+
+    #[tokio::test]
+    async fn log_tail_without_cookie_redirects_to_login() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/whatever/log-tail")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[tokio::test]
+    async fn state_changing_post_without_matching_origin_is_rejected() {
+        let state = test_state().await;
+        let app = router(state);
+
+        // Authenticated cookie, but Origin is a tenant app on a sibling
+        // subdomain (same-site!) — the CSRF guard must reject it.
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/stop")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://evil.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn state_changing_post_with_matching_origin_passes_guard() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/stop")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // The guard lets it through to the handler, which (even when the app
+        // doesn't exist) logs and redirects home — NOT 403, NOT /login.
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+    }
+
+    #[tokio::test]
+    async fn state_changing_post_with_no_origin_or_referer_is_rejected() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/stop")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
