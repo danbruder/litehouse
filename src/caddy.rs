@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Pool;
 use sqlx::Sqlite;
 use std::collections::HashMap;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DockerError {
@@ -674,28 +674,21 @@ async fn build_caddy_config(
     // Add app routes
     for app in apps {
         // Apps without a deployed image yet have nothing to route to.
-        let image_tag = match &app.image {
-            Some(tag) => tag.clone(),
-            None => {
-                info!("Skipping app '{}' - no deployed image found", app.name);
-                continue;
-            }
-        };
+        if app.image.is_none() {
+            info!("Skipping app '{}' - no deployed image found", app.name);
+            continue;
+        }
 
-        // Get exposed port cached on the app record, or detect from the image
-        let port = if let Some(p) = app.exposed_port.clone() {
-            p
-        } else {
-            // Fallback: detect from image if not cached
-            match crate::docker::get_exposed_port(&image_tag).await {
-                Ok(p) => {
-                    info!("Detected exposed port {} for app '{}' from image", p, app.name);
-                    p
-                }
-                Err(e) => {
-                    warn!("Failed to detect port for app '{}': {}. Using default 3000", app.name, e);
-                    "3000".to_string()
-                }
+        // Get exposed port cached on the app record. Apps without an exposed
+        // port have nothing to route to and are skipped.
+        let port = match app.exposed_port.clone() {
+            Some(p) => p,
+            None => {
+                info!(
+                    "Skipping app '{}' - no exposed port configured",
+                    app.name
+                );
+                continue;
             }
         };
 
@@ -704,11 +697,13 @@ async fn build_caddy_config(
             format!("{}.localhost", app.name)
         } else {
             // For production, use the domain pattern
-            if let Some(domain_str) = domain {
-                format!("{}.{}", app.name, domain_str)
-            } else {
-                // Fallback to old hardcoded domain for backwards compatibility
-                format!("{}.lh.danbruder.com", app.name)
+            match domain {
+                Some(domain_str) => format!("{}.{}", app.name, domain_str),
+                None => {
+                    anyhow::bail!(
+                        "server domain not configured — run lh install --domain <domain>"
+                    )
+                }
             }
         };
 
@@ -824,4 +819,78 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn deployed_app(name: &str, exposed_port: Option<&str>) -> App {
+        let mut app = App::new(name).expect("valid app name");
+        app.image = Some(format!("{}:latest", name));
+        app.exposed_port = exposed_port.map(|p| p.to_string());
+        app
+    }
+
+    #[tokio::test]
+    async fn routes_from_exposed_port_with_configured_domain() {
+        let apps = vec![deployed_app("myapp", Some("8080"))];
+
+        let config = build_caddy_config(apps, false, Some("s.danbruder.com"))
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+
+        assert!(
+            json.contains("myapp.s.danbruder.com"),
+            "expected host myapp.s.danbruder.com in config: {json}"
+        );
+        assert!(
+            json.contains("myapp-container:8080"),
+            "expected upstream myapp-container:8080 in config: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn errors_when_domain_missing_and_not_local_dev() {
+        let apps = vec![deployed_app("myapp", Some("8080"))];
+
+        let result = build_caddy_config(apps, false, None).await;
+
+        match result {
+            Ok(_) => panic!("expected error when domain is not configured"),
+            Err(e) => assert!(
+                e.to_string().contains("server domain not configured"),
+                "error message should mention missing domain configuration: {e}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_dev_routes_use_localhost_without_domain() {
+        let apps = vec![deployed_app("myapp", Some("8080"))];
+
+        let config = build_caddy_config(apps, true, None)
+            .await
+            .expect("local dev should not require a domain");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(json.contains("myapp.localhost"), "config: {json}");
+    }
+
+    #[tokio::test]
+    async fn skips_apps_without_exposed_port() {
+        let apps = vec![deployed_app("myapp", None)];
+
+        let config = build_caddy_config(apps, true, None)
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(
+            !json.contains("myapp-container"),
+            "app without exposed_port should not get a route: {json}"
+        );
+    }
 }
