@@ -51,8 +51,11 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     let pool = db::init_pool().await?;
     let docker_conn = docker::connect().await?;
 
-    // Ensure Caddy is running and configured before accepting traffic
-    sync_on_boot(&docker_conn, &pool, &config).await?;
+    // Ensure Caddy is running and configured. A Caddy failure must not take the
+    // admin API down with it — stay up so the operator can diagnose and fix.
+    if let Err(e) = sync_on_boot(&docker_conn, &pool, &config).await {
+        tracing::error!("caddy sync on boot failed (admin API starting anyway): {e:#}");
+    }
 
     // Get JWT secret from environment or use default (warning will be logged)
     let jwt_secret = crate::auth::jwt::get_jwt_secret();
