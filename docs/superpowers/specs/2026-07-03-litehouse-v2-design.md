@@ -113,6 +113,26 @@ Images come from GHCR, data comes from S3, state comes from S3. Nothing on the s
 - Workflow template gets a golden-file test
 - Backup/restore round-trip test against MinIO in a container
 
+## Addendum: further simplifications (approved 2026-07-03)
+
+Dan is not attached to v1 patterns, so v2 also abandons:
+
+- **JWT/user/org auth → single admin token.** One operator, one server. `lh server init` generates a random token; the server stores its SHA-256 hash; CLI and browser present it (bearer header or cookie). Deletes `src/auth/` (JWT, argon2, refresh tokens), `user`/`organization`/`organization_member`/`refresh_token` tables and models.
+- **Elm SPA → Askama + HTMX server-rendered UI.** Deletes `assets/` (Elm project), `compile-assets.sh`, rust-embed. UI is templates in the server binary.
+- **message_bus + SSE + reconciler deleted.** Logs served by plain HTTP streaming; container liveness handled by Docker restart policies plus a startup sync; no in-process pub/sub.
+- **Server-side GitHub connection removed.** The device-flow token lives in the *client* config (`lh github login` runs locally); the server never talks to the GitHub API — it only pulls from GHCR with a read-only token.
+- **litehouse-server image from GHCR.** The release workflow publishes `ghcr.io/danbruder/litehouse` — the install no longer builds an image on the droplet.
+- **Domain:** parametrized; acceptance environment uses `*.s.danbruder.com`.
+
+## Agent-friendly operation (first-class requirement)
+
+Claude (or any coding agent) must be able to take an app from source to running URL without a human in the loop:
+
+- **Non-interactive everywhere.** Every command works with flags/env vars only — no prompts. GitHub auth prefers `GITHUB_TOKEN` env (or `gh auth token`) over device flow; device flow is the human fallback.
+- **Machine-readable output.** `--json` on all read commands (`lh status`, `lh apps`, `lh deploys`); meaningful exit codes.
+- **Verifiable outcomes.** `lh create` prints the app URL; `lh deploys <app> --wait` blocks until the in-flight deploy succeeds or fails and exits accordingly, so an agent can `git push && lh deploys myapp --wait && curl $URL`.
+- **Idempotent commands.** Re-running `lh create` on an existing app updates the workflow/secret instead of erroring.
+
 ## Out of scope for v2
 
 - Multi-server, zero-downtime blue/green, metrics/alerting
