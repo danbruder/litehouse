@@ -99,6 +99,12 @@ mod tests {
         let old_refresh_token = auth_response.tokens.refresh_token;
         let old_access_token = auth_response.tokens.access_token;
 
+        // JWT claims (iat/exp) only have second resolution, so registering and
+        // refreshing within the same second can produce byte-identical tokens.
+        // Sleep past the second boundary to make the new token deterministically
+        // different (avoids a same-second flaky failure).
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
         // Refresh the token
         let new_tokens = execute(&pool, &old_refresh_token, TEST_JWT_SECRET)
             .await

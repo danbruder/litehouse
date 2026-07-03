@@ -519,10 +519,12 @@ mod test_helpers {
         Ok(())
     }
 
-    /// Remove a container using docker
+    /// Remove a container using docker (force-remove so this works even if the
+    /// container is running or stuck in a restart loop, e.g. left over from a
+    /// previous failed/interrupted test run).
     pub fn docker_rm(container_name: &str) -> Result<()> {
         let output = Command::new("docker")
-            .args(["rm", container_name])
+            .args(["rm", "-f", container_name])
             .output()?;
 
         if !output.status.success() {
@@ -566,11 +568,24 @@ mod tests {
     use super::*;
     use anyhow::Result;
 
+    // `run()` always sets the container restart policy to `always` (production
+    // behavior, not test-configurable). `alpine:latest`'s default command
+    // (`/bin/sh` with no attached stdin) exits immediately, so under a restart
+    // policy the container enters a restart loop, and any subsequent Docker
+    // API call against it (start/stop/logs/inspect) can race a 409 "container
+    // is restarting" error. Tests that need a container to actually stay
+    // running use a long-lived default command instead (`redis-server`, which
+    // runs in the foreground indefinitely) to sidestep the restart loop
+    // entirely. Tests that only exercise error paths (invalid image, empty
+    // name, etc.) don't start a real container and are unaffected, so they
+    // keep using `alpine:latest`.
+    const TEST_IMAGE: &str = "redis:7.4-alpine";
+
     // Test the happy path: run function creates and starts a container, then verify it's running
     #[tokio::test]
     async fn test_run_function_happy_path() -> Result<()> {
         let app_name = "test-run-app";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
 
         // Clean up any existing test container first
@@ -601,8 +616,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_function_handles_existing_containers() -> Result<()> {
         let app_name = "existing-container-test";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
+
+        // Clean up any leftover container from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
 
         // First run: create a container
         let first_run = run(app_name, image_tag, vec![], vec![]).await;
@@ -663,7 +681,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_function_concurrent_execution() -> Result<()> {
         let app_name = "concurrent-test";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
+        let container_name = format!("{}-container", app_name);
+
+        // Clean up any leftover container from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
 
         // Run multiple instances concurrently
         let handles: Vec<_> = (0..3)
@@ -682,7 +704,6 @@ mod tests {
         }
 
         // Clean up
-        let container_name = format!("{}-container", app_name);
         cleanup_container(&container_name)?;
         Ok(())
     }
@@ -711,8 +732,11 @@ mod tests {
     #[tokio::test]
     async fn test_run_function_skips_if_already_running() -> Result<()> {
         let app_name = "skip-test";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
+
+        // Clean up any leftover container from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
 
         // First run: create and start a container
         let first_run = run(app_name, image_tag, vec![], vec![]).await;
@@ -745,8 +769,11 @@ mod tests {
     #[tokio::test]
     async fn test_stop_function_stops_running_container() -> Result<()> {
         let app_name = "stop-test-app";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
+
+        // Clean up any leftover container from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
 
         // First, create and start a container
         let run_result = run(app_name, image_tag, vec![], vec![]).await;
@@ -797,8 +824,13 @@ mod tests {
     #[tokio::test]
     async fn test_stop_function_with_multiple_containers() -> Result<()> {
         let app_name = "multi-stop-test";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
+        let container2_name = format!("{}-2-container", app_name);
+
+        // Clean up any leftover containers from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
+        let _ = cleanup_container(&container2_name);
 
         // Create multiple containers with similar names
         let run_result1 = run(app_name, image_tag, vec![], vec![]).await;
@@ -820,8 +852,6 @@ mod tests {
         assert!(stop_result.is_ok());
 
         // Verify only the first container was stopped
-        let container2_name = format!("{}-2-container", app_name);
-
         let state1 = test_helpers::get_container_state(&container_name)?;
         let state2 = test_helpers::get_container_state(&container2_name)?;
 
@@ -846,8 +876,11 @@ mod tests {
     #[tokio::test]
     async fn test_stop_function_timeout_behavior() -> Result<()> {
         let app_name = "timeout-stop-test";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
+
+        // Clean up any leftover container from a previous failed/interrupted run
+        let _ = cleanup_container(&container_name);
 
         // Create and start a container
         let run_result = run(app_name, image_tag, vec![], vec![]).await;
@@ -867,7 +900,6 @@ mod tests {
         assert!(stop_result.is_ok());
 
         // The stop operation should complete within a reasonable time
-        // (alpine containers exit quickly, so this should be fast)
         assert!(
             duration.as_millis() < 5000,
             "Stop operation took too long: {}ms",
@@ -948,7 +980,7 @@ mod tests {
         use tokio::time::timeout;
 
         let app_name = "test-logs-app";
-        let image_tag = "alpine:latest";
+        let image_tag = TEST_IMAGE;
         let container_name = format!("{}-container", app_name);
 
         // Clean up any existing test container first
