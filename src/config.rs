@@ -414,15 +414,17 @@ impl ServerConfig {
 }
 
 fn get_base_dir() -> PathBuf {
-    // if on osx, use the home directory
-    if cfg!(target_os = "macos") {
-        return "/Users/dan/Desktop/litehouse-data".into();
-        //return std::env::current_dir().unwrap();
+    if let Ok(dir) = std::env::var("LITEHOUSE_DIR") {
+        return PathBuf::from(dir);
     }
 
-    if std::env::var("LITEHOUSE_DIR").is_ok() {
-        PathBuf::from(std::env::var("LITEHOUSE_DIR").unwrap())
-    } else {
-        PathBuf::from("/opt/litehouse")
+    // macOS (local dev): keep data under the user's home directory rather
+    // than a hardcoded developer-specific path.
+    if cfg!(target_os = "macos") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".local/share/litehouse");
+        }
     }
+
+    PathBuf::from("/opt/litehouse")
 }

@@ -1,13 +1,17 @@
-/// Template for server configuration file
-pub fn server_config_template(domain: &str) -> String {
+/// Template for server configuration file. `admin_token_hash` is the
+/// sha256 hex hash of the freshly generated admin token (see
+/// `crate::auth::generate_token`/`hash_token`) — the plaintext token itself
+/// is never written to disk, only printed once at the end of install.
+pub fn server_config_template(domain: &str, admin_token_hash: &str) -> String {
     format!(
         r#"host = "0.0.0.0"
 port = 3030
 caddy_http_port = 80
 caddy_https_port = 443
 domain = "{}"
+admin_token_hash = "{}"
 "#,
-        domain
+        domain, admin_token_hash
     )
 }
 
@@ -167,79 +171,70 @@ echo "UID:$LITEHOUSE_UID"
 "#
 }
 
-/// Dockerfile template for building litehouse image locally
-pub fn local_dockerfile_template() -> &'static str {
-    r#"FROM alpine:latest
-RUN apk add --no-cache ca-certificates git
-RUN addgroup -g 1000 litehouse && adduser -D -u 1000 -G litehouse litehouse
-RUN mkdir -p /opt/litehouse/config /opt/litehouse/data && chown -R litehouse:litehouse /opt/litehouse
-COPY lh /usr/local/bin/lh
-RUN chmod +x /usr/local/bin/lh
-WORKDIR /opt/litehouse
-USER litehouse
-EXPOSE 3030
-CMD ["lh", "serve"]
-"#
-}
-
-/// Script to build the litehouse server container image locally
-pub fn build_litehouse_image_script(_litehouse_uid: &str) -> String {
-    r#"#!/bin/bash
+/// Script to pull the litehouse-server image from GHCR for the given
+/// version. Falls back to `:latest` (logging the fallback) if the exact
+/// version tag isn't available yet (e.g. the GHCR publish step hasn't
+/// finished, or this is a dev build with no matching release).
+///
+/// Prints a final `PULLED_TAG:<tag>` line so the calling phase can find out
+/// which tag actually landed (`<version>` or `latest`) and use the same
+/// image reference when starting the container.
+pub fn pull_litehouse_image_script(version: &str) -> String {
+    format!(
+        r#"#!/bin/bash
 set -e
 
-echo "Building litehouse-server container image locally..."
+VERSION_TAG="ghcr.io/danbruder/litehouse:{version}"
+LATEST_TAG="ghcr.io/danbruder/litehouse:latest"
 
-# Create build context directory with world-readable permissions
-BUILD_DIR=$(mktemp -d)
-chmod 755 "$BUILD_DIR"
-trap "rm -rf $BUILD_DIR" EXIT
+echo "Pulling litehouse-server image ($VERSION_TAG)..."
+if docker pull "$VERSION_TAG"; then
+  echo "PULLED_TAG:{version}"
+else
+  echo "Warning: failed to pull $VERSION_TAG, falling back to $LATEST_TAG"
+  docker pull "$LATEST_TAG"
+  echo "PULLED_TAG:latest"
+fi
 
-# Copy binary to build context
-cp /usr/local/bin/lh "$BUILD_DIR/lh"
-chmod 755 "$BUILD_DIR/lh"
-
-# Write Dockerfile
-cat > "$BUILD_DIR/Dockerfile" << 'DOCKERFILE'
-FROM alpine:latest
-RUN apk add --no-cache ca-certificates git
-RUN addgroup -g 1000 litehouse && adduser -D -u 1000 -G litehouse litehouse
-RUN mkdir -p /opt/litehouse/config /opt/litehouse/data && chown -R litehouse:litehouse /opt/litehouse
-COPY lh /usr/local/bin/lh
-RUN chmod +x /usr/local/bin/lh
-WORKDIR /opt/litehouse
-USER litehouse
-EXPOSE 3030
-CMD ["lh", "serve"]
-DOCKERFILE
-chmod 644 "$BUILD_DIR/Dockerfile"
-
-# Build the image
-docker build -t litehouse:latest $BUILD_DIR
-
-echo "Container image build completed"
-"#.to_string()
+echo "litehouse-server image pull completed"
+"#,
+        version = version
+    )
 }
 
-/// Script to pull Caddy container image
-pub fn pull_caddy_image_script(_litehouse_uid: &str) -> String {
+/// Script to pull the container images needed to run litehouse: Caddy (the
+/// reverse proxy) and the sqlite3/alpine helper images used by the
+/// backup/restore one-shot containers.
+pub fn pull_images_script(_litehouse_uid: &str) -> String {
     r#"#!/bin/bash
 set -e
 
 echo "Pulling Caddy container image..."
-
 docker pull caddy:latest
 
-echo "Caddy container image pull completed"
+echo "Pulling sqlite3 helper image..."
+docker pull keinos/sqlite3:latest
+
+echo "Pulling alpine helper image..."
+docker pull alpine:3.20
+
+echo "Image pull completed"
 "#
     .to_string()
 }
 
-/// Script to start litehouse-server container
-pub fn start_litehouse_container_script(_litehouse_uid: &str) -> String {
-    r#"#!/bin/bash
+/// Script to start litehouse-server container. `image_tag` is the tag that
+/// was actually pulled by `pull_litehouse_image_script` (either the running
+/// binary's version, or `latest` if that exact version wasn't published
+/// yet), so the two scripts always agree on what to run.
+pub fn start_litehouse_container_script(_litehouse_uid: &str, image_tag: &str) -> String {
+    format!(
+        r#"#!/bin/bash
 set -e
 
 echo "Starting litehouse-server container..."
+
+IMAGE="ghcr.io/danbruder/litehouse:{image_tag}"
 
 # Stop and remove any existing container
 docker stop litehouse-server 2>/dev/null || true
@@ -251,6 +246,7 @@ docker network create litehouse-network 2>/dev/null || true
 # Create Docker volumes if they don't exist
 docker volume create litehouse_config 2>/dev/null || true
 docker volume create litehouse_data 2>/dev/null || true
+docker volume create litehouse_backups 2>/dev/null || true
 
 # Fix volume ownership for litehouse user (UID 1000)
 # Docker creates volumes as root by default, but container runs as litehouse (UID 1000)
@@ -258,8 +254,9 @@ echo "Setting correct ownership on Docker volumes..."
 docker run --rm \
   -v litehouse_config:/config \
   -v litehouse_data:/data \
-  alpine:latest \
-  sh -c 'chown -R 1000:1000 /config /data && chmod 755 /config /data'
+  -v litehouse_backups:/backups \
+  alpine:3.20 \
+  sh -c 'chown -R 1000:1000 /config /data /backups && chmod 755 /config /data /backups'
 
 # Copy server-config.toml from host into the Docker volume
 # This ensures the container sees the production configuration
@@ -268,31 +265,11 @@ if [ -f /opt/litehouse/config/server-config.toml ]; then
   docker run --rm \
     -v litehouse_config:/target \
     -v /opt/litehouse/config/server-config.toml:/source/server-config.toml:ro \
-    alpine:latest \
+    alpine:3.20 \
     sh -c 'cp /source/server-config.toml /target/server-config.toml && chown 1000:1000 /target/server-config.toml'
   echo "Server config copied successfully"
 else
   echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
-fi
-
-# Copy S3 credentials if they exist
-if [ -f /opt/litehouse/config/s3-credentials.env ]; then
-  echo "Copying S3 credentials into Docker volume..."
-  docker run --rm \
-    -v litehouse_config:/target \
-    -v /opt/litehouse/config/s3-credentials.env:/source/s3-credentials.env:ro \
-    alpine:latest \
-    sh -c 'cp /source/s3-credentials.env /target/s3-credentials.env && chown 1000:1000 /target/s3-credentials.env && chmod 600 /target/s3-credentials.env'
-  echo "S3 credentials copied successfully"
-fi
-
-# Load S3 credentials from file if it exists in the volume
-S3_ENV_ARGS=""
-if docker run --rm -v litehouse_config:/config alpine:latest test -f /config/s3-credentials.env 2>/dev/null; then
-  echo "Loading S3 credentials from configuration file..."
-  # Extract S3 vars from the file and pass them as -e flags
-  S3_ENV_ARGS=$(docker run --rm -v litehouse_config:/config alpine:latest cat /config/s3-credentials.env 2>/dev/null | \
-    awk 'NF && !/^#/ {print "-e " $0}' | tr '\n' ' ')
 fi
 
 # Get Docker socket group ID for permissions
@@ -300,26 +277,27 @@ DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
 
 # Start litehouse-server container with restart policy
 # Use Docker volumes instead of bind mounts to avoid permission issues
-# shellcheck disable=SC2086
 docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
   --network litehouse-network \
   -v litehouse_config:/opt/litehouse/config \
   -v litehouse_data:/opt/litehouse/data \
+  -v litehouse_backups:/opt/litehouse/backups \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
+  -e LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups \
   -e DOCKER_HOST=unix:///var/run/docker.sock \
   -e CADDY_API_URL=http://caddy-container:2019/load \
   -e RUST_LOG=info \
-  $S3_ENV_ARGS \
-  litehouse:latest
+  "$IMAGE"
 
 echo "litehouse-server container started"
-"#
-    .to_string()
+"#,
+        image_tag = image_tag
+    )
 }
 
 /// Script to start Caddy container
@@ -383,4 +361,49 @@ pub fn initial_caddy_config(domain: &str) -> String {
 }}"#,
         domain = domain
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn litehouse_run_script_uses_ghcr_image_and_backups_volume() {
+        let script = start_litehouse_container_script("1000", "1.2.3");
+        assert!(script.contains("ghcr.io/danbruder/litehouse"));
+        assert!(script.contains("litehouse_backups:/opt/litehouse/backups"));
+        assert!(script.contains("LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups"));
+        assert!(!script.to_lowercase().contains("litestream"));
+        assert!(!script.contains("docker build"));
+    }
+
+    #[test]
+    fn litehouse_run_script_does_not_leak_s3_env_plumbing() {
+        let script = start_litehouse_container_script("1000", "1.2.3");
+        assert!(!script.contains("S3_ENV_ARGS"));
+        assert!(!script.contains("s3-credentials.env"));
+    }
+
+    #[test]
+    fn pull_litehouse_image_script_targets_requested_version() {
+        let script = pull_litehouse_image_script("1.2.3");
+        assert!(script.contains("ghcr.io/danbruder/litehouse:1.2.3"));
+        assert!(script.contains("ghcr.io/danbruder/litehouse:latest"));
+        assert!(!script.contains("docker build"));
+    }
+
+    #[test]
+    fn pull_images_script_includes_backup_helper_images() {
+        let script = pull_images_script("1000");
+        assert!(script.contains("keinos/sqlite3"));
+        assert!(script.contains("alpine:3.20"));
+        assert!(script.contains("caddy:latest"));
+    }
+
+    #[test]
+    fn server_config_template_persists_only_the_token_hash() {
+        let config = server_config_template("example.com", "deadbeef");
+        assert!(config.contains("admin_token_hash = \"deadbeef\""));
+        assert!(!config.contains("plaintext"));
+    }
 }

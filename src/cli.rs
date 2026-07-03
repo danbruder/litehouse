@@ -47,6 +47,12 @@ enum Commands {
         /// S3 Path Prefix (default: litehouse)
         #[arg(long)]
         s3_path_prefix: Option<String>,
+
+        /// GitHub PAT (read:packages scope) used to pull private ghcr.io
+        /// images. Configured on the freshly installed server automatically
+        /// if provided.
+        #[arg(long)]
+        ghcr_token: Option<String>,
     },
 
     /// Upgrade litehouse binary and container image (run as root)
@@ -297,6 +303,7 @@ pub async fn run() -> Result<()> {
             s3_region,
             s3_endpoint,
             s3_path_prefix,
+            ghcr_token,
         } => crate::commands::install::execute(
             &domain,
             skip_verify,
@@ -306,6 +313,7 @@ pub async fn run() -> Result<()> {
             s3_region.as_deref(),
             s3_endpoint.as_deref(),
             s3_path_prefix.as_deref(),
+            ghcr_token.as_deref(),
         )
         .await,
         Commands::Upgrade { version, from_path } => {

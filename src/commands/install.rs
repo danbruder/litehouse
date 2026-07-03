@@ -49,12 +49,19 @@ pub async fn execute(
     s3_region: Option<&str>,
     s3_endpoint: Option<&str>,
     s3_path_prefix: Option<&str>,
+    ghcr_token: Option<&str>,
 ) -> Result<()> {
     info!("Starting litehouse installation");
     info!("Domain: {}", domain);
     if s3_bucket.is_some() {
         info!("S3 backup configured");
     }
+
+    // Tag we pull/run the litehouse-server image from GHCR: the exact
+    // version of the binary running this install (i.e. the release tag),
+    // with a `latest` fallback handled inside phase 6a if that tag isn't
+    // published yet.
+    let requested_version = env!("CARGO_PKG_VERSION");
 
     // Create multi-progress container
     let multi = MultiProgress::new();
@@ -149,9 +156,9 @@ pub async fn execute(
     pb.set_message("Building/pulling images and configuring (parallel)...");
     log_window.set_message("Starting parallel image build/pulls and configuration...");
 
-    let uid_for_litehouse = litehouse_uid.clone();
     let uid_for_caddy = litehouse_uid.clone();
     let domain_for_config = domain.to_string();
+    let version_for_pull = requested_version.to_string();
 
     // Prepare S3 config for phase7
     let s3_config = (
@@ -168,11 +175,11 @@ pub async fn execute(
         let log_window_caddy = log_window.clone();
 
         let litehouse_handle = tokio::task::spawn_blocking(move || {
-            phase6a_build_litehouse_image(&uid_for_litehouse, Some(&log_window_litehouse))
+            phase6a_pull_litehouse_image(&version_for_pull, Some(&log_window_litehouse))
         });
 
         let caddy_handle = tokio::task::spawn_blocking(move || {
-            phase6b_pull_caddy_image(&uid_for_caddy, Some(&log_window_caddy))
+            phase6b_pull_images(&uid_for_caddy, Some(&log_window_caddy))
         });
 
         let config_handle = tokio::task::spawn_blocking(move || {
@@ -183,7 +190,7 @@ pub async fn execute(
             phase8_log_rotation()
         });
 
-        let litehouse_result = litehouse_handle.await.map_err(|e| anyhow::anyhow!("Litehouse image build panicked: {}", e))?;
+        let litehouse_result = litehouse_handle.await.map_err(|e| anyhow::anyhow!("Litehouse image pull panicked: {}", e))?;
         let caddy_result = caddy_handle.await.map_err(|e| anyhow::anyhow!("Caddy image pull panicked: {}", e))?;
         let config_result = config_handle.await.map_err(|e| anyhow::anyhow!("Config task panicked: {}", e))?;
         let logrotate_result = logrotate_handle.await.map_err(|e| anyhow::anyhow!("Logrotate task panicked: {}", e))?;
@@ -191,23 +198,29 @@ pub async fn execute(
         (litehouse_result, caddy_result, config_result, logrotate_result)
     };
 
-    if let Err(e) = litehouse_result {
-        pb.finish_with_message("❌ Litehouse image build failed");
-        error!("Phase 6a failed: {}", e);
-        return Err(e);
-    }
+    let image_tag = match litehouse_result {
+        Ok(tag) => tag,
+        Err(e) => {
+            pb.finish_with_message("❌ Litehouse image pull failed");
+            error!("Phase 6a failed: {}", e);
+            return Err(e);
+        }
+    };
 
     if let Err(e) = caddy_result {
-        pb.finish_with_message("❌ Caddy image pull failed");
+        pb.finish_with_message("❌ Image pull failed");
         error!("Phase 6b failed: {}", e);
         return Err(e);
     }
 
-    if let Err(e) = config_result {
-        pb.finish_with_message("❌ Server configuration failed");
-        error!("Phase 7 failed: {}", e);
-        return Err(e);
-    }
+    let admin_token = match config_result {
+        Ok(token) => token,
+        Err(e) => {
+            pb.finish_with_message("❌ Server configuration failed");
+            error!("Phase 7 failed: {}", e);
+            return Err(e);
+        }
+    };
 
     if let Err(e) = logrotate_result {
         pb.finish_with_message("❌ Log rotation setup failed");
@@ -227,12 +240,25 @@ pub async fn execute(
 
     // Phase 9b: Start litehouse-server Container
     pb.set_message("Starting litehouse-server container...");
-    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid) {
+    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid, &image_tag) {
         pb.finish_with_message("❌ litehouse-server container start failed");
         error!("Phase 9b failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
+
+    // If a GHCR token was provided, push it to the freshly started server
+    // via its own local admin API — the host `lh` binary has no direct DB
+    // access (the database lives inside the litehouse_config Docker
+    // volume), so this is the simplest reliable way to seed it.
+    if let Some(token) = ghcr_token {
+        pb.set_message("Configuring GHCR token...");
+        if let Err(e) = configure_ghcr_token(token, &admin_token).await {
+            // Non-fatal: the operator can always run `lh config ghcr set`
+            // later once connected.
+            tracing::warn!("Failed to configure GHCR token during install: {:#}", e);
+        }
+    }
 
     // Phase 10: Docker restart configuration
     pb.set_message("Configuring Docker restart policy...");
@@ -257,17 +283,24 @@ pub async fn execute(
     pb.finish_with_message("✅ Installation completed successfully!");
     log_window.finish_and_clear();
 
-    // Print success message with next steps
+    // Print success message with next steps. The plaintext admin token is
+    // printed here and ONLY here — server-config.toml only ever stores its
+    // hash.
     println!("\n{}", "=".repeat(60));
-    println!("✓ Server installed successfully at {}", domain);
-    println!("✓ litehouse-server is running");
+    println!("✓ litehouse installed");
+    println!("  admin UI:  https://admin.{}", domain);
+    println!(
+        "  connect:   lh connect https://admin.{} --token {}",
+        domain, admin_token
+    );
     println!("{}", "=".repeat(60));
     println!("\nNext steps:");
-    println!("  1. Create an app from a GitHub repo:");
+    println!("  1. Connect the CLI (see command above)");
+    println!("  2. Create an app from a GitHub repo:");
     println!("     lh create myapp --repo you/repo");
-    println!("\n  2. Push to deploy:");
+    println!("\n  3. Push to deploy:");
     println!("     git push");
-    println!("\n  3. View your app at:");
+    println!("\n  4. View your app at:");
     println!("     https://myapp.{}", domain);
     println!("\nTroubleshooting:");
     println!("  - View container logs:");
@@ -279,4 +312,44 @@ pub async fn execute(
     println!("{}", "=".repeat(60));
 
     Ok(())
+}
+
+/// POST the given GHCR PAT to the local admin API using the freshly
+/// generated admin token. Runs against `localhost` (not the public domain)
+/// so it works before DNS/Caddy verification even completes.
+async fn configure_ghcr_token(ghcr_token: &str, admin_token: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let url = "http://localhost:3030/api/config/ghcr";
+
+    // The container may have just started; retry briefly.
+    let max_retries = 10;
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        match client
+            .post(url)
+            .bearer_auth(admin_token)
+            .json(&serde_json::json!({ "token": ghcr_token }))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!("GHCR token configured");
+                return Ok(());
+            }
+            Ok(resp) => {
+                last_err = Some(anyhow::anyhow!(
+                    "server responded with {}",
+                    resp.status()
+                ));
+            }
+            Err(e) => {
+                last_err = Some(anyhow::anyhow!(e));
+            }
+        }
+        if attempt + 1 < max_retries {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("unknown error configuring GHCR token")))
 }

@@ -124,37 +124,62 @@ pub fn get_litehouse_uid() -> Result<String> {
     Ok(output.trim().to_string())
 }
 
-/// Phase 6a: Build litehouse image locally
+/// Phase 6a: Pull the litehouse-server image from GHCR
+///
+/// Returns the tag that was actually pulled (the requested `version`, or
+/// `"latest"` if that exact version isn't published yet) so the caller can
+/// use the same image reference when starting the container.
 #[instrument(skip(log_window))]
-pub fn phase6a_build_litehouse_image(litehouse_uid: &str, log_window: Option<&ProgressBar>) -> Result<()> {
-    info!("Phase 6a: Build litehouse image locally");
+pub fn phase6a_pull_litehouse_image(version: &str, log_window: Option<&ProgressBar>) -> Result<String> {
+    info!("Phase 6a: Pull litehouse image from GHCR");
 
-    let script = templates::build_litehouse_image_script(litehouse_uid);
-    std::fs::write("/tmp/build_litehouse.sh", &script)?;
-    run_command("chmod +x /tmp/build_litehouse.sh")?;
-    run_command_with_log("/tmp/build_litehouse.sh", log_window)?;
-    run_command("rm /tmp/build_litehouse.sh")?;
+    let script = templates::pull_litehouse_image_script(version);
+    std::fs::write("/tmp/pull_litehouse.sh", &script)?;
+    run_command("chmod +x /tmp/pull_litehouse.sh")?;
+    let output = run_command_with_log("/tmp/pull_litehouse.sh", log_window)?;
+    run_command("rm /tmp/pull_litehouse.sh")?;
 
-    info!("Phase 6a completed successfully");
-    Ok(())
+    let tag_line = output
+        .lines()
+        .find(|line| line.starts_with("PULLED_TAG:"))
+        .context("Failed to determine which litehouse image tag was pulled")?;
+    let tag = tag_line
+        .strip_prefix("PULLED_TAG:")
+        .context("Failed to parse pulled image tag")?
+        .trim()
+        .to_string();
+
+    if tag != version {
+        warn!(
+            "Requested litehouse image version {} was not available; fell back to {}",
+            version, tag
+        );
+    }
+
+    info!("Phase 6a completed successfully (pulled tag: {})", tag);
+    Ok(tag)
 }
 
-/// Phase 6b: Pull caddy image
+/// Phase 6b: Pull Caddy and backup/restore helper images (sqlite3, alpine)
 #[instrument(skip(log_window))]
-pub fn phase6b_pull_caddy_image(litehouse_uid: &str, log_window: Option<&ProgressBar>) -> Result<()> {
-    info!("Phase 6b: Pull caddy image");
+pub fn phase6b_pull_images(litehouse_uid: &str, log_window: Option<&ProgressBar>) -> Result<()> {
+    info!("Phase 6b: Pull Caddy and helper images");
 
-    let script = templates::pull_caddy_image_script(litehouse_uid);
-    std::fs::write("/tmp/pull_caddy.sh", &script)?;
-    run_command("chmod +x /tmp/pull_caddy.sh")?;
-    run_command_with_log("/tmp/pull_caddy.sh", log_window)?;
-    run_command("rm /tmp/pull_caddy.sh")?;
+    let script = templates::pull_images_script(litehouse_uid);
+    std::fs::write("/tmp/pull_images.sh", &script)?;
+    run_command("chmod +x /tmp/pull_images.sh")?;
+    run_command_with_log("/tmp/pull_images.sh", log_window)?;
+    run_command("rm /tmp/pull_images.sh")?;
 
     info!("Phase 6b completed successfully");
     Ok(())
 }
 
 /// Phase 7: Server Configuration
+///
+/// Generates a fresh admin token, persists only its hash in
+/// server-config.toml (never the plaintext), and returns the plaintext
+/// token so the caller can print it exactly once at the end of install.
 #[instrument(skip(s3_config))]
 pub fn phase7_server_configuration(
     domain: &str,
@@ -166,11 +191,16 @@ pub fn phase7_server_configuration(
         Option<String>,
         Option<String>,
     ),
-) -> Result<()> {
+) -> Result<String> {
     info!("Phase 7: Server Configuration");
 
+    // Generate the single admin token for this install. Only its hash is
+    // ever written to disk; the plaintext is handed back to the caller.
+    let admin_token = crate::auth::generate_token();
+    let admin_token_hash = crate::auth::hash_token(&admin_token);
+
     // Write server config
-    let config_content = templates::server_config_template(domain);
+    let config_content = templates::server_config_template(domain, &admin_token_hash);
     sudo_write_file("/opt/litehouse/config/server-config.toml", &config_content)?;
     run_command("chown litehouse:litehouse /opt/litehouse/config/server-config.toml")?;
 
@@ -200,7 +230,7 @@ pub fn phase7_server_configuration(
     }
 
     info!("Phase 7 completed successfully");
-    Ok(())
+    Ok(admin_token)
 }
 
 /// Phase 8: Log Rotation
@@ -319,10 +349,10 @@ pub fn phase9a_start_caddy_container(litehouse_uid: &str, domain: &str) -> Resul
 
 /// Phase 9b: Start litehouse-server Container
 #[instrument]
-pub fn phase9b_start_litehouse_container(litehouse_uid: &str) -> Result<()> {
+pub fn phase9b_start_litehouse_container(litehouse_uid: &str, image_tag: &str) -> Result<()> {
     info!("Phase 9b: Start litehouse-server Container");
 
-    let script = templates::start_litehouse_container_script(litehouse_uid);
+    let script = templates::start_litehouse_container_script(litehouse_uid, image_tag);
     std::fs::write("/tmp/start_litehouse.sh", &script)?;
     run_command("chmod +x /tmp/start_litehouse.sh")?;
     run_command("/tmp/start_litehouse.sh")?;

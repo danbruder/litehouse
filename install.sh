@@ -41,6 +41,7 @@ die() {
 DOMAIN=""
 SKIP_VERIFY=""
 S3_FLAGS=""
+GHCR_TOKEN_FLAG=""
 
 # Function to prompt for S3 credentials
 prompt_s3_credentials() {
@@ -176,6 +177,14 @@ while [ $# -gt 0 ]; do
             S3_FLAGS="$S3_FLAGS --s3-path-prefix '${1#*=}'"
             shift
             ;;
+        --ghcr-token)
+            GHCR_TOKEN_FLAG="--ghcr-token '$2'"
+            shift 2
+            ;;
+        --ghcr-token=*)
+            GHCR_TOKEN_FLAG="--ghcr-token '${1#*=}'"
+            shift
+            ;;
         --help|-h)
             cat <<EOF
 Litehouse Installation Script
@@ -193,6 +202,7 @@ Options:
   --s3-region <region>           S3 Region (default: us-east-1)
   --s3-endpoint <endpoint>       S3 Endpoint URL (optional, for S3-compatible services)
   --s3-path-prefix <prefix>      S3 Path Prefix (default: litehouse)
+  --ghcr-token <token>           GitHub PAT (read:packages) to configure for pulling private ghcr.io images
   --help, -h                     Show this help message
 
 Example:
@@ -320,23 +330,9 @@ INSTALLED_VERSION=$(/usr/local/bin/lh --version 2>&1 || echo "unknown")
 info "Installed: $INSTALLED_VERSION"
 echo ""
 
-# Install Docker buildx (for S3 build cache support)
-info "Installing Docker buildx..."
-if ! docker buildx version &>/dev/null; then
-    # Create buildx builder instance
-    if docker buildx create --name litehouse-builder --use --bootstrap >/dev/null 2>&1; then
-        info "Docker buildx installed and configured"
-    else
-        warn "Failed to create buildx builder, S3 build cache may not work"
-    fi
-else
-    info "Docker buildx already installed"
-fi
-echo ""
-
 # Run the install command
 info "Running litehouse install..."
 echo ""
 
-# Use eval to properly expand S3_FLAGS (which may contain quoted strings)
-eval exec /usr/local/bin/lh install --domain "$DOMAIN" $SKIP_VERIFY $S3_FLAGS
+# Use eval to properly expand S3_FLAGS/GHCR_TOKEN_FLAG (which may contain quoted strings)
+eval exec /usr/local/bin/lh install --domain "$DOMAIN" $SKIP_VERIFY $S3_FLAGS $GHCR_TOKEN_FLAG

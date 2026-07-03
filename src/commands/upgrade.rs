@@ -4,7 +4,7 @@ use tracing::{info, instrument};
 
 use crate::install::executor::run_command;
 use crate::install::phases::{
-    get_litehouse_uid, phase6a_build_litehouse_image, phase9b_start_litehouse_container,
+    get_litehouse_uid, phase6a_pull_litehouse_image, phase9b_start_litehouse_container,
 };
 
 const GITHUB_REPO: &str = "danbruder/litehouse";
@@ -114,6 +114,18 @@ fn install_binary(binary_path: &str, log_window: Option<&ProgressBar>) -> Result
     }
 }
 
+/// Parse a semver-ish version out of `lh --version` output (e.g. "lh 0.1.34"
+/// -> "0.1.34"). Falls back to "latest" if nothing usable is found, which
+/// lets the GHCR pull's own fallback logic take over.
+fn parse_version(version_output: &str) -> String {
+    version_output
+        .split_whitespace()
+        .last()
+        .filter(|s| s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+        .unwrap_or("latest")
+        .to_string()
+}
+
 /// Cleanup temp directory
 fn cleanup_temp_dir(binary_path: &str) -> Result<()> {
     // Extract the temp directory from the binary path
@@ -204,31 +216,34 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
         cleanup_temp_dir(&binary_path).ok();
     }
 
-    // Phase 3: Rebuild docker image
-    pb.set_message("Rebuilding litehouse container image...");
-    log_window.set_message("Building new container image...");
+    // Phase 3: Pull the matching litehouse-server image from GHCR
+    pb.set_message("Pulling litehouse container image...");
+    log_window.set_message("Pulling new container image...");
 
     let litehouse_uid = get_litehouse_uid().context("Failed to get litehouse user UID")?;
+    let pull_version = parse_version(&new_version);
 
-    let uid_clone = litehouse_uid.clone();
     let log_window_clone = log_window.clone();
-    let build_result = tokio::task::spawn_blocking(move || {
-        phase6a_build_litehouse_image(&uid_clone, Some(&log_window_clone))
+    let pull_result = tokio::task::spawn_blocking(move || {
+        phase6a_pull_litehouse_image(&pull_version, Some(&log_window_clone))
     })
     .await
-    .map_err(|e| anyhow::anyhow!("Image build task panicked: {}", e))?;
+    .map_err(|e| anyhow::anyhow!("Image pull task panicked: {}", e))?;
 
-    if let Err(e) = build_result {
-        pb.finish_with_message("❌ Image build failed");
-        return Err(e);
-    }
+    let image_tag = match pull_result {
+        Ok(tag) => tag,
+        Err(e) => {
+            pb.finish_with_message("❌ Image pull failed");
+            return Err(e);
+        }
+    };
     pb.inc(1);
 
     // Phase 4: Restart litehouse-server container
     pb.set_message("Restarting litehouse-server container...");
     log_window.set_message("Restarting container...");
 
-    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid) {
+    if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid, &image_tag) {
         pb.finish_with_message("❌ Container restart failed");
         return Err(e);
     }
