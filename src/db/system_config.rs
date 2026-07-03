@@ -124,6 +124,58 @@ pub async fn delete_ghcr_token(pool: &Pool<Sqlite>) -> Result<()> {
     Ok(())
 }
 
+/// Save the JSON-serialized report of the most recent backup run, keyed
+/// under its own `config_type` row (mirrors the ghcr_token pattern).
+#[instrument(skip(pool, report))]
+pub async fn set_last_backup_report(
+    pool: &Pool<Sqlite>,
+    report: &crate::backup::BackupReport,
+) -> Result<()> {
+    let report_json = serde_json::to_string(report)?;
+
+    sqlx::query!(
+        r#"DELETE FROM system_config WHERE config_type = 'backup_report'"#,
+    )
+    .execute(pool)
+    .await?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = crate::models::now();
+
+    sqlx::query!(
+        r#"
+        INSERT INTO system_config (
+            id, config_type, last_backup_report, created_at, updated_at
+        )
+        VALUES (?, 'backup_report', ?, ?, ?)
+        "#,
+        id,
+        report_json,
+        now,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Get the JSON-serialized report of the most recent backup run, if any.
+#[instrument(skip(pool))]
+pub async fn get_last_backup_report(
+    pool: &Pool<Sqlite>,
+) -> Result<Option<crate::backup::BackupReport>> {
+    let record = sqlx::query!(
+        r#"SELECT last_backup_report FROM system_config WHERE config_type = 'backup_report'"#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match record.and_then(|r| r.last_backup_report) {
+        Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +363,52 @@ mod tests {
             get_ghcr_token(&pool).await.unwrap(),
             Some("ghp_exampletoken".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_last_backup_report() {
+        let pool = get_test_pool().await;
+        let report = crate::backup::BackupReport {
+            succeeded: vec!["app1".to_string()],
+            failed: vec![("app2".to_string(), "boom".to_string())],
+            ran_at: "2026-07-03T00:00:00Z".to_string(),
+        };
+
+        set_last_backup_report(&pool, &report).await.unwrap();
+        let retrieved = get_last_backup_report(&pool).await.unwrap().unwrap();
+        assert_eq!(retrieved.succeeded, vec!["app1".to_string()]);
+        assert_eq!(
+            retrieved.failed,
+            vec![("app2".to_string(), "boom".to_string())]
+        );
+        assert_eq!(retrieved.ran_at, "2026-07-03T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn test_get_last_backup_report_not_found() {
+        let pool = get_test_pool().await;
+        assert!(get_last_backup_report(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_last_backup_report_replace_existing() {
+        let pool = get_test_pool().await;
+        let report1 = crate::backup::BackupReport {
+            succeeded: vec!["app1".to_string()],
+            failed: vec![],
+            ran_at: "2026-07-03T00:00:00Z".to_string(),
+        };
+        set_last_backup_report(&pool, &report1).await.unwrap();
+
+        let report2 = crate::backup::BackupReport {
+            succeeded: vec!["app2".to_string()],
+            failed: vec![],
+            ran_at: "2026-07-04T00:00:00Z".to_string(),
+        };
+        set_last_backup_report(&pool, &report2).await.unwrap();
+
+        let retrieved = get_last_backup_report(&pool).await.unwrap().unwrap();
+        assert_eq!(retrieved.succeeded, vec!["app2".to_string()]);
+        assert_eq!(retrieved.ran_at, "2026-07-04T00:00:00Z");
     }
 }

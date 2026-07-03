@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_backup_report FROM system_config WHERE config_type = 'backup_report'",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_backup_report",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "62806bd4f3750de07625110b866782deb1e6c81b599b40cc5ef465167b8c6e60"
+}

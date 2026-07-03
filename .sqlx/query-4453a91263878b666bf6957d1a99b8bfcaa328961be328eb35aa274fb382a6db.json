@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM system_config WHERE config_type = 'backup_report'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "4453a91263878b666bf6957d1a99b8bfcaa328961be328eb35aa274fb382a6db"
+}

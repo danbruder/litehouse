@@ -108,6 +108,39 @@ pub fn get_data_dir() -> Result<PathBuf, ConfigError> {
     Ok(data_dir)
 }
 
+/// Get the backups directory. `LITEHOUSE_BACKUPS_DIR` overrides the default
+/// of `{base_dir}/backups`. In production this directory is bind-mounted
+/// into both the litehouse-server container (at this same path, e.g.
+/// `/opt/litehouse/backups`) and the one-shot per-app snapshot containers,
+/// so all three (host binary in dev, server container, snapshot containers)
+/// see identical files at identical paths.
+///
+/// The directory is created world-writable: the snapshot containers run as
+/// whatever non-root user their base image defines (e.g. `keinos/sqlite3`
+/// runs as uid 100), which won't generally match the host/litehouse-server
+/// uid, so permissive bits are required for the bind mount to be usable by
+/// both sides.
+pub fn get_backups_dir() -> Result<PathBuf, ConfigError> {
+    let backups_dir = if let Ok(dir) = std::env::var("LITEHOUSE_BACKUPS_DIR") {
+        PathBuf::from(dir)
+    } else {
+        get_base_dir().join("backups")
+    };
+
+    if !backups_dir.exists() {
+        fs::create_dir_all(&backups_dir)
+            .map_err(|_| ConfigError::IoError("Failed to create backups directory".to_string()))?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&backups_dir, fs::Permissions::from_mode(0o777));
+    }
+
+    Ok(backups_dir)
+}
+
 /// Get a unique port for a new app
 #[instrument]
 pub async fn get_next_available_port(

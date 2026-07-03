@@ -40,6 +40,8 @@ flate2 = "1.0"
 walkdir = "2.4"
 crypto_box = { version = "0.9", features = ["seal"] }
 base64 = "0.22"
+aws-sdk-s3 = "1"
+aws-credential-types = "1"
 
 [dev-dependencies]
 tokio-test = "0.4"

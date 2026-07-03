@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO system_config (\n            id, config_type, last_backup_report, created_at, updated_at\n        )\n        VALUES (?, 'backup_report', ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "d887242e5779cb72fb4fbfc37c305dbfd0e2e4543db1327ea991ede98f36c0aa"
+}
