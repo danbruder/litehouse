@@ -645,7 +645,7 @@ fn app_url(app_name: &str, config: &ServerConfig) -> String {
     } else if let Some(domain) = &config.domain {
         format!("https://{}.{}", app_name, domain)
     } else {
-        format!("https://{}.lh.danbruder.com", app_name)
+        format!("https://{}.<configure-domain>", app_name)
     }
 }
 
