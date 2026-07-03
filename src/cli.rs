@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::api_client::ApiClient;
@@ -60,10 +60,28 @@ enum Commands {
         from_path: Option<String>,
     },
 
-    /// Create a new app
+    /// Create a new app: registers it on the server, commits a deploy
+    /// workflow to the GitHub repo, and sets the deploy-token secret — a
+    /// `git push` to the repo is all that's needed to deploy from then on.
     Create {
         /// Name of the app
         app_name: String,
+
+        /// GitHub repo this app deploys from, "owner/name" form. Inferred
+        /// from the `origin` git remote in the current directory if omitted.
+        #[arg(long)]
+        repo: Option<String>,
+
+        /// Re-link an app that already exists: mints a fresh deploy token
+        /// and re-commits the workflow instead of failing with a conflict.
+        #[arg(long)]
+        rotate_token: bool,
+
+        /// Print a single machine-readable JSON object instead of human
+        /// text, and never fall back to interactive GitHub device-flow
+        /// login.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Delete an app
@@ -186,6 +204,20 @@ enum Commands {
 
     /// Check DNS configuration for the configured domain
     CheckDns,
+
+    /// GitHub authentication used by `lh create` to commit deploy workflows
+    /// and set deploy-token secrets.
+    Github {
+        #[command(subcommand)]
+        command: GithubCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum GithubCmd {
+    /// Run the GitHub device authorization flow and store the resulting
+    /// token in the client config for future `lh create` runs.
+    Login,
 }
 
 #[derive(Subcommand)]
@@ -284,10 +316,11 @@ pub async fn run() -> Result<()> {
             server::execute(config).await
         }
         Commands::Connect { base_url, token } => {
-            let config = ClientConfig {
-                base_url: format!("{}/api", base_url.trim_end_matches('/')),
-                api_token: Some(token),
-            };
+            // Preserve any previously stored GitHub token — connecting to a
+            // (possibly different) server has no bearing on GitHub auth.
+            let mut config = ClientConfig::load().unwrap_or_default();
+            config.base_url = format!("{}/api", base_url.trim_end_matches('/'));
+            config.api_token = Some(token);
             config.save()?;
             println!("Connected to {}", config.base_url);
             Ok(())
@@ -295,19 +328,15 @@ pub async fn run() -> Result<()> {
         _ => {
             // For all other commands, load client config and use API client
             let config = ClientConfig::load()?;
-            let api_client = ApiClient::new(config);
+            let api_client = ApiClient::new(config.clone());
 
             match cli.command {
-                Commands::Create { app_name } => {
-                    let result = api_client.create_app(&app_name, false).await?;
-                    println!("App '{}' created successfully", result.name);
-                    println!("  URL:          {}", result.url);
-                    println!("  Deploy token: {}", result.deploy_token);
-                    println!(
-                        "(save the deploy token now — it will not be shown again; use it as the DEPLOY_TOKEN secret for the deploy hook)"
-                    );
-                    Ok(())
-                }
+                Commands::Create {
+                    app_name,
+                    repo,
+                    rotate_token,
+                    json,
+                } => run_create(&api_client, &config, &app_name, repo, rotate_token, json).await,
                 Commands::Start { app_name } => api_client.start_app(&app_name).await,
                 Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
                 Commands::Restart { app_name } => {
@@ -413,6 +442,9 @@ pub async fn run() -> Result<()> {
                 Commands::CheckDns => {
                     crate::commands::check_dns::execute().await
                 },
+                Commands::Github { command } => match command {
+                    GithubCmd::Login => crate::commands::github_login::execute().await,
+                },
                 Commands::Install { .. }
                 | Commands::Upgrade { .. }
                 | Commands::Serve
@@ -515,4 +547,145 @@ async fn run_deploys(
 
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
+}
+
+/// `lh create <app> [--repo owner/name] [--rotate-token] [--json]`: the
+/// signature litehouse v2 UX — register the app on the server, commit a
+/// deploy workflow to the GitHub repo, and set the deploy-token secret, so
+/// that `git push` is the entire deploy story from then on.
+async fn run_create(
+    api_client: &ApiClient,
+    config: &ClientConfig,
+    app_name: &str,
+    repo: Option<String>,
+    rotate_token: bool,
+    json: bool,
+) -> Result<()> {
+    let repo = match repo {
+        Some(r) => r,
+        None => infer_repo_from_git()?,
+    };
+
+    let (owner, repo_name) = repo.split_once('/').ok_or_else(|| {
+        anyhow!(
+            "--repo must be in 'owner/name' form, got '{}'",
+            repo
+        )
+    })?;
+
+    let create_result = match api_client.create_app(app_name, Some(&repo), rotate_token).await {
+        Ok(r) => r,
+        Err(e) if !rotate_token && e.to_string().contains("already exists") => {
+            return Err(anyhow!(
+                "App '{}' already exists. Re-run with --rotate-token to re-link it \
+                 (mints a fresh deploy token and re-commits the deploy workflow).",
+                app_name
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+
+    // The server's base_url already ends in /api; the deploy hook lives
+    // alongside the rest of the admin API at /api/hooks/deploy.
+    let hook_url = format!("{}/hooks/deploy", config.base_url.trim_end_matches('/'));
+
+    // --json implies non-interactive: never block on a device-flow prompt
+    // when the caller is a script/agent expecting a single JSON line.
+    let allow_interactive = !json;
+
+    let workflow_setup = async {
+        let token = crate::commands::github_login::resolve_github_token(allow_interactive).await?;
+        crate::github::actions::put_actions_secret(
+            &token,
+            owner,
+            repo_name,
+            "LITEHOUSE_DEPLOY_TOKEN",
+            &create_result.deploy_token,
+        )
+        .await
+        .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
+
+        let workflow = crate::workflow::render_deploy_workflow(owner, repo_name, &hook_url);
+        crate::github::actions::put_file(
+            &token,
+            owner,
+            repo_name,
+            ".github/workflows/litehouse-deploy.yml",
+            &workflow,
+            "Add litehouse deploy workflow",
+        )
+        .await
+        .context("committing .github/workflows/litehouse-deploy.yml")?;
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    match workflow_setup {
+        Ok(()) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "name": create_result.name,
+                        "url": create_result.url,
+                        "repo": repo,
+                        "workflow_committed": true,
+                    }))?
+                );
+            } else {
+                println!("App '{}' created", create_result.name);
+                println!("  URL:  {}", create_result.url);
+                println!("  Repo: {}", repo);
+                println!("git push to deploy.");
+            }
+            Ok(())
+        }
+        Err(e) => {
+            // The app already exists on the server at this point — don't
+            // leave the user stranded not knowing that much succeeded.
+            eprintln!(
+                "App '{}' was created on the server, but setting up {} failed: {}",
+                create_result.name, repo, e
+            );
+            eprintln!("To finish manually:");
+            eprintln!(
+                "  1. Set the repo secret LITEHOUSE_DEPLOY_TOKEN on {} \
+                 (run `lh create {} --repo {} --rotate-token` to mint a fresh token if needed)",
+                repo, app_name, repo
+            );
+            eprintln!(
+                "  2. Commit .github/workflows/litehouse-deploy.yml to {} with a job that builds \
+                 and pushes to ghcr.io, then POSTs to {}",
+                repo, hook_url
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Infer "owner/name" from the `origin` git remote in the current
+/// directory. Supports both GitHub HTTPS and SSH remote URL forms.
+fn infer_repo_from_git() -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .context("running `git remote get-url origin`")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "Could not find a git remote named 'origin' in the current directory. \
+             Pass --repo owner/name explicitly."
+        ));
+    }
+
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let (owner, repo) = crate::github::api::parse_repo_url(&url).map_err(|_| {
+        anyhow!(
+            "The 'origin' remote ('{}') is not a github.com repo. Pass --repo owner/name explicitly.",
+            url
+        )
+    })?;
+
+    Ok(format!("{}/{}", owner, repo))
 }

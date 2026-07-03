@@ -13,3 +13,4 @@ pub mod install;
 pub mod models;
 pub mod docker;
 pub mod volume;
+pub mod workflow;

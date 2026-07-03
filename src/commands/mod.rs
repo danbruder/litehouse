@@ -2,6 +2,7 @@ pub mod app_env;
 pub mod check_dns;
 pub mod create;
 pub mod delete;
+pub mod github_login;
 pub mod install;
 pub mod logs;
 pub mod server;

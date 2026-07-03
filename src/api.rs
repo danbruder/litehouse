@@ -528,6 +528,9 @@ async fn delete_app(
 #[derive(Debug, serde::Deserialize)]
 struct CreateAppRequest {
     name: String,
+    /// GitHub repo this app deploys from, "owner/name" form.
+    #[serde(default)]
+    repo: Option<String>,
     /// If the app already exists, mint and return a fresh deploy token
     /// instead of returning 409. Supports idempotent-create in the CLI.
     #[serde(default)]
@@ -579,6 +582,14 @@ async fn create_app(
             return internal(e).into_response();
         }
 
+        if let Some(repo) = &payload.repo {
+            let mut updated = existing.clone();
+            updated.repo = Some(repo.clone());
+            if let Err(e) = db::app::save(&pool, &updated).await {
+                return internal(e).into_response();
+            }
+        }
+
         return (
             StatusCode::OK,
             Json(CreateAppResponse {
@@ -601,7 +612,7 @@ async fn create_app(
             .into_response();
     }
 
-    let app = match db::app::get_by_name(&pool, &payload.name).await {
+    let mut app = match db::app::get_by_name(&pool, &payload.name).await {
         Ok(Some(app)) => app,
         Ok(None) => {
             tracing::error!("App '{}' created but could not be retrieved", payload.name);
@@ -616,6 +627,14 @@ async fn create_app(
             return internal(e).into_response();
         }
     };
+
+    if let Some(repo) = &payload.repo {
+        app.repo = Some(repo.clone());
+        if let Err(e) = db::app::save(&pool, &app).await {
+            tracing::error!("App '{}' created but failed to save repo: {}", app.name, e);
+            return internal(e).into_response();
+        }
+    }
 
     let token = crate::auth::generate_token();
     let hash = crate::auth::hash_token(&token);

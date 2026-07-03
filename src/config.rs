@@ -31,11 +31,16 @@ pub struct ServerConfig {
     pub admin_token_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_token: Option<String>,
+    /// GitHub personal/OAuth token used to commit deploy workflows and set
+    /// Actions secrets from `lh create`. Populated by `lh github login` or
+    /// automatically after a successful device-flow fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_token: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -56,6 +61,7 @@ impl Default for ClientConfig {
         Self {
             base_url: "http://localhost:3030/api".to_string(),
             api_token: None,
+            github_token: None,
         }
     }
 }

@@ -127,12 +127,18 @@ impl ApiClient {
         }
     }
 
-    /// Create a new app. If `rotate_token` is true and the app already
+    /// Create a new app, optionally linking it to a GitHub `repo`
+    /// ("owner/name"). If `rotate_token` is true and the app already
     /// exists, a fresh deploy token is minted and returned instead of
     /// erroring (idempotent-create).
-    pub async fn create_app(&self, app_name: &str, rotate_token: bool) -> Result<CreateAppResult> {
+    pub async fn create_app(
+        &self,
+        app_name: &str,
+        repo: Option<&str>,
+        rotate_token: bool,
+    ) -> Result<CreateAppResult> {
         let url = format!("{}/apps", self.config.base_url);
-        let payload = serde_json::json!({ "name": app_name, "rotate_token": rotate_token });
+        let payload = serde_json::json!({ "name": app_name, "repo": repo, "rotate_token": rotate_token });
 
         self.execute_request(|client, auth_header| {
             let mut req = client.post(&url).json(&payload);
