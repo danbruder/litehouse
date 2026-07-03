@@ -65,6 +65,23 @@ echo "Enabling and starting Docker..."
 systemctl enable docker
 systemctl start docker
 
+# Small droplets (1GB) wedge hard under memory pressure without swap: the
+# kernel stays up but every userspace process (sshd included) stalls. 2GB of
+# swap lets the box degrade gracefully instead. Idempotent.
+if ! swapon --show | grep -q /swapfile; then
+    echo "Provisioning 2GB swapfile..."
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    # Prefer reclaiming page cache over aggressively swapping processes
+    sysctl -w vm.swappiness=10
+    grep -q 'vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+else
+    echo "Swapfile already active"
+fi
+
 echo "System preparation completed successfully"
 "#
 }
