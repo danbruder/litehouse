@@ -395,8 +395,12 @@ pub async fn verify_volume_single_writer(
     for container in containers {
         let container_id = container.id.unwrap_or_default();
 
-        // Inspect the container to get its mounts
-        let inspect = docker.inspect_container(&container_id, None).await?;
+        // Inspect the container to get its mounts. A container that vanished
+        // between list and inspect is not a competing writer — skip it.
+        let inspect = match docker.inspect_container(&container_id, None).await {
+            Ok(inspect) => inspect,
+            Err(_) => continue,
+        };
 
         if let Some(mounts) = inspect.mounts {
             for mount in mounts {
