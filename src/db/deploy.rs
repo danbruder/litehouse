@@ -94,6 +94,17 @@ pub async fn list_for_app(pool: &Pool<Sqlite>, app_id: &str, limit: i64) -> Resu
     Ok(deploys)
 }
 
+/// Delete all deploy records for an app. The `deploy` table references
+/// `app(id)` without `ON DELETE CASCADE`, so these child rows must be
+/// removed explicitly before the app row can be deleted.
+#[instrument(skip(pool))]
+pub async fn delete_by_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<()> {
+    sqlx::query!(r#"DELETE FROM deploy WHERE app_id = ?"#, app_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

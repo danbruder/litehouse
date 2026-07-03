@@ -64,6 +64,12 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     info!("Deleting environment variables for app {}", app.id);
     db::env_var::delete_by_app(pool, &app.id).await?;
 
+    // Delete deploy history. The `deploy` table references app(id) WITHOUT
+    // ON DELETE CASCADE, so these child rows must be removed before the app
+    // row or the delete fails with a FOREIGN KEY constraint error.
+    info!("Deleting deploy history for app {}", app.id);
+    db::deploy::delete_by_app(pool, &app.id).await?;
+
     // Delete app
     db::app::delete_by_app_id(&pool, &app.id).await?;
 
