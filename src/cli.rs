@@ -582,7 +582,14 @@ async fn run_deploys(
     loop {
         let deploys = api_client.list_deploys(app_name, limit).await?;
 
-        let settled = deploys.first().map(|d| d.status != "in_progress").unwrap_or(true);
+        // A deploy is "settled" once it exists and is no longer in_progress.
+        // When waiting, an empty list means the deploy hasn't been registered
+        // yet (e.g. the GitHub Actions build is still running) — keep polling
+        // until one appears rather than treating "no deploys" as terminal.
+        let settled = match deploys.first() {
+            Some(d) => d.status != "in_progress",
+            None => !wait,
+        };
 
         if !wait || settled || std::time::Instant::now() >= deadline {
             if json {
@@ -621,10 +628,16 @@ async fn run_deploys(
             }
 
             if !settled {
-                eprintln!(
-                    "Timed out after {}s waiting for deploy to finish (still in_progress)",
-                    timeout_secs
-                );
+                match deploys.first() {
+                    Some(_) => eprintln!(
+                        "Timed out after {}s waiting for deploy to finish (still in_progress)",
+                        timeout_secs
+                    ),
+                    None => eprintln!(
+                        "Timed out after {}s waiting for a deploy to be registered for app '{}'",
+                        timeout_secs, app_name
+                    ),
+                }
                 std::process::exit(2);
             }
 
