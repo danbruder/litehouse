@@ -62,6 +62,34 @@ pub async fn get_exposed_port(image_tag: &str) -> Result<String> {
     Ok(port)
 }
 
+/// Build 1:1 host bindings for every EXPOSEd UDP port ("5000/udp" -> host 5000).
+/// TCP ports are intentionally skipped — they are reached through Caddy.
+fn udp_port_bindings<'a>(
+    exposed: impl Iterator<Item = &'a String>,
+) -> Option<bollard::models::PortMap> {
+    let map: bollard::models::PortMap = exposed
+        .filter_map(|key| {
+            let (port, proto) = key.split_once('/')?;
+            if proto != "udp" {
+                return None;
+            }
+            Some((
+                key.clone(),
+                Some(vec![bollard::models::PortBinding {
+                    host_ip: Some("0.0.0.0".to_string()),
+                    host_port: Some(port.to_string()),
+                }]),
+            ))
+        })
+        .collect();
+
+    if map.is_empty() {
+        None
+    } else {
+        Some(map)
+    }
+}
+
 #[instrument]
 pub async fn run(
     name: &str,
@@ -141,11 +169,29 @@ pub async fn run(
         }
     }
 
+    // UDP ports the image EXPOSEs get published 1:1 on the host. TCP traffic
+    // rides through Caddy over the docker network and is never published, but
+    // media servers (WebRTC SFUs etc.) need direct UDP reachability — NAT
+    // hole-punching through docker's masquerade "works" only by conntrack
+    // luck and fails for clients on strict NATs.
+    let udp_bindings = docker
+        .inspect_image(image_tag)
+        .await
+        .ok()
+        .and_then(|img| img.config)
+        .and_then(|cfg| cfg.exposed_ports)
+        .and_then(|ports| udp_port_bindings(ports.keys()));
+
     // Configure volume binds, restart policy, and network mode
     let host_config = {
         use bollard::models::{HostConfig, RestartPolicy, RestartPolicyNameEnum};
 
         let mut config = HostConfig::default();
+
+        if let Some(bindings) = udp_bindings {
+            info!("Publishing {} EXPOSEd UDP port(s) 1:1 on the host", bindings.len());
+            config.port_bindings = Some(bindings);
+        }
 
         // Add volume binds if provided
         if !volume_binds.is_empty() {
@@ -1115,6 +1161,27 @@ mod tests {
     }
 
     // Test pulling a public image from Docker Hub with no registry credentials
+    #[test]
+    fn udp_port_bindings_publishes_udp_one_to_one_and_skips_tcp() {
+        let exposed = vec![
+            "4000/tcp".to_string(),
+            "50000/udp".to_string(),
+            "50001/udp".to_string(),
+        ];
+        let map = udp_port_bindings(exposed.iter()).unwrap();
+        assert_eq!(map.len(), 2);
+        let binding = &map["50000/udp"].as_ref().unwrap()[0];
+        assert_eq!(binding.host_port.as_deref(), Some("50000"));
+        assert_eq!(binding.host_ip.as_deref(), Some("0.0.0.0"));
+        assert!(!map.contains_key("4000/tcp"));
+    }
+
+    #[test]
+    fn udp_port_bindings_none_when_no_udp() {
+        let exposed = vec!["8080/tcp".to_string()];
+        assert!(udp_port_bindings(exposed.iter()).is_none());
+    }
+
     #[tokio::test]
     async fn test_pull_public_image() {
         let docker = connect().await.unwrap();
