@@ -462,7 +462,12 @@ pub fn phase11_verification(domain: &str) -> Result<()> {
 
     // Step 2: Verify API endpoint is responding
     info!("Step 2: Verifying API endpoint is responding...");
-    let api_url = format!("http://admin.{}/apps", domain);
+    // Verify via loopback: the server publishes 3030 on 127.0.0.1. /login is
+    // public (the UI login page) and returns 200 when the server is healthy.
+    // DNS/Caddy/TLS are exercised separately (e2e acceptance final curl) —
+    // install verification must not depend on ACME issuance timing.
+    let _ = domain;
+    let api_url = "http://127.0.0.1:3030/login".to_string();
     info!("Testing API endpoint: {}", api_url);
 
     // Retry with backoff

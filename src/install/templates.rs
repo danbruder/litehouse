@@ -277,6 +277,7 @@ docker run -d \
   --name litehouse-server \
   --restart=unless-stopped \
   --network litehouse-network \
+  -p 127.0.0.1:3030:3030 \
   -v litehouse_config:/opt/litehouse/config \
   -v litehouse_data:/opt/litehouse/data \
   -v /opt/litehouse/backups:/opt/litehouse/backups \
