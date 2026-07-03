@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO deploy (\n                id, app_id, image, git_sha, status, error, created_at, updated_at\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "25e54d8aa1ec7705afc3c2e0ab1b5ae88abdc227441957f49f960a1da055a3e0"
+}

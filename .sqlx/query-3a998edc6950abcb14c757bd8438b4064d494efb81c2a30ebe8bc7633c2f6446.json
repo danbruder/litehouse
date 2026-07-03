@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT id, user_id, github_user_id, github_username, github_email, access_token, scopes, created_at, updated_at\n            FROM github_connection\n            WHERE user_id = ?\n            ",
+  "query": "\n            SELECT *\n            FROM deploy\n            WHERE app_id = ?\n            ORDER BY created_at DESC\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -9,44 +9,39 @@
         "type_info": "Text"
       },
       {
-        "name": "user_id",
+        "name": "app_id",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "github_user_id",
+        "name": "image",
         "ordinal": 2,
-        "type_info": "Int64"
+        "type_info": "Text"
       },
       {
-        "name": "github_username",
+        "name": "git_sha",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "github_email",
+        "name": "status",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "access_token",
+        "name": "error",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "scopes",
+        "name": "created_at",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "created_at",
-        "ordinal": 7,
-        "type_info": "Datetime"
-      },
-      {
         "name": "updated_at",
-        "ordinal": 8,
-        "type_info": "Datetime"
+        "ordinal": 7,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -56,13 +51,12 @@
       false,
       false,
       false,
-      false,
       true,
       false,
-      false,
+      true,
       false,
       false
     ]
   },
-  "hash": "aad4181a839ca6be71573d5364cf2829a97fe39041460373c35404da1be92c7d"
+  "hash": "3a998edc6950abcb14c757bd8438b4064d494efb81c2a30ebe8bc7633c2f6446"
 }

@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use tracing::instrument;
 
 thread_local! {
@@ -28,15 +27,15 @@ pub struct ServerConfig {
     pub caddy_http_port: Option<u16>,
     pub caddy_https_port: Option<u16>,
     pub domain: Option<String>,
+    #[serde(default)]
+    pub admin_token_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub base_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_token: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub refresh_token: Option<String>,
+    pub api_token: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +46,7 @@ impl Default for ServerConfig {
             caddy_http_port: Some(9090),
             caddy_https_port: Some(9091), // Use default 443 in production
             domain: None,
+            admin_token_hash: None,
         }
     }
 }
@@ -55,8 +55,7 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             base_url: "http://localhost:3030/api".to_string(),
-            access_token: None,
-            refresh_token: None,
+            api_token: None,
         }
     }
 }
@@ -325,8 +324,7 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let config = ClientConfig::default();
         assert_eq!(config.base_url, "http://localhost:3030/api");
-        assert_eq!(config.access_token, None);
-        assert_eq!(config.refresh_token, None);
+        assert_eq!(config.api_token, None);
     }
 
     #[test]
@@ -334,51 +332,44 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let mut config = ClientConfig::default();
         config.base_url = "http://test.example.com/api".to_string();
-        config.access_token = Some("test-access-token".to_string());
-        config.refresh_token = Some("test-refresh-token".to_string());
+        config.api_token = Some("test-token".to_string());
 
         config.save().unwrap();
 
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.base_url, "http://test.example.com/api");
-        assert_eq!(loaded.access_token, Some("test-access-token".to_string()));
-        assert_eq!(loaded.refresh_token, Some("test-refresh-token".to_string()));
+        assert_eq!(loaded.api_token, Some("test-token".to_string()));
     }
 
     #[test]
-    fn test_client_config_save_without_tokens() {
+    fn test_client_config_save_without_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let config = ClientConfig::default();
         config.save().unwrap();
 
         let loaded = ClientConfig::load().unwrap();
-        assert_eq!(loaded.access_token, None);
-        assert_eq!(loaded.refresh_token, None);
+        assert_eq!(loaded.api_token, None);
     }
 
     #[test]
-    fn test_client_config_update_tokens() {
+    fn test_client_config_update_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let mut config = ClientConfig::default();
         config.save().unwrap();
 
-        // Update with tokens
-        config.access_token = Some("new-access".to_string());
-        config.refresh_token = Some("new-refresh".to_string());
+        // Update with a token
+        config.api_token = Some("new-token".to_string());
         config.save().unwrap();
 
         let loaded = ClientConfig::load().unwrap();
-        assert_eq!(loaded.access_token, Some("new-access".to_string()));
-        assert_eq!(loaded.refresh_token, Some("new-refresh".to_string()));
+        assert_eq!(loaded.api_token, Some("new-token".to_string()));
 
-        // Clear tokens
-        config.access_token = None;
-        config.refresh_token = None;
+        // Clear token
+        config.api_token = None;
         config.save().unwrap();
 
         let loaded = ClientConfig::load().unwrap();
-        assert_eq!(loaded.access_token, None);
-        assert_eq!(loaded.refresh_token, None);
+        assert_eq!(loaded.api_token, None);
     }
 }
 

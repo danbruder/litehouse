@@ -17,10 +17,9 @@ use crate::db;
 pub struct AppState {
     pub db_pool: sqlx::Pool<sqlx::Sqlite>,
     pub docker: Docker,
-    pub jwt_secret: String,
-    pub github_client_id: Option<String>,
-    /// Webhook base URL (e.g., "https://admin.yourdomain.com")
-    pub webhook_url: Option<String>,
+    /// sha256 hex hash of the single admin token
+    pub admin_token_hash: String,
+    pub server_config: ServerConfig,
 }
 
 /// Ensure Caddy is running and its configuration matches the database.
@@ -57,28 +56,36 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         tracing::error!("caddy sync on boot failed (admin API starting anyway): {e:#}");
     }
 
-    // Get JWT secret from environment or use default (warning will be logged)
-    let jwt_secret = crate::auth::jwt::get_jwt_secret();
-
-    // GitHub OAuth client ID - default to litehouse's app, allow override
-    const DEFAULT_GITHUB_CLIENT_ID: &str = "Ov23liTp4hQb5j4lzQfh";
-    let github_client_id = Some(
-        std::env::var("GITHUB_CLIENT_ID").unwrap_or_else(|_| DEFAULT_GITHUB_CLIENT_ID.to_string()),
-    );
-
-    // Construct webhook URL from domain if available
-    let webhook_url = config
-        .domain
-        .as_ref()
-        .map(|d| format!("https://admin.{}", d));
+    // Single-operator admin token: use the hash stored in server config, or
+    // generate a fresh ephemeral token for this run if none is configured yet.
+    let admin_token_hash = match &config.admin_token_hash {
+        Some(hash) => hash.clone(),
+        None => {
+            let token = crate::auth::generate_token();
+            let hash = crate::auth::hash_token(&token);
+            println!("================================================================");
+            println!("ADMIN TOKEN (save this): {}", token);
+            println!(
+                "This token is EPHEMERAL — it was generated because no admin_token_hash"
+            );
+            println!(
+                "is set in server-config.toml. It will change on the next restart unless"
+            );
+            println!(
+                "you persist it: add `admin_token_hash = \"{}\"` to server-config.toml.",
+                hash
+            );
+            println!("================================================================");
+            hash
+        }
+    };
 
     // Create shared state
     let state = Arc::new(RwLock::new(AppState {
         db_pool: pool.clone(),
         docker: docker_conn.clone(),
-        jwt_secret,
-        github_client_id,
-        webhook_url,
+        admin_token_hash,
+        server_config: config.clone(),
     }));
 
     // Build combined router: API routes under /api, SPA fallback for everything else

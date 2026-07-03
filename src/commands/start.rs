@@ -52,11 +52,13 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         return Ok(());
     }
 
-    // Get latest build
-    tracing::info!("Geting build for app id {}", app.id);
-    let build = db::build::get_latest_by_app(pool, &app.id)
-        .await?
-        .ok_or_else(|| StartError::AppBuildMissing(app_name.to_string()))?;
+    // Get the last deployed image for this app
+    tracing::info!("Getting deployed image for app id {}", app.id);
+    let image_tag = app.image.as_ref()
+        .ok_or_else(|| StartError::AppBuildMissing(format!(
+            "App '{}' has no deployed image. Run 'lh deploy' first.",
+            app_name
+        )))?;
 
     // Load environment variables
     tracing::info!("Loading environment variables for app {}", app.id);
@@ -65,10 +67,6 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .map_err(|e| StartError::DatabaseError(e.to_string()))?;
 
     tracing::info!("Found {} environment variables", env_vars.len());
-
-    // Get image tag for permission discovery
-    let image_tag = build.image_tag.as_ref()
-        .ok_or_else(|| StartError::AppBuildMissing(format!("Build {} has no image tag", build.id)))?;
 
     // Create app volume if it doesn't exist (idempotent)
     let volume_name = crate::volume::create_app_volume(docker, &app.id)

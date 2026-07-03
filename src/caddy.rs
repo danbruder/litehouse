@@ -643,7 +643,6 @@ async fn build_caddy_config(
     apps: Vec<App>,
     local_dev: bool,
     domain: Option<&str>,
-    db_pool: &Pool<Sqlite>,
 ) -> Result<CaddyConfig> {
     let mut routes = Vec::new();
 
@@ -674,26 +673,21 @@ async fn build_caddy_config(
 
     // Add app routes
     for app in apps {
-        // Get the latest successful build for this app
-        let build = match crate::db::build::get_latest_by_app(db_pool, &app.id).await {
-            Ok(Some(b)) => b,
-            Ok(None) => {
-                // Skip apps without builds
-                info!("Skipping app '{}' - no successful builds found", app.name);
-                continue;
-            }
-            Err(e) => {
-                warn!("Failed to get build for app '{}': {}", app.name, e);
+        // Apps without a deployed image yet have nothing to route to.
+        let image_tag = match &app.image {
+            Some(tag) => tag.clone(),
+            None => {
+                info!("Skipping app '{}' - no deployed image found", app.name);
                 continue;
             }
         };
 
-        // Get exposed port from build record or detect from image
-        let port = if let Some(p) = build.exposed_port {
+        // Get exposed port cached on the app record, or detect from the image
+        let port = if let Some(p) = app.exposed_port.clone() {
             p
-        } else if let Some(image_tag) = &build.image_tag {
+        } else {
             // Fallback: detect from image if not cached
-            match crate::docker::get_exposed_port(image_tag).await {
+            match crate::docker::get_exposed_port(&image_tag).await {
                 Ok(p) => {
                     info!("Detected exposed port {} for app '{}' from image", p, app.name);
                     p
@@ -703,10 +697,6 @@ async fn build_caddy_config(
                     "3000".to_string()
                 }
             }
-        } else {
-            // No image tag available, skip this app
-            warn!("Skipping app '{}' - no image tag available", app.name);
-            continue;
         };
 
         let host = if local_dev {
@@ -822,7 +812,7 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
         Ok(apps) => {
             info!("Found {} apps", apps.len());
 
-            let config = build_caddy_config(apps, local_dev, domain, db_pool).await?;
+            let config = build_caddy_config(apps, local_dev, domain).await?;
             update_caddy_config(docker, config).await?;
 
             info!("Caddy configuration synchronized successfully");

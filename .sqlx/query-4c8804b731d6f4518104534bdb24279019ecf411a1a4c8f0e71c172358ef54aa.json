@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT id, email, password_hash, full_name, is_active, email_verified, created_at, updated_at\n            FROM user\n            ORDER BY created_at DESC\n            ",
+  "query": "\n            SELECT *\n            FROM deploy\n            WHERE app_id = ?\n            ORDER BY created_at DESC\n            LIMIT ?\n            ",
   "describe": {
     "columns": [
       {
@@ -9,43 +9,43 @@
         "type_info": "Text"
       },
       {
-        "name": "email",
+        "name": "app_id",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "password_hash",
+        "name": "image",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "full_name",
+        "name": "git_sha",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "is_active",
+        "name": "status",
         "ordinal": 4,
-        "type_info": "Bool"
+        "type_info": "Text"
       },
       {
-        "name": "email_verified",
+        "name": "error",
         "ordinal": 5,
-        "type_info": "Bool"
+        "type_info": "Text"
       },
       {
         "name": "created_at",
         "ordinal": 6,
-        "type_info": "Datetime"
+        "type_info": "Text"
       },
       {
         "name": "updated_at",
         "ordinal": 7,
-        "type_info": "Datetime"
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 2
     },
     "nullable": [
       false,
@@ -53,10 +53,10 @@
       false,
       true,
       false,
-      false,
+      true,
       false,
       false
     ]
   },
-  "hash": "10e98a47339c2d0b596e815f26b10eabe296a16cb457f6908f3fea02e43663a2"
+  "hash": "4c8804b731d6f4518104534bdb24279019ecf411a1a4c8f0e71c172358ef54aa"
 }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::models::{AppState, StateChange};
+use crate::models::AppState;
 use crate::models::{UtcDateTime, now};
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -15,6 +15,11 @@ pub struct App {
     pub updated_at: UtcDateTime,
 
     pub state: AppState,
+
+    pub repo: Option<String>,
+    pub image: Option<String>,
+    pub exposed_port: Option<String>,
+    pub deploy_token_hash: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +46,10 @@ impl App {
             created_at: now.clone(),
             updated_at: now,
             state: AppState::Stopped,
+            repo: None,
+            image: None,
+            exposed_port: None,
+            deploy_token_hash: None,
         })
     }
 
@@ -59,28 +68,27 @@ impl App {
             created_at: now.clone(),
             updated_at: now,
             state: AppState::Stopped,
+            repo: None,
+            image: None,
+            exposed_port: None,
+            deploy_token_hash: None,
         })
     }
 
     pub fn is_running(&self) -> bool {
-        dbg!(&self.state);
         matches!(self.state, AppState::Running | AppState::Starting)
     }
 
-    pub fn started(mut self) -> (Self, StateChange) {
-        let change = StateChange::new(&self.id, AppState::Starting).with_last_state(self.state);
+    pub fn started(mut self) -> Self {
         self.state = AppState::Starting;
         self.updated_at = now();
-
-        (self, change)
+        self
     }
 
-    pub fn running(mut self) -> (Self, StateChange) {
-        let change = StateChange::new(&self.id, AppState::Running).with_last_state(self.state);
+    pub fn running(mut self) -> Self {
         self.state = AppState::Running;
         self.updated_at = now();
-
-        (self, change)
+        self
     }
 }
 

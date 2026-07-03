@@ -37,6 +37,26 @@
         "name": "organization_id",
         "ordinal": 6,
         "type_info": "Text"
+      },
+      {
+        "name": "repo",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "image",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "exposed_port",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "deploy_token_hash",
+        "ordinal": 10,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -49,6 +69,10 @@
       true,
       false,
       false,
+      true,
+      true,
+      true,
+      true,
       true
     ]
   },

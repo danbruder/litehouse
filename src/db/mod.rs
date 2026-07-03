@@ -3,20 +3,12 @@ use std::path::PathBuf;
 use tracing::{debug, info, instrument};
 
 pub mod app;
-pub mod build;
+pub mod deploy;
 pub mod env_var;
-pub mod remote;
-pub mod state_change;
 pub mod system_config;
-pub mod user;
-pub mod organization;
-pub mod organization_member;
-pub mod refresh_token;
-pub mod github_connection;
-pub mod webhook;
 
 use crate::config;
-use crate::models::{parse_app_state, App, AppState, StateChange};
+use crate::models::{App, AppState};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseError {
@@ -127,16 +119,11 @@ pub async fn init_pool() -> Result<Pool<Sqlite>> {
 }
 
 pub async fn seed() {
-    use crate::models::Build;
-
     let pool = init_pool().await.unwrap();
 
-    let app = App::new("caddy").unwrap();
+    let mut app = App::new("caddy").unwrap();
+    app.image = Some("caddy:latest".to_string());
     crate::db::app::save(&pool, &app).await.unwrap();
-
-    let mut build = Build::new_building(app.id, "/tmp/caddy.log".to_string());
-    build.mark_success("1234".to_string(), "caddy".to_string(), "hey".to_string());
-    crate::db::build::save(&pool, &build).await.unwrap();
 }
 
 #[cfg(test)]

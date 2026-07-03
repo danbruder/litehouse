@@ -7,14 +7,19 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
     let result = sqlx::query!(
         r#"
             INSERT INTO app (
-                id, name, port, organization_id, created_at, updated_at, state
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                id, name, port, organization_id, created_at, updated_at, state,
+                repo, image, exposed_port, deploy_token_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 port = excluded.port,
                 organization_id = excluded.organization_id,
                 updated_at = excluded.updated_at,
-                state = excluded.state
+                state = excluded.state,
+                repo = excluded.repo,
+                image = excluded.image,
+                exposed_port = excluded.exposed_port,
+                deploy_token_hash = excluded.deploy_token_hash
             "#,
         app.id,
         app.name,
@@ -23,7 +28,11 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         app.created_at,
         app.updated_at,
         //state
-        app.state
+        app.state,
+        app.repo,
+        app.image,
+        app.exposed_port,
+        app.deploy_token_hash,
     )
     .execute(pool)
     .await?;
@@ -266,16 +275,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_app_with_organization() {
+        // Note: the `organization` table was dropped in the v2 simplification;
+        // `organization_id` is now just an unused free-text column.
         let pool = get_test_pool().await;
-        // Create organization first to satisfy foreign key constraint
-        let org = crate::models::Organization::new("Test Org").unwrap();
-        crate::db::organization::save(&pool, &org).await.unwrap();
-
-        let app = App::new_with_org("orgapp", &org.id).unwrap();
+        let app = App::new_with_org("orgapp", "some-org-id").unwrap();
 
         save(&pool, &app).await.unwrap();
         let retrieved = get_by_id(&pool, &app.id).await.unwrap().unwrap();
 
-        assert_eq!(retrieved.organization_id, Some(org.id));
+        assert_eq!(retrieved.organization_id, Some("some-org-id".to_string()));
     }
 }

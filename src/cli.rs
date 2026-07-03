@@ -158,10 +158,14 @@ enum Commands {
     /// Seed the database for testing
     Seed,
 
-    /// Authentication commands
-    Auth {
-        #[command(subcommand)]
-        command: AuthCmd,
+    /// Point this CLI at a server: lh connect https://admin.s.danbruder.com --token <TOKEN>
+    Connect {
+        /// Base URL of the litehouse server (e.g. https://admin.example.com)
+        base_url: String,
+
+        /// Admin token issued by the server
+        #[arg(long)]
+        token: String,
     },
 
     /// Check DNS configuration for the configured domain
@@ -175,34 +179,6 @@ enum ConfigCmd {
         #[command(subcommand)]
         command: S3Cmd,
     },
-}
-
-#[derive(Subcommand)]
-enum AuthCmd {
-    /// Login with email and password
-    Login {
-        /// Email address
-        email: String,
-        /// Password
-        password: String,
-    },
-    /// Register a new account
-    Register {
-        /// Email address
-        email: String,
-        /// Password
-        password: String,
-        /// Full name (optional)
-        #[arg(long)]
-        full_name: Option<String>,
-        /// Organization name (optional)
-        #[arg(long)]
-        organization_name: Option<String>,
-    },
-    /// Logout and clear stored tokens
-    Logout,
-    /// Check authentication status
-    Status,
 }
 
 #[derive(Subcommand)]
@@ -270,6 +246,15 @@ pub async fn run() -> Result<()> {
         Commands::Serve => {
             let config = ServerConfig::load()?;
             server::execute(config).await
+        }
+        Commands::Connect { base_url, token } => {
+            let config = ClientConfig {
+                base_url: format!("{}/api", base_url.trim_end_matches('/')),
+                api_token: Some(token),
+            };
+            config.save()?;
+            println!("Connected to {}", config.base_url);
+            Ok(())
         }
         _ => {
             // For all other commands, load client config and use API client
@@ -371,36 +356,13 @@ pub async fn run() -> Result<()> {
 
                     Ok(())
                 }
-                Commands::Auth { command } => match command {
-                    AuthCmd::Login { email, password } => {
-                        crate::commands::auth::cli::login::execute(&api_client, &email, &password).await
-                    }
-                    AuthCmd::Register {
-                        email,
-                        password,
-                        full_name,
-                        organization_name,
-                    } => {
-                        crate::commands::auth::cli::register::execute(
-                            &api_client,
-                            &email,
-                            &password,
-                            full_name.as_deref(),
-                            organization_name.as_deref(),
-                        )
-                        .await
-                    }
-                    AuthCmd::Logout => {
-                        crate::commands::auth::cli::logout::execute(&api_client).await
-                    }
-                    AuthCmd::Status => {
-                        crate::commands::auth::cli::status::execute(&api_client).await
-                    }
-                },
                 Commands::CheckDns => {
                     crate::commands::check_dns::execute().await
                 },
-                Commands::Install { .. } | Commands::Upgrade { .. } | Commands::Serve => {
+                Commands::Install { .. }
+                | Commands::Upgrade { .. }
+                | Commands::Serve
+                | Commands::Connect { .. } => {
                     unreachable!("Already handled above")
                 }
             }

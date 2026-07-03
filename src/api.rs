@@ -26,18 +26,9 @@ use tokio::sync::RwLock;
 use tracing::instrument;
 
 pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
-    // Public routes (no authentication required)
-    let public_routes = Router::new()
-        .route("/auth/status", get(auth_status_handler))
-        .route("/auth/register", post(register_handler))
-        .route("/auth/login", post(login_handler))
-        .route("/auth/refresh", post(refresh_token_handler))
-        .with_state(state.clone());
-
-    // Protected routes (require authentication)
+    // Everything under /api is protected by the single admin token. A public
+    // (unauthenticated) deploy-hook route arrives in a later task.
     let protected_routes = Router::new()
-        .route("/auth/logout", post(logout_handler))
-        .route("/auth/me", get(get_current_user))
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
         .route("/apps/:name", get(get_app))
@@ -54,13 +45,11 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/s3", delete(delete_s3_config))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            crate::auth::auth_middleware,
+            crate::auth::admin_auth_middleware,
         ))
         .with_state(state.clone());
 
-    // Combine routes
     Router::new()
-        .merge(public_routes)
         .merge(protected_routes)
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB limit for image uploads
 }
@@ -100,16 +89,6 @@ async fn get_app(
 
     match db::app::get_by_name(&pool, &name).await {
         Ok(Some(app)) => {
-            // Try to get remote info for this app
-            let remote_info = match db::remote::get_by_app(&pool, &app.id).await {
-                Ok(remote) => Some(RemoteInfoResponse {
-                    name: remote.name,
-                    url: remote.remote,
-                    branch: remote.branch,
-                }),
-                Err(_) => None,
-            };
-
             let app_detail = AppDetailResponse {
                 id: app.id.to_string(),
                 name: app.name,
@@ -117,7 +96,8 @@ async fn get_app(
                 port: app.port,
                 created_at: app.created_at.0.to_rfc3339(),
                 updated_at: app.updated_at.0.to_rfc3339(),
-                remote: remote_info,
+                repo: app.repo,
+                image: app.image,
             };
 
             Json(app_detail).into_response()
@@ -372,25 +352,25 @@ async fn deploy_app(
         }
     };
 
-    // Create build record
-    let mut build_record = crate::models::Build::new_success(
-        app.id.clone(),
-        final_tag.clone(),
-        git_commit.unwrap_or_default(),
-    );
-    if let Some(port) = exposed_port {
-        build_record.set_exposed_port(port);
+    // Record the deployed image directly on the app. A dedicated `deploy`
+    // history table + handler lands in a later task; this is the minimal
+    // change needed to keep deploys working now that `build` is gone.
+    let mut updated_app = app.clone();
+    updated_app.image = Some(final_tag.clone());
+    if let Some(port) = &exposed_port {
+        updated_app.exposed_port = Some(port.clone());
     }
+    let _ = git_commit; // git sha isn't persisted yet; deploy history arrives later
 
-    if let Err(e) = db::build::save(&pool, &build_record).await {
+    if let Err(e) = db::app::save(&pool, &updated_app).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save build record: {}", e),
+            format!("Failed to save app image: {}", e),
         )
             .into_response();
     }
 
-    tracing::info!("Created build record {} for app '{}'", build_record.id, name);
+    tracing::info!("Recorded image '{}' for app '{}'", final_tag, name);
 
     // Auto-start unless --no-start
     if !no_start {
@@ -405,7 +385,6 @@ async fn deploy_app(
                 tracing::error!("Failed to auto-start app '{}': {}", name, e);
                 return Json(serde_json::json!({
                     "message": format!("Image deployed but failed to start: {}", e),
-                    "build_id": build_record.id,
                     "image_tag": final_tag,
                     "started": false
                 }))
@@ -416,7 +395,6 @@ async fn deploy_app(
 
     Json(serde_json::json!({
         "message": format!("App '{}' deployed successfully", name),
-        "build_id": build_record.id,
         "image_tag": final_tag,
         "started": !no_start
     }))
@@ -457,7 +435,6 @@ struct CreateAppRequest {
 #[instrument(skip(state))]
 async fn create_app(
     State(state): State<Arc<RwLock<AppState>>>,
-    axum::Extension(_auth_user): axum::Extension<crate::auth::AuthUser>,
     Json(payload): Json<CreateAppRequest>,
 ) -> impl IntoResponse {
     let pool = state.read().await.db_pool.clone();
@@ -517,14 +494,8 @@ struct AppDetailResponse {
     port: Option<i64>,
     created_at: String,
     updated_at: String,
-    remote: Option<RemoteInfoResponse>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct RemoteInfoResponse {
-    name: String,
-    url: String,
-    branch: String,
+    repo: Option<String>,
+    image: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -706,178 +677,3 @@ async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl In
         }
     }
 }
-
-// ===== AUTH ENDPOINTS =====
-
-#[derive(Debug, serde::Serialize)]
-struct AuthStatusResponse {
-    initialized: bool,
-    version: String,
-}
-
-#[instrument(skip(state))]
-async fn auth_status_handler(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-
-    match crate::db::user::count(&pool).await {
-        Ok(count) => {
-            let response = AuthStatusResponse {
-                initialized: count > 0,
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            };
-            Json(response).into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to check server status: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to check server status: {}", e),
-            )
-                .into_response()
-        }
-    }
-}
-
-#[instrument(skip(state))]
-async fn register_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Json(payload): Json<crate::models::RegisterRequest>,
-) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-    let jwt_secret = state.read().await.jwt_secret.clone();
-
-    match crate::commands::auth::register::execute(
-        &pool,
-        &payload.email,
-        &payload.password,
-        payload.full_name,
-        payload.organization_name,
-        &jwt_secret,
-    )
-    .await
-    {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => match e {
-            crate::commands::auth::register::RegisterError::UserAlreadyExists(_) => {
-                (StatusCode::CONFLICT, format!("{}", e)).into_response()
-            }
-            crate::commands::auth::register::RegisterError::OrganizationAlreadyExists(_) => {
-                (StatusCode::CONFLICT, format!("{}", e)).into_response()
-            }
-            crate::commands::auth::register::RegisterError::UserError(_) => {
-                (StatusCode::BAD_REQUEST, format!("{}", e)).into_response()
-            }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
-        },
-    }
-}
-
-#[instrument(skip(state))]
-async fn login_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Json(payload): Json<crate::models::LoginRequest>,
-) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-    let jwt_secret = state.read().await.jwt_secret.clone();
-
-    match crate::commands::auth::login::execute(
-        &pool,
-        &payload.email,
-        &payload.password,
-        &jwt_secret,
-    )
-    .await
-    {
-        Ok(response) => Json(response).into_response(),
-        Err(e) => match e {
-            crate::commands::auth::login::LoginError::InvalidCredentials => {
-                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
-            }
-            crate::commands::auth::login::LoginError::UserNotActive => {
-                (StatusCode::FORBIDDEN, format!("{}", e)).into_response()
-            }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
-        },
-    }
-}
-
-#[instrument(skip(state))]
-async fn logout_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Json(payload): Json<crate::models::RefreshTokenRequest>,
-) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-
-    match crate::commands::auth::logout::execute(&pool, &payload.refresh_token).await {
-        Ok(_) => (StatusCode::OK, "Logged out successfully").into_response(),
-        Err(e) => match e {
-            crate::commands::auth::logout::LogoutError::InvalidToken => {
-                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
-            }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
-        },
-    }
-}
-
-#[instrument(skip(state))]
-async fn refresh_token_handler(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Json(payload): Json<crate::models::RefreshTokenRequest>,
-) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-    let jwt_secret = state.read().await.jwt_secret.clone();
-
-    match crate::commands::auth::refresh::execute(&pool, &payload.refresh_token, &jwt_secret).await
-    {
-        Ok(tokens) => Json(tokens).into_response(),
-        Err(e) => match e {
-            crate::commands::auth::refresh::RefreshError::InvalidToken
-            | crate::commands::auth::refresh::RefreshError::TokenRevoked => {
-                (StatusCode::UNAUTHORIZED, format!("{}", e)).into_response()
-            }
-            crate::commands::auth::refresh::RefreshError::UserNotActive => {
-                (StatusCode::FORBIDDEN, format!("{}", e)).into_response()
-            }
-            _ => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into_response(),
-        },
-    }
-}
-
-#[instrument(skip(state))]
-async fn get_current_user(
-    State(state): State<Arc<RwLock<AppState>>>,
-    axum::Extension(auth_user): axum::Extension<crate::auth::AuthUser>,
-) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-
-    match crate::db::user::get_by_id(&pool, &auth_user.user_id).await {
-        Ok(Some(user)) => {
-            // Get user's organizations
-            match crate::db::organization::get_user_organizations(&pool, &user.id).await {
-                Ok(orgs) => Json(crate::models::AuthenticatedUser {
-                    user,
-                    organizations: orgs,
-                })
-                .into_response(),
-                Err(e) => {
-                    tracing::error!("Failed to get organizations for user '{}': {}", user.id, e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to get user organizations: {}", e),
-                    )
-                        .into_response()
-                }
-            }
-        }
-        Ok(None) => (StatusCode::NOT_FOUND, "User not found").into_response(),
-        Err(e) => {
-            tracing::error!("Failed to get current user: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to get user: {}", e),
-            )
-                .into_response()
-        }
-    }
-}
-

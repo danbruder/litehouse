@@ -1,5 +1,4 @@
 use crate::config::ClientConfig;
-use crate::models::{AuthResponse, AuthenticatedUser, LoginRequest, RegisterRequest, RefreshTokenRequest, TokenPair};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
@@ -37,161 +36,25 @@ impl ApiClient {
         }
     }
 
-    /// Get the current access token from config (reloads from disk)
-    fn get_access_token(&self) -> Result<Option<String>> {
+    /// Get the current API token from config (reloads from disk)
+    fn get_api_token(&self) -> Result<Option<String>> {
         let config = ClientConfig::load()?;
-        Ok(config.access_token)
+        Ok(config.api_token)
     }
 
-    /// Get the current refresh token from config (reloads from disk)
-    fn get_refresh_token(&self) -> Result<Option<String>> {
-        let config = ClientConfig::load()?;
-        Ok(config.refresh_token)
-    }
-
-    /// Update tokens in config file
-    fn update_tokens(&self, access_token: Option<String>, refresh_token: Option<String>) -> Result<()> {
-        let mut config = ClientConfig::load()?;
-        config.access_token = access_token;
-        config.refresh_token = refresh_token;
-        config.save()?;
-        Ok(())
-    }
-
-    /// Clear tokens from config file
-    fn clear_tokens(&self) -> Result<()> {
-        self.update_tokens(None, None)
-    }
-
-    /// Get Authorization header value if token exists
+    /// Get Authorization header value if a token exists
     fn get_auth_header(&self) -> Result<Option<String>> {
-        if let Some(token) = self.get_access_token()? {
+        if let Some(token) = self.get_api_token()? {
             Ok(Some(format!("Bearer {}", token)))
         } else {
             Ok(None)
         }
     }
 
-    // ===== Auth Methods =====
-
-    pub async fn login(&self, email: &str, password: &str) -> Result<AuthResponse> {
-        let response = self
-            .client
-            .post(&format!("{}/auth/login", self.config.base_url))
-            .json(&LoginRequest {
-                email: email.to_string(),
-                password: password.to_string(),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let auth_response: AuthResponse = response.json().await?;
-            Ok(auth_response)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Login failed: {}", error))
-        }
-    }
-
-    pub async fn register(
-        &self,
-        email: &str,
-        password: &str,
-        full_name: Option<&str>,
-        organization_name: Option<&str>,
-    ) -> Result<AuthResponse> {
-        let response = self
-            .client
-            .post(&format!("{}/auth/register", self.config.base_url))
-            .json(&RegisterRequest {
-                email: email.to_string(),
-                password: password.to_string(),
-                full_name: full_name.map(|s| s.to_string()),
-                organization_name: organization_name.map(|s| s.to_string()),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let auth_response: AuthResponse = response.json().await?;
-            Ok(auth_response)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Registration failed: {}", error))
-        }
-    }
-
-    pub async fn refresh_token(&self) -> Result<TokenPair> {
-        let refresh_token = self
-            .get_refresh_token()?
-            .ok_or_else(|| anyhow!("No refresh token available"))?;
-
-        let response = self
-            .client
-            .post(&format!("{}/auth/refresh", self.config.base_url))
-            .json(&RefreshTokenRequest {
-                refresh_token: refresh_token.clone(),
-            })
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let tokens: TokenPair = response.json().await?;
-            // Update tokens in config
-            self.update_tokens(Some(tokens.access_token.clone()), Some(tokens.refresh_token.clone()))?;
-            Ok(tokens)
-        } else {
-            let error = response.text().await?;
-            // Clear tokens on refresh failure
-            self.clear_tokens()?;
-            Err(anyhow!("Token refresh failed: {}", error))
-        }
-    }
-
-    pub async fn logout(&self) -> Result<()> {
-        let refresh_token = self.get_refresh_token()?;
-        
-        if let Some(token) = refresh_token {
-            let _ = self
-                .client
-                .post(&format!("{}/auth/logout", self.config.base_url))
-                .json(&RefreshTokenRequest { refresh_token: token })
-                .send()
-                .await;
-        }
-
-        // Always clear local tokens
-        self.clear_tokens()?;
-        Ok(())
-    }
-
-    pub async fn get_current_user(&self) -> Result<AuthenticatedUser> {
-        let auth_header = self.get_auth_header()?;
-        let mut request = self
-            .client
-            .get(&format!("{}/auth/me", self.config.base_url));
-
-        if let Some(header) = auth_header {
-            request = request.header("Authorization", header);
-        }
-
-        let response = request.send().await?;
-
-        if response.status().is_success() {
-            let user: AuthenticatedUser = response.json().await?;
-            Ok(user)
-        } else {
-            let error = response.text().await?;
-            Err(anyhow!("Failed to get current user: {}", error))
-        }
-    }
-
-    /// Helper to execute a request with automatic auth header and token refresh
-    /// This handles 401 errors by attempting to refresh the token and retrying
+    /// Helper to execute a request with the admin token attached
     async fn execute_request<F, T>(&self, build_request: F) -> Result<T>
     where
-        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+        F: FnOnce(&Client, Option<String>) -> reqwest::RequestBuilder,
         T: serde::de::DeserializeOwned,
     {
         self.execute_request_with_response(build_request, |r| {
@@ -204,7 +67,7 @@ impl ApiClient {
     /// Helper to execute a request that returns text
     async fn execute_request_text<F>(&self, build_request: F) -> Result<String>
     where
-        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+        F: FnOnce(&Client, Option<String>) -> reqwest::RequestBuilder,
     {
         self.execute_request_with_response(build_request, |r| {
             Box::pin(async move {
@@ -213,36 +76,20 @@ impl ApiClient {
         }).await
     }
 
-    /// Generic helper to execute a request with automatic auth and refresh
+    /// Generic helper to execute a request with the admin token attached
     async fn execute_request_with_response<F, G, T>(&self, build_request: F, process_response: G) -> Result<T>
     where
-        F: Fn(&Client, Option<String>) -> reqwest::RequestBuilder,
+        F: FnOnce(&Client, Option<String>) -> reqwest::RequestBuilder,
         G: FnOnce(reqwest::Response) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<T>> + Send>>,
     {
         let auth_header = self.get_auth_header()?;
-        let request = build_request(&self.client, auth_header.clone());
-        let mut response = request.send().await?;
+        let request = build_request(&self.client, auth_header);
+        let response = request.send().await?;
 
-        // If we get 401 and have a refresh token, try to refresh
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(_refresh_token) = self.get_refresh_token()? {
-                // Try to refresh token
-                if let Ok(new_tokens) = self.refresh_token().await {
-                    // Retry the request with new token
-                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    let retry_request = build_request(&self.client, Some(new_auth_header));
-                    response = retry_request.send().await?;
-                } else {
-                    // Refresh failed, clear tokens and return error
-                    self.clear_tokens()?;
-                    let error = response.text().await.unwrap_or_else(|_| "Unauthorized".to_string());
-                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate. Error: {}", error));
-                }
-            } else {
-                // No refresh token, return error
-                let error = response.text().await.unwrap_or_else(|_| "Unauthorized".to_string());
-                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate. Error: {}", error));
-            }
+            return Err(anyhow!(
+                "Authentication required or invalid token. Run 'lh connect <base-url> --token <token>' to configure the admin token."
+            ));
         }
 
         if response.status().is_success() {
@@ -256,7 +103,7 @@ impl ApiClient {
     pub async fn create_app(&self, app_name: &str) -> Result<()> {
         let url = format!("{}/apps", self.config.base_url);
         let payload = serde_json::json!({ "name": app_name });
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url).json(&payload);
             if let Some(header) = auth_header {
@@ -271,7 +118,7 @@ impl ApiClient {
 
     pub async fn start_app(&self, app_name: &str) -> Result<()> {
         let url = format!("{}/apps/{}/start", self.config.base_url, app_name);
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url);
             if let Some(header) = auth_header {
@@ -286,7 +133,7 @@ impl ApiClient {
 
     pub async fn stop_app(&self, app_name: &str) -> Result<()> {
         let url = format!("{}/apps/{}/stop", self.config.base_url, app_name);
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url);
             if let Some(header) = auth_header {
@@ -301,7 +148,7 @@ impl ApiClient {
 
     pub async fn delete_app(&self, app_name: &str) -> Result<()> {
         let url = format!("{}/apps/{}", self.config.base_url, app_name);
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.delete(&url);
             if let Some(header) = auth_header {
@@ -348,55 +195,10 @@ impl ApiClient {
 
         let response = request.send().await?;
 
-        // Handle 401 with refresh for multipart requests
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(_refresh_token) = self.get_refresh_token()? {
-                if let Ok(new_tokens) = self.refresh_token().await {
-                    // Recreate form and retry
-                    let mut form = reqwest::multipart::Form::new()
-                        .file("image", tarball_path)
-                        .await
-                        .map_err(|e| anyhow!("Failed to read image tarball: {}", e))?;
-                    if let Some(tag) = image_tag {
-                        form = form.text("image_tag", tag.to_string());
-                    }
-                    if let Some(commit) = git_commit {
-                        form = form.text("git_commit", commit.to_string());
-                    }
-                    if no_start {
-                        form = form.text("no_start", "true".to_string());
-                    }
-
-                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    let retry_response = self
-                        .client
-                        .post(&url)
-                        .header("Authorization", new_auth_header)
-                        .multipart(form)
-                        .send()
-                        .await?;
-
-                    if retry_response.status().is_success() {
-                        println!("App '{}' deployed successfully", app_name);
-                        return Ok(());
-                    } else {
-                        let error = retry_response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Deploy failed".to_string());
-                        return Err(anyhow!("Failed to deploy app: {}", error));
-                    }
-                } else {
-                    self.clear_tokens()?;
-                    return Err(anyhow!(
-                        "Authentication failed. Please run 'lh auth login' to authenticate."
-                    ));
-                }
-            } else {
-                return Err(anyhow!(
-                    "Authentication required. Please run 'lh auth login' to authenticate."
-                ));
-            }
+            return Err(anyhow!(
+                "Authentication required or invalid token. Run 'lh connect <base-url> --token <token>' to configure the admin token."
+            ));
         }
 
         if response.status().is_success() {
@@ -417,7 +219,7 @@ impl ApiClient {
     ) -> Result<()> {
         let url = format!("{}/apps/{}/env", self.config.base_url, app_name);
         let payload = serde_json::json!({ "key": key, "value": value, "delete": delete });
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url).json(&payload);
             if let Some(header) = auth_header {
@@ -453,30 +255,19 @@ impl ApiClient {
             "{}/apps/{}/logs?lines={}&follow={}",
             self.config.base_url, app_name, lines, follow
         );
-        
+
         let auth_header = self.get_auth_header()?;
         let mut request = self.client.get(&url);
         if let Some(header) = &auth_header {
             request = request.header("Authorization", header);
         }
-        
-        let mut response = request.send().await?;
 
-        // Handle 401 with refresh
+        let response = request.send().await?;
+
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(_refresh_token) = self.get_refresh_token()? {
-                if let Ok(new_tokens) = self.refresh_token().await {
-                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    let retry_request = self.client.get(&url)
-                        .header("Authorization", new_auth_header);
-                    response = retry_request.send().await?;
-                } else {
-                    self.clear_tokens()?;
-                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
-                }
-            } else {
-                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
-            }
+            return Err(anyhow!(
+                "Authentication required or invalid token. Run 'lh connect <base-url> --token <token>' to configure the admin token."
+            ));
         }
 
         if response.status().is_success() {
@@ -521,7 +312,7 @@ impl ApiClient {
             }
             req
         }).await?;
-        
+
         println!("Docker version: {}", version);
         Ok(())
     }
@@ -544,7 +335,7 @@ impl ApiClient {
             "endpoint": endpoint,
             "path_prefix": path_prefix,
         });
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.post(&url).json(&payload);
             if let Some(header) = auth_header {
@@ -560,31 +351,19 @@ impl ApiClient {
 
     pub async fn get_s3_config(&self) -> Result<()> {
         let url = format!("{}/config/s3", self.config.base_url);
-        
+
         let auth_header = self.get_auth_header()?;
         let mut request = self.client.get(&url);
         if let Some(header) = &auth_header {
             request = request.header("Authorization", header);
         }
-        
-        let mut response = request.send().await?;
 
-        // Handle 401 with refresh
+        let response = request.send().await?;
+
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            if let Some(_refresh_token) = self.get_refresh_token()? {
-                if let Ok(new_tokens) = self.refresh_token().await {
-                    let new_auth_header = format!("Bearer {}", new_tokens.access_token);
-                    response = self.client.get(&url)
-                        .header("Authorization", new_auth_header)
-                        .send()
-                        .await?;
-                } else {
-                    self.clear_tokens()?;
-                    return Err(anyhow!("Authentication failed. Please run 'lh auth login' to authenticate."));
-                }
-            } else {
-                return Err(anyhow!("Authentication required. Please run 'lh auth login' to authenticate."));
-            }
+            return Err(anyhow!(
+                "Authentication required or invalid token. Run 'lh connect <base-url> --token <token>' to configure the admin token."
+            ));
         }
 
         if response.status().is_success() {
@@ -603,7 +382,7 @@ impl ApiClient {
 
     pub async fn delete_s3_config(&self) -> Result<()> {
         let url = format!("{}/config/s3", self.config.base_url);
-        
+
         self.execute_request_text(|client, auth_header| {
             let mut req = client.delete(&url);
             if let Some(header) = auth_header {
@@ -635,9 +414,9 @@ mod tests {
     fn test_get_auth_header_with_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let mut config = ClientConfig::default();
-        config.access_token = Some("test-token".to_string());
+        config.api_token = Some("test-token".to_string());
         config.save().unwrap();
-        
+
         let client = ApiClient::new(config);
         let header = client.get_auth_header().unwrap();
         assert_eq!(header, Some("Bearer test-token".to_string()));
@@ -648,66 +427,21 @@ mod tests {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let config = ClientConfig::default();
         config.save().unwrap();
-        
+
         let client = ApiClient::new(config);
         let header = client.get_auth_header().unwrap();
         assert_eq!(header, None);
     }
 
     #[test]
-    fn test_update_tokens() {
-        let (_data_dir, _config_dir) = setup_test_dirs();
-        let config = ClientConfig::default();
-        config.save().unwrap();
-        
-        let client = ApiClient::new(config);
-        client.update_tokens(
-            Some("access-123".to_string()),
-            Some("refresh-456".to_string())
-        ).unwrap();
-        
-        let loaded = ClientConfig::load().unwrap();
-        assert_eq!(loaded.access_token, Some("access-123".to_string()));
-        assert_eq!(loaded.refresh_token, Some("refresh-456".to_string()));
-    }
-
-    #[test]
-    fn test_clear_tokens() {
+    fn test_get_api_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
         let mut config = ClientConfig::default();
-        config.access_token = Some("access-123".to_string());
-        config.refresh_token = Some("refresh-456".to_string());
+        config.api_token = Some("test-token".to_string());
         config.save().unwrap();
-        
-        let client = ApiClient::new(config);
-        client.clear_tokens().unwrap();
-        
-        let loaded = ClientConfig::load().unwrap();
-        assert_eq!(loaded.access_token, None);
-        assert_eq!(loaded.refresh_token, None);
-    }
 
-    #[test]
-    fn test_get_access_token() {
-        let (_data_dir, _config_dir) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.access_token = Some("test-access".to_string());
-        config.save().unwrap();
-        
         let client = ApiClient::new(config);
-        let token = client.get_access_token().unwrap();
-        assert_eq!(token, Some("test-access".to_string()));
-    }
-
-    #[test]
-    fn test_get_refresh_token() {
-        let (_data_dir, _config_dir) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.refresh_token = Some("test-refresh".to_string());
-        config.save().unwrap();
-        
-        let client = ApiClient::new(config);
-        let token = client.get_refresh_token().unwrap();
-        assert_eq!(token, Some("test-refresh".to_string()));
+        let token = client.get_api_token().unwrap();
+        assert_eq!(token, Some("test-token".to_string()));
     }
 }
