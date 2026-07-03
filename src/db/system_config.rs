@@ -47,6 +47,7 @@ pub async fn get_s3_config(pool: &Pool<Sqlite>) -> Result<Option<S3Config>> {
             id, config_type,
             s3_access_key_id, s3_secret_access_key,
             s3_bucket, s3_region, s3_endpoint, s3_path_prefix,
+            ghcr_token,
             created_at as "created_at: _", updated_at as "updated_at: _"
         FROM system_config
         WHERE config_type = 's3_backup'
@@ -63,6 +64,60 @@ pub async fn get_s3_config(pool: &Pool<Sqlite>) -> Result<Option<S3Config>> {
 pub async fn delete_s3_config(pool: &Pool<Sqlite>) -> Result<()> {
     sqlx::query!(
         r#"DELETE FROM system_config WHERE config_type = 's3_backup'"#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Save or update the GHCR token used to authenticate `docker pull` against
+/// private ghcr.io images.
+#[instrument(skip(pool, token))]
+pub async fn set_ghcr_token(pool: &Pool<Sqlite>, token: &str) -> Result<()> {
+    // Delete existing ghcr_token config if it exists
+    sqlx::query!(
+        r#"DELETE FROM system_config WHERE config_type = 'ghcr_token'"#,
+    )
+    .execute(pool)
+    .await?;
+
+    let config = SystemConfig::new_ghcr_token(token);
+
+    sqlx::query!(
+        r#"
+        INSERT INTO system_config (
+            id, config_type, ghcr_token, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        "#,
+        config.id,
+        config.config_type,
+        config.ghcr_token,
+        config.created_at,
+        config.updated_at,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Get the configured GHCR token, if any
+#[instrument(skip(pool))]
+pub async fn get_ghcr_token(pool: &Pool<Sqlite>) -> Result<Option<String>> {
+    let record = sqlx::query!(
+        r#"SELECT ghcr_token FROM system_config WHERE config_type = 'ghcr_token'"#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record.and_then(|r| r.ghcr_token))
+}
+
+/// Delete the configured GHCR token
+#[instrument(skip(pool))]
+pub async fn delete_ghcr_token(pool: &Pool<Sqlite>) -> Result<()> {
+    sqlx::query!(
+        r#"DELETE FROM system_config WHERE config_type = 'ghcr_token'"#,
     )
     .execute(pool)
     .await?;
@@ -198,5 +253,63 @@ mod tests {
         save_s3_config(&pool, &system_config).await.unwrap();
         let retrieved = get_s3_config(&pool).await.unwrap().unwrap();
         assert_eq!(retrieved.path_prefix, Some("litehouse".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_ghcr_token() {
+        let pool = get_test_pool().await;
+        set_ghcr_token(&pool, "ghp_exampletoken").await.unwrap();
+
+        let retrieved = get_ghcr_token(&pool).await.unwrap();
+        assert_eq!(retrieved, Some("ghp_exampletoken".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_ghcr_token_not_found() {
+        let pool = get_test_pool().await;
+        let result = get_ghcr_token(&pool).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_ghcr_token_replace_existing() {
+        let pool = get_test_pool().await;
+        set_ghcr_token(&pool, "ghp_first").await.unwrap();
+        set_ghcr_token(&pool, "ghp_second").await.unwrap();
+
+        let retrieved = get_ghcr_token(&pool).await.unwrap();
+        assert_eq!(retrieved, Some("ghp_second".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_ghcr_token() {
+        let pool = get_test_pool().await;
+        set_ghcr_token(&pool, "ghp_exampletoken").await.unwrap();
+        assert!(get_ghcr_token(&pool).await.unwrap().is_some());
+
+        delete_ghcr_token(&pool).await.unwrap();
+        assert!(get_ghcr_token(&pool).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ghcr_token_independent_of_s3_config() {
+        let pool = get_test_pool().await;
+        let s3_config = S3Config {
+            access_key_id: "KEY1".to_string(),
+            secret_access_key: "SECRET1".to_string(),
+            bucket: "bucket1".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint: None,
+            path_prefix: None,
+        };
+        let system_config = SystemConfig::new_s3_config(&s3_config);
+        save_s3_config(&pool, &system_config).await.unwrap();
+        set_ghcr_token(&pool, "ghp_exampletoken").await.unwrap();
+
+        assert!(get_s3_config(&pool).await.unwrap().is_some());
+        assert_eq!(
+            get_ghcr_token(&pool).await.unwrap(),
+            Some("ghp_exampletoken".to_string())
+        );
     }
 }

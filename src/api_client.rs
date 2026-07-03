@@ -395,6 +395,64 @@ impl ApiClient {
         Ok(())
     }
 
+    pub async fn set_ghcr_token(&self, token: &str) -> Result<()> {
+        let url = format!("{}/config/ghcr", self.config.base_url);
+        let payload = serde_json::json!({ "token": token });
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        println!("GHCR token saved successfully");
+        Ok(())
+    }
+
+    pub async fn get_ghcr_token(&self) -> Result<()> {
+        let url = format!("{}/config/ghcr", self.config.base_url);
+
+        let auth_header = self.get_auth_header()?;
+        let mut request = self.client.get(&url);
+        if let Some(header) = &auth_header {
+            request = request.header("Authorization", header);
+        }
+
+        let response = request.send().await?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow!(
+                "Authentication required or invalid token. Run 'lh connect <base-url> --token <token>' to configure the admin token."
+            ));
+        }
+
+        if response.status().is_success() {
+            let config: serde_json::Value = response.json().await?;
+            println!("{}", serde_json::to_string_pretty(&config)?);
+            Ok(())
+        } else {
+            let error = response.text().await?;
+            Err(anyhow!("Failed to get GHCR token config: {}", error))
+        }
+    }
+
+    pub async fn delete_ghcr_token(&self) -> Result<()> {
+        let url = format!("{}/config/ghcr", self.config.base_url);
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        println!("GHCR token deleted successfully");
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]

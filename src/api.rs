@@ -43,6 +43,9 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
+        .route("/config/ghcr", post(set_ghcr_config))
+        .route("/config/ghcr", get(get_ghcr_config))
+        .route("/config/ghcr", delete(delete_ghcr_config))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::admin_auth_middleware,
@@ -672,6 +675,87 @@ async fn delete_s3_config(State(state): State<Arc<RwLock<AppState>>>) -> impl In
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to delete S3 config: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SetGhcrConfigRequest {
+    token: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct GhcrConfigResponse {
+    configured: bool,
+    token: Option<String>,
+}
+
+/// Redact a token, keeping only a short prefix so operators can distinguish tokens
+/// without exposing the secret over the API.
+fn redact_token(token: &str) -> String {
+    let visible: String = token.chars().take(7).collect();
+    format!("{}****", visible)
+}
+
+#[instrument(skip(state, payload))]
+async fn set_ghcr_config(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<SetGhcrConfigRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db_system_config::set_ghcr_token(&pool, &payload.token).await {
+        Ok(_) => (StatusCode::OK, "GHCR token saved successfully").into_response(),
+        Err(e) => {
+            tracing::error!("Failed to save GHCR token: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save GHCR token: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[instrument(skip(state))]
+async fn get_ghcr_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db_system_config::get_ghcr_token(&pool).await {
+        Ok(Some(token)) => Json(GhcrConfigResponse {
+            configured: true,
+            token: Some(redact_token(&token)),
+        })
+        .into_response(),
+        Ok(None) => Json(GhcrConfigResponse {
+            configured: false,
+            token: None,
+        })
+        .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to get GHCR token: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get GHCR token: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[instrument(skip(state))]
+async fn delete_ghcr_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match db_system_config::delete_ghcr_token(&pool).await {
+        Ok(_) => (StatusCode::OK, "GHCR token deleted successfully").into_response(),
+        Err(e) => {
+            tracing::error!("Failed to delete GHCR token: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to delete GHCR token: {}", e),
             )
                 .into_response()
         }

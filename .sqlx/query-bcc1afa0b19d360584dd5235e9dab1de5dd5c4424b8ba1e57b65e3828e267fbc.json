@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM system_config WHERE config_type = 'ghcr_token'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "bcc1afa0b19d360584dd5235e9dab1de5dd5c4424b8ba1e57b65e3828e267fbc"
+}

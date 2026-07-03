@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n        SELECT\n            id, config_type,\n            s3_access_key_id, s3_secret_access_key,\n            s3_bucket, s3_region, s3_endpoint, s3_path_prefix,\n            created_at as \"created_at: _\", updated_at as \"updated_at: _\"\n        FROM system_config\n        WHERE config_type = 's3_backup'\n        ",
+  "query": "\n        SELECT\n            id, config_type,\n            s3_access_key_id, s3_secret_access_key,\n            s3_bucket, s3_region, s3_endpoint, s3_path_prefix,\n            ghcr_token,\n            created_at as \"created_at: _\", updated_at as \"updated_at: _\"\n        FROM system_config\n        WHERE config_type = 's3_backup'\n        ",
   "describe": {
     "columns": [
       {
@@ -44,13 +44,18 @@
         "type_info": "Text"
       },
       {
-        "name": "created_at: _",
+        "name": "ghcr_token",
         "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at: _",
+        "ordinal": 9,
         "type_info": "Datetime"
       },
       {
         "name": "updated_at: _",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Datetime"
       }
     ],
@@ -66,9 +71,10 @@
       true,
       true,
       true,
+      true,
       false,
       false
     ]
   },
-  "hash": "0f98141fbe796feba883c9bf5143d76c21119a06399eee81dfe830f512b153b7"
+  "hash": "fb1bf4e001b946b21e384abc8da66275c31ca76b1f96ae7c1b611c18ebf75da6"
 }

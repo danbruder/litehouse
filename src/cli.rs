@@ -179,6 +179,12 @@ enum ConfigCmd {
         #[command(subcommand)]
         command: S3Cmd,
     },
+
+    /// Configure the GitHub token used to pull private ghcr.io images
+    Ghcr {
+        #[command(subcommand)]
+        command: GhcrCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -212,6 +218,20 @@ enum S3Cmd {
     /// Get current S3 backup configuration
     Get,
     /// Delete S3 backup configuration
+    Delete,
+}
+
+#[derive(Subcommand)]
+enum GhcrCmd {
+    /// Set the GHCR token (a GitHub PAT with read:packages scope)
+    Set {
+        /// GitHub personal access token with read:packages scope
+        #[arg(long)]
+        token: String,
+    },
+    /// Get current GHCR token configuration (redacted)
+    Get,
+    /// Delete the configured GHCR token
     Delete,
 }
 
@@ -337,6 +357,11 @@ pub async fn run() -> Result<()> {
                             }
                             S3Cmd::Get => api_client.get_s3_config().await,
                             S3Cmd::Delete => api_client.delete_s3_config().await,
+                        },
+                        Some(ConfigCmd::Ghcr { command }) => match command {
+                            GhcrCmd::Set { token } => api_client.set_ghcr_token(&token).await,
+                            GhcrCmd::Get => api_client.get_ghcr_token().await,
+                            GhcrCmd::Delete => api_client.delete_ghcr_token().await,
                         },
                         None => {
                             // Default behavior: show client config

@@ -16,6 +16,9 @@ pub struct SystemConfig {
     pub s3_endpoint: Option<String>,
     pub s3_path_prefix: Option<String>,
 
+    // GHCR token configuration (optional field)
+    pub ghcr_token: Option<String>,
+
     pub created_at: UtcDateTime,
     pub updated_at: UtcDateTime,
 }
@@ -42,6 +45,24 @@ impl SystemConfig {
             s3_region: Some(s3_config.region.clone()),
             s3_endpoint: s3_config.endpoint.clone(),
             s3_path_prefix: s3_config.path_prefix.clone().or(Some("litehouse".to_string())),
+            ghcr_token: None,
+            created_at: now(),
+            updated_at: now(),
+        }
+    }
+
+    /// Create a new GHCR token configuration
+    pub fn new_ghcr_token(token: &str) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            config_type: "ghcr_token".to_string(),
+            s3_access_key_id: None,
+            s3_secret_access_key: None,
+            s3_bucket: None,
+            s3_region: None,
+            s3_endpoint: None,
+            s3_path_prefix: None,
+            ghcr_token: Some(token.to_string()),
             created_at: now(),
             updated_at: now(),
         }

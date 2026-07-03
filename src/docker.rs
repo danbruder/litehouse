@@ -1,4 +1,6 @@
 use crate::models::{App, EnvVar};
+use bollard::auth::DockerCredentials;
+use bollard::image::CreateImageOptions;
 use bollard::Docker;
 use futures_util::StreamExt;
 use std::pin::Pin;
@@ -14,6 +16,8 @@ pub enum DockerError {
     LogError(String),
     #[error("Failed to list images: {0}")]
     ListImagesError(String),
+    #[error("Pull error: {0}")]
+    PullError(String),
     #[error("Bollard error: {0}")]
     BollardError(#[from] bollard::errors::Error),
     #[error("IO error: {0}")]
@@ -446,6 +450,25 @@ pub async fn image_exists(tag: &str) -> Result<bool> {
             .iter()
             .any(|t| t == tag)
     }))
+}
+
+/// Pull an image. For ghcr.io private images pass a GitHub token with read:packages.
+#[instrument(skip(docker, registry_token))]
+pub async fn pull(docker: &Docker, image: &str, registry_token: Option<&str>) -> Result<()> {
+    let credentials = registry_token.map(|token| DockerCredentials {
+        username: Some("litehouse".to_string()), // GHCR accepts any username with a PAT
+        password: Some(token.to_string()),
+        ..Default::default()
+    });
+    let options = CreateImageOptions {
+        from_image: image,
+        ..Default::default()
+    };
+    let mut stream = docker.create_image(Some(options), None, credentials);
+    while let Some(progress) = stream.next().await {
+        progress.map_err(|e| DockerError::PullError(format!("pull {image} failed: {e}")))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1082,5 +1105,13 @@ mod tests {
         } else {
             panic!("Expected LogError for non-existent container");
         }
+    }
+
+    // Test pulling a public image from Docker Hub with no registry credentials
+    #[tokio::test]
+    async fn test_pull_public_image() {
+        let docker = connect().await.unwrap();
+        pull(&docker, "alpine:3.20", None).await.unwrap();
+        assert!(image_exists("alpine:3.20").await.unwrap());
     }
 }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO system_config (\n            id, config_type, ghcr_token, created_at, updated_at\n        )\n        VALUES (?, ?, ?, ?, ?)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "a43ed59ca7c09615a4fd3cacd76e84350d4548df3d3b02bc81a5a1690e629114"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ghcr_token FROM system_config WHERE config_type = 'ghcr_token'",
+  "describe": {
+    "columns": [
+      {
+        "name": "ghcr_token",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "03e30b78d6e4c79179040ab5f39799746a2ccb507a8fd51669391e8b79027a41"
+}
