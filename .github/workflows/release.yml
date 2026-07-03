@@ -77,6 +77,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      actions: read # artifact download from the build job
 
     steps:
       - name: Download image build context
