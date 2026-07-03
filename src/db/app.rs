@@ -131,6 +131,61 @@ pub async fn get_all(pool: &Pool<Sqlite>) -> Result<Vec<App>> {
     Ok(apps)
 }
 
+/// Record a successful deploy: update the app's image, exposed port, and
+/// mark it running.
+#[instrument(skip(pool))]
+pub async fn set_deployed(
+    pool: &Pool<Sqlite>,
+    app_id: &str,
+    image: &str,
+    exposed_port: &str,
+) -> Result<()> {
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let state = AppState::Running;
+    sqlx::query!(
+        r#"
+            UPDATE app
+            SET image = ?, exposed_port = ?, state = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        image,
+        exposed_port,
+        state,
+        updated_at,
+        app_id,
+    )
+    .execute(pool)
+    .await?;
+
+    debug!("Marked app '{}' deployed with image '{}'", app_id, image);
+
+    Ok(())
+}
+
+/// Set (or rotate) the deploy token hash for an app.
+#[instrument(skip(pool, token_hash))]
+pub async fn set_deploy_token_hash(
+    pool: &Pool<Sqlite>,
+    app_id: &str,
+    token_hash: &str,
+) -> Result<()> {
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query!(
+        r#"
+            UPDATE app
+            SET deploy_token_hash = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        token_hash,
+        updated_at,
+        app_id,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 /// Get all apps with assigned ports
 #[instrument(skip(pool))]
 pub async fn get_all_with_ports(pool: &Pool<Sqlite>) -> Result<Vec<App>> {

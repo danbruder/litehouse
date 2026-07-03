@@ -12,6 +12,33 @@ pub enum LogStream {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateAppResult {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    pub deploy_token: String,
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeployResult {
+    pub status: String,
+    pub deploy_id: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct DeployListItem {
+    pub id: String,
+    pub image: String,
+    pub git_sha: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AppInfo {
     pub id: String,
     pub name: String,
@@ -100,20 +127,20 @@ impl ApiClient {
         }
     }
 
-    pub async fn create_app(&self, app_name: &str) -> Result<()> {
+    /// Create a new app. If `rotate_token` is true and the app already
+    /// exists, a fresh deploy token is minted and returned instead of
+    /// erroring (idempotent-create).
+    pub async fn create_app(&self, app_name: &str, rotate_token: bool) -> Result<CreateAppResult> {
         let url = format!("{}/apps", self.config.base_url);
-        let payload = serde_json::json!({ "name": app_name });
+        let payload = serde_json::json!({ "name": app_name, "rotate_token": rotate_token });
 
-        self.execute_request_text(|client, auth_header| {
+        self.execute_request(|client, auth_header| {
             let mut req = client.post(&url).json(&payload);
             if let Some(header) = auth_header {
                 req = req.header("Authorization", header);
             }
             req
-        }).await?;
-
-        println!("App '{}' created successfully", app_name);
-        Ok(())
+        }).await
     }
 
     pub async fn start_app(&self, app_name: &str) -> Result<()> {
@@ -161,35 +188,21 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Trigger an admin redeploy of `app_name` to `image` (and optional git
+    /// sha) via the admin API. This is the same deploy engine the public
+    /// GitHub deploy hook uses.
     pub async fn deploy_app(
         &self,
         app_name: &str,
-        tarball_path: &str,
-        image_tag: Option<&str>,
-        git_commit: Option<&str>,
-        no_start: bool,
-    ) -> Result<()> {
-        // Build multipart form with image tarball and metadata
-        let mut form = reqwest::multipart::Form::new()
-            .file("image", tarball_path)
-            .await
-            .map_err(|e| anyhow!("Failed to read image tarball: {}", e))?;
-
-        if let Some(tag) = image_tag {
-            form = form.text("image_tag", tag.to_string());
-        }
-        if let Some(commit) = git_commit {
-            form = form.text("git_commit", commit.to_string());
-        }
-        if no_start {
-            form = form.text("no_start", "true".to_string());
-        }
-
+        image: &str,
+        sha: Option<&str>,
+    ) -> Result<DeployResult> {
         let url = format!("{}/apps/{}/deploy", self.config.base_url, app_name);
-        let auth_header = self.get_auth_header()?;
+        let payload = serde_json::json!({ "image": image, "sha": sha });
 
-        let mut request = self.client.post(&url).multipart(form);
-        if let Some(header) = auth_header {
+        let auth_header = self.get_auth_header()?;
+        let mut request = self.client.post(&url).json(&payload);
+        if let Some(header) = &auth_header {
             request = request.header("Authorization", header);
         }
 
@@ -201,13 +214,34 @@ impl ApiClient {
             ));
         }
 
-        if response.status().is_success() {
-            println!("App '{}' deployed successfully", app_name);
-            Ok(())
+        // 200 (succeeded) and 502 (failed, but with a structured body) both
+        // carry a DeployResult; anything else is an unexpected failure.
+        if response.status().is_success() || response.status() == reqwest::StatusCode::BAD_GATEWAY
+        {
+            response
+                .json::<DeployResult>()
+                .await
+                .map_err(|e| anyhow!("Failed to parse deploy response: {}", e))
         } else {
-            let error = response.text().await?;
+            let error = response.text().await.unwrap_or_default();
             Err(anyhow!("Failed to deploy app: {}", error))
         }
+    }
+
+    /// List recent deploys for an app, newest first.
+    pub async fn list_deploys(&self, app_name: &str, limit: u32) -> Result<Vec<DeployListItem>> {
+        let url = format!(
+            "{}/apps/{}/deploys?limit={}",
+            self.config.base_url, app_name, limit
+        );
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
     }
 
     pub async fn set_env(

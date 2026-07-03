@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE app\n            SET deploy_token_hash = ?, updated_at = ?\n            WHERE id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e55f4b8aac28779738d5e4eb932f2386cf87bc5ee1703e50367a5665287b1e41"
+}

@@ -4,6 +4,7 @@ use crate::commands::delete;
 use crate::commands::logs;
 use crate::commands::server::AppState;
 use crate::commands::{start, stop};
+use crate::config::ServerConfig;
 use crate::db;
 use crate::db::env_var;
 use crate::db::system_config as db_system_config;
@@ -12,7 +13,7 @@ use axum::body::StreamBody;
 use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::{
-    extract::{Multipart, Path, Query, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
@@ -26,8 +27,10 @@ use tokio::sync::RwLock;
 use tracing::instrument;
 
 pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
-    // Everything under /api is protected by the single admin token. A public
-    // (unauthenticated) deploy-hook route arrives in a later task.
+    // Everything under /api is protected by the single admin token, except
+    // the deploy hook, which is authenticated per-app via its own deploy
+    // token (see `hook_deploy`) rather than the admin token — GitHub Actions
+    // never sees the admin token.
     let protected_routes = Router::new()
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
@@ -37,6 +40,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/stop", post(stop_app))
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
+        .route("/apps/:name/deploys", get(list_deploys))
         .route("/apps/:name/env", post(set_env))
         .route("/apps/:name/env", get(get_env))
         .route("/docker/version", get(get_docker_version))
@@ -52,8 +56,13 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         ))
         .with_state(state.clone());
 
+    let public_routes = Router::new()
+        .route("/hooks/deploy", post(hook_deploy))
+        .with_state(state.clone());
+
     Router::new()
         .merge(protected_routes)
+        .merge(public_routes)
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024)) // 500MB limit for image uploads
 }
 
@@ -229,71 +238,37 @@ async fn get_logs(
     }
 }
 
-#[instrument(skip(state, multipart))]
+#[derive(Debug, Deserialize)]
+struct DeployRequest {
+    image: String,
+    sha: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DeployResponse {
+    status: String,
+    deploy_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Admin-triggered redeploy: `POST /api/apps/:name/deploy` with
+/// `{"image": "...", "sha": "..."}`. Protected by the admin token.
+#[instrument(skip(state, payload))]
 async fn deploy_app(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
-    mut multipart: Multipart,
+    Json(payload): Json<DeployRequest>,
 ) -> impl IntoResponse {
     let (pool, docker) = {
         let s = state.read().await;
         (s.db_pool.clone(), s.docker.clone())
     };
 
-    // Parse multipart form: image tarball + metadata fields
-    let mut image_data: Option<Bytes> = None;
-    let mut image_tag: Option<String> = None;
-    let mut git_commit: Option<String> = None;
-    let mut no_start = false;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        match field.name() {
-            Some("image") => match field.bytes().await {
-                Ok(bytes) => {
-                    tracing::info!("Received image tarball: {} bytes", bytes.len());
-                    image_data = Some(bytes);
-                }
-                Err(e) => {
-                    tracing::error!("Error reading image field: {}", e);
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Error reading image data")
-                        .into_response();
-                }
-            },
-            Some("image_tag") => {
-                if let Ok(text) = field.text().await {
-                    image_tag = Some(text);
-                }
-            }
-            Some("git_commit") => {
-                if let Ok(text) = field.text().await {
-                    git_commit = Some(text);
-                }
-            }
-            Some("no_start") => {
-                if let Ok(text) = field.text().await {
-                    no_start = text == "true";
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let image_bytes = match image_data {
-        Some(data) => data,
-        None => {
-            return (StatusCode::BAD_REQUEST, "No image tarball provided").into_response();
-        }
-    };
-
-    // Verify app exists
-    let app = match db::app::get_by_name(&pool, &name).await {
-        Ok(Some(app)) => app,
+    match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(_)) => {}
         Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                format!("App '{}' not found", name),
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
         }
         Err(e) => {
             return (
@@ -302,106 +277,177 @@ async fn deploy_app(
             )
                 .into_response();
         }
-    };
+    }
 
-    // Save tarball to temp file
-    let temp_dir = match tempfile::tempdir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to create temp dir: {}", e),
-            )
-                .into_response();
-        }
-    };
-    let tarball_path = temp_dir.path().join("image.tar");
-    if let Err(e) = std::fs::write(&tarball_path, &image_bytes) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to write tarball: {}", e),
+    match crate::deploy::deploy_app(&pool, &docker, &name, &payload.image, payload.sha.as_deref())
+        .await
+    {
+        Ok(deploy) if deploy.status == "succeeded" => (
+            StatusCode::OK,
+            Json(DeployResponse {
+                status: deploy.status,
+                deploy_id: deploy.id,
+                error: None,
+            }),
         )
-            .into_response();
-    }
-
-    // Load image into Docker
-    let tarball_str = tarball_path.to_string_lossy().to_string();
-    let loaded_tag = match crate::docker::load_image(&tarball_str).await {
-        Ok(tag) => {
-            tracing::info!("Loaded Docker image: {}", tag);
-            tag
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to load Docker image: {}", e),
-            )
-                .into_response();
-        }
-    };
-
-    // Use provided image_tag or fall back to what docker load reported
-    let final_tag = image_tag.unwrap_or(loaded_tag);
-
-    // Detect exposed port from the loaded image
-    let exposed_port = match crate::docker::get_exposed_port(&final_tag).await {
-        Ok(port) => {
-            tracing::info!("Detected exposed port {} for image {}", port, final_tag);
-            Some(port)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to detect exposed port: {}", e);
-            None
-        }
-    };
-
-    // Record the deployed image directly on the app. A dedicated `deploy`
-    // history table + handler lands in a later task; this is the minimal
-    // change needed to keep deploys working now that `build` is gone.
-    let mut updated_app = app.clone();
-    updated_app.image = Some(final_tag.clone());
-    if let Some(port) = &exposed_port {
-        updated_app.exposed_port = Some(port.clone());
-    }
-    let _ = git_commit; // git sha isn't persisted yet; deploy history arrives later
-
-    if let Err(e) = db::app::save(&pool, &updated_app).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to save app image: {}", e),
+            .into_response(),
+        Ok(deploy) => (
+            StatusCode::BAD_GATEWAY,
+            Json(DeployResponse {
+                status: deploy.status,
+                deploy_id: deploy.id,
+                error: deploy.error,
+            }),
         )
-            .into_response();
+            .into_response(),
+        Err(e) => internal(e).into_response(),
     }
+}
 
-    tracing::info!("Recorded image '{}' for app '{}'", final_tag, name);
+#[derive(Debug, serde::Serialize)]
+struct DeployListItem {
+    id: String,
+    image: String,
+    git_sha: Option<String>,
+    status: String,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
 
-    // Auto-start unless --no-start
-    if !no_start {
-        // Stop existing container if running
-        let _ = stop::execute(&name).await;
-
-        match start::execute(&pool, &docker, &name).await {
-            Ok(_) => {
-                tracing::info!("App '{}' started after deploy", name);
-            }
-            Err(e) => {
-                tracing::error!("Failed to auto-start app '{}': {}", name, e);
-                return Json(serde_json::json!({
-                    "message": format!("Image deployed but failed to start: {}", e),
-                    "image_tag": final_tag,
-                    "started": false
-                }))
-                .into_response();
-            }
+impl From<crate::models::Deploy> for DeployListItem {
+    fn from(d: crate::models::Deploy) -> Self {
+        Self {
+            id: d.id,
+            image: d.image,
+            git_sha: d.git_sha,
+            status: d.status,
+            error: d.error,
+            created_at: d.created_at,
+            updated_at: d.updated_at,
         }
     }
+}
 
-    Json(serde_json::json!({
-        "message": format!("App '{}' deployed successfully", name),
-        "image_tag": final_tag,
-        "started": !no_start
-    }))
-    .into_response()
+/// `GET /api/apps/:name/deploys?limit=20` — deploy history for an app.
+#[instrument(skip(state))]
+async fn list_deploys(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<i64>().ok())
+        .unwrap_or(20);
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
+        }
+        Err(e) => return internal(e).into_response(),
+    };
+
+    match db::deploy::list_for_app(&pool, &app.id, limit).await {
+        Ok(deploys) => Json(
+            deploys
+                .into_iter()
+                .map(DeployListItem::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => internal(e).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct HookDeployRequest {
+    app: String,
+    image: String,
+    sha: Option<String>,
+}
+
+/// Public, per-app-token-authenticated deploy hook for GitHub Actions:
+/// `POST /api/hooks/deploy` with `Authorization: Bearer <app deploy token>`
+/// and `{"app": "...", "image": "...", "sha": "..."}`.
+///
+/// This is the security boundary between GitHub and the server, so error
+/// responses are deliberately terse and don't distinguish "app doesn't
+/// exist" from other failures beyond the 404/401 split below — an attacker
+/// probing tokens shouldn't learn anything from the response shape.
+#[instrument(skip(state, headers, payload))]
+async fn hook_deploy(
+    State(state): State<Arc<RwLock<AppState>>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<HookDeployRequest>,
+) -> impl IntoResponse {
+    let (pool, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone())
+    };
+
+    let app = match db::app::get_by_name(&pool, &payload.app).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, "unknown app").into_response();
+        }
+        Err(e) => return internal(e).into_response(),
+    };
+
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "));
+
+    let token = match token {
+        Some(t) => t,
+        None => return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response(),
+    };
+
+    if !crate::deploy::verify_deploy_token(token, app.deploy_token_hash.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "invalid deploy token").into_response();
+    }
+
+    match crate::deploy::deploy_app(
+        &pool,
+        &docker,
+        &payload.app,
+        &payload.image,
+        payload.sha.as_deref(),
+    )
+    .await
+    {
+        Ok(deploy) if deploy.status == "succeeded" => (
+            StatusCode::OK,
+            Json(DeployResponse {
+                status: deploy.status,
+                deploy_id: deploy.id,
+                error: None,
+            }),
+        )
+            .into_response(),
+        Ok(deploy) => (
+            StatusCode::BAD_GATEWAY,
+            Json(DeployResponse {
+                status: deploy.status,
+                deploy_id: deploy.id,
+                error: deploy.error,
+            }),
+        )
+            .into_response(),
+        Err(e) => internal(e).into_response(),
+    }
+}
+
+/// Uniform 500 mapping for internal errors — never echoes anything sensitive.
+fn internal(e: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!("internal error: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("internal error: {e}"),
+    )
 }
 
 #[instrument(skip(state))]
@@ -433,52 +479,124 @@ async fn delete_app(
 #[derive(Debug, serde::Deserialize)]
 struct CreateAppRequest {
     name: String,
+    /// If the app already exists, mint and return a fresh deploy token
+    /// instead of returning 409. Supports idempotent-create in the CLI.
+    #[serde(default)]
+    rotate_token: bool,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct CreateAppResponse {
+    id: String,
+    name: String,
+    state: String,
+    /// Returned exactly once: at creation, or on an explicit token rotation.
+    deploy_token: String,
+    url: String,
+}
+
+/// `POST /api/apps` — create a new app and mint its deploy token.
+///
+/// If `name` already exists: 409 Conflict, unless `rotate_token: true` is
+/// set, in which case a fresh deploy token is minted and returned for the
+/// existing app (idempotent-create support for the CLI).
 #[instrument(skip(state))]
 async fn create_app(
     State(state): State<Arc<RwLock<AppState>>>,
     Json(payload): Json<CreateAppRequest>,
 ) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
+    let (pool, server_config) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone())
+    };
 
-    // Create the app
+    let existing = match db::app::get_by_name(&pool, &payload.name).await {
+        Ok(existing) => existing,
+        Err(e) => return internal(e).into_response(),
+    };
+
+    if let Some(existing) = existing {
+        if !payload.rotate_token {
+            return (
+                StatusCode::CONFLICT,
+                format!("App '{}' already exists", payload.name),
+            )
+                .into_response();
+        }
+
+        let token = crate::auth::generate_token();
+        let hash = crate::auth::hash_token(&token);
+        if let Err(e) = db::app::set_deploy_token_hash(&pool, &existing.id, &hash).await {
+            return internal(e).into_response();
+        }
+
+        return (
+            StatusCode::OK,
+            Json(CreateAppResponse {
+                id: existing.id,
+                name: existing.name.clone(),
+                state: existing.state.to_string(),
+                deploy_token: token,
+                url: app_url(&existing.name, &server_config),
+            }),
+        )
+            .into_response();
+    }
+
     if let Err(e) = create::execute(&pool, &payload.name).await {
         tracing::error!("Failed to create app '{}': {}", payload.name, e);
         return (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create app: {}", e),
         )
             .into_response();
     }
 
-    // Fetch the newly created app to return its info
-    match db::app::get_by_name(&pool, &payload.name).await {
-        Ok(Some(app)) => (
-            StatusCode::CREATED,
-            Json(AppInfo {
-                id: app.id,
-                name: app.name,
-                state: app.state.to_string(),
-            }),
-        )
-            .into_response(),
+    let app = match db::app::get_by_name(&pool, &payload.name).await {
+        Ok(Some(app)) => app,
         Ok(None) => {
             tracing::error!("App '{}' created but could not be retrieved", payload.name);
-            (
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "App created but could not be retrieved",
             )
-                .into_response()
+                .into_response();
         }
         Err(e) => {
             tracing::error!("App '{}' created but failed to retrieve: {}", payload.name, e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("App created but failed to retrieve: {}", e),
-            )
-                .into_response()
+            return internal(e).into_response();
         }
+    };
+
+    let token = crate::auth::generate_token();
+    let hash = crate::auth::hash_token(&token);
+    if let Err(e) = db::app::set_deploy_token_hash(&pool, &app.id, &hash).await {
+        tracing::error!("App '{}' created but failed to set deploy token: {}", app.name, e);
+        return internal(e).into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(CreateAppResponse {
+            id: app.id,
+            name: app.name.clone(),
+            state: app.state.to_string(),
+            deploy_token: token,
+            url: app_url(&app.name, &server_config),
+        }),
+    )
+        .into_response()
+}
+
+/// Best-effort URL an app will be reachable at, for display purposes only.
+fn app_url(app_name: &str, config: &ServerConfig) -> String {
+    let local_dev = std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions);
+    if local_dev {
+        format!("http://{}.localhost:9090", app_name)
+    } else if let Some(domain) = &config.domain {
+        format!("https://{}.{}", app_name, domain)
+    } else {
+        format!("https://{}.lh.danbruder.com", app_name)
     }
 }
 

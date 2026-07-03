@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE app\n            SET image = ?, exposed_port = ?, state = ?, updated_at = ?\n            WHERE id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "1d002259b4db4c222a58e01f4c18b75ccf7ead5fad24a6a65a0103f934a92311"
+}

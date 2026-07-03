@@ -402,39 +402,6 @@ fn resolve_docker_socket_path() -> Result<String> {
     Ok(docker_sock.to_string())
 }
 
-/// Load a Docker image from a tarball file using `docker load`
-/// Returns the loaded image tag
-#[instrument]
-pub async fn load_image(tarball_path: &str) -> Result<String> {
-    info!("Loading Docker image from {}", tarball_path);
-
-    let output = std::process::Command::new("docker")
-        .args(["load", "-i", tarball_path])
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(DockerError::BuildError(format!(
-            "docker load failed: {}",
-            stderr
-        )));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("docker load output: {}", stdout);
-
-    // Parse the loaded image tag from output like "Loaded image: myapp:abc123"
-    let image_tag = stdout
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("Loaded image: ")
-                .map(|s| s.trim().to_string())
-        })
-        .unwrap_or_default();
-
-    Ok(image_tag)
-}
-
 /// Check if a Docker image with the given tag exists
 #[instrument]
 pub async fn image_exists(tag: &str) -> Result<bool> {
@@ -468,6 +435,46 @@ pub async fn pull(docker: &Docker, image: &str, registry_token: Option<&str>) ->
     while let Some(progress) = stream.next().await {
         progress.map_err(|e| DockerError::PullError(format!("pull {image} failed: {e}")))?;
     }
+    Ok(())
+}
+
+/// Stop and remove the container for `app_name` (i.e. `{app_name}-container`),
+/// tolerating the case where it's already stopped or doesn't exist at all
+/// (e.g. an app's first deploy). Used by the deploy engine to unconditionally
+/// replace a container with a freshly-created one running a new image.
+#[instrument(skip(docker))]
+pub async fn stop_and_remove_container(docker: &Docker, app_name: &str) -> Result<()> {
+    let container_name = format!("{}-container", app_name);
+
+    match docker.stop_container(&container_name, None).await {
+        Ok(_) => {
+            info!("Stopped container '{}'", container_name);
+        }
+        Err(e) => {
+            // 404 = no such container, 304 = already stopped. Both fine here.
+            let msg = e.to_string();
+            if msg.contains("404") || msg.contains("304") {
+                info!("Container '{}' not running or absent: {}", container_name, msg);
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+
+    match docker.remove_container(&container_name, None).await {
+        Ok(_) => {
+            info!("Removed container '{}'", container_name);
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("404") {
+                info!("Container '{}' already absent", container_name);
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+
     Ok(())
 }
 

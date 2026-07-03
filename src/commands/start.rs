@@ -4,8 +4,8 @@ use tracing::{info, instrument};
 
 use crate::caddy;
 use crate::db;
-use crate::models::AppState;
 use crate::docker;
+use crate::models::{App, AppState};
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum StartError {
@@ -37,29 +37,21 @@ impl From<crate::db::DatabaseError> for StartError {
     }
 }
 
-/// Start an app using the supervisor
-#[instrument(skip(pool, docker))]
-pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Result<()> {
-    // VALIDATION
-    tracing::info!("Geting app {app_name}");
-    let app = db::app::get_by_name(pool, app_name)
-        .await?
-        .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
-
-    // If started
-    if app.is_running() {
-        tracing::info!("App {} is already running", app_name);
-        return Ok(());
-    }
-
-    // Get the last deployed image for this app
-    tracing::info!("Getting deployed image for app id {}", app.id);
-    let image_tag = app.image.as_ref()
-        .ok_or_else(|| StartError::AppBuildMissing(format!(
-            "App '{}' has no deployed image. Run 'lh deploy' first.",
-            app_name
-        )))?;
-
+/// Create (or recreate) and start the container for `app` running `image_tag`,
+/// including volume provisioning and environment variables. Does not touch
+/// the app's database record or Caddy — callers are responsible for both,
+/// since the desired sequencing differs between a plain `start` and a
+/// deploy (which must replace an existing container outright).
+///
+/// Shared by [`execute`] and the deploy engine (`crate::deploy`) so the two
+/// paths can't drift.
+#[instrument(skip(pool, docker, app))]
+pub async fn start_container(
+    pool: &Pool<Sqlite>,
+    docker: &Docker,
+    app: &App,
+    image_tag: &str,
+) -> Result<()> {
     // Load environment variables
     tracing::info!("Loading environment variables for app {}", app.id);
     let env_vars = db::env_var::get_by_app(pool, &app.id)
@@ -93,7 +85,7 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         Ok(false) => {
             return Err(StartError::AppBuildMissing(format!(
                 "Docker image '{}' not found for app '{}'. Push to the app's GitHub repo (or run 'lh deploy') to produce a new image.",
-                image_tag, app_name
+                image_tag, app.name
             )));
         }
         Err(e) => {
@@ -115,12 +107,39 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 
+    Ok(())
+}
+
+/// Start an app using the supervisor
+#[instrument(skip(pool, docker))]
+pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Result<()> {
+    // VALIDATION
+    tracing::info!("Geting app {app_name}");
+    let app = db::app::get_by_name(pool, app_name)
+        .await?
+        .ok_or_else(|| StartError::AppNotFound(app_name.to_string()))?;
+
+    // If started
+    if app.is_running() {
+        tracing::info!("App {} is already running", app_name);
+        return Ok(());
+    }
+
+    // Get the last deployed image for this app
+    tracing::info!("Getting deployed image for app id {}", app.id);
+    let image_tag = app.image.clone().ok_or_else(|| {
+        StartError::AppBuildMissing(format!(
+            "App '{}' has no deployed image. Run 'lh deploy' first.",
+            app_name
+        ))
+    })?;
+
+    start_container(pool, docker, &app, &image_tag).await?;
+
     // Update app state to Running
     let mut updated_app = app.clone();
     updated_app.state = AppState::Running;
     db::app::save(pool, &updated_app).await?;
-
-    dbg!(&updated_app);
 
     info!("Started app '{}'", app.name);
 

@@ -72,25 +72,41 @@ enum Commands {
         app_name: String,
     },
 
-    /// Deploy a Docker image tarball to an app
+    /// Deploy a container image to an app (pulls, replaces the running
+    /// container, and syncs Caddy)
     Deploy {
         /// Name of the app
         app_name: String,
 
-        /// Path to the Docker image tarball
-        image_path: String,
-
-        /// Image tag (e.g. myapp:abc123)
+        /// Image reference to deploy, e.g. ghcr.io/org/app:sha-abc123
         #[arg(long)]
-        image_tag: Option<String>,
+        image: String,
 
-        /// Git commit hash
+        /// Git commit sha this image was built from
         #[arg(long)]
-        git_commit: Option<String>,
+        sha: Option<String>,
+    },
 
-        /// Don't auto-start the app after deploying
+    /// List (and optionally wait on) an app's deploy history
+    Deploys {
+        /// Name of the app
+        app_name: String,
+
+        /// Number of deploys to show
+        #[arg(long, default_value = "20")]
+        limit: u32,
+
+        /// Print raw JSON instead of a table
         #[arg(long)]
-        no_start: bool,
+        json: bool,
+
+        /// Poll until the newest deploy leaves "in_progress"
+        #[arg(long)]
+        wait: bool,
+
+        /// Max seconds to wait with --wait before giving up (exit code 2)
+        #[arg(long, default_value = "600")]
+        timeout: u64,
     },
 
     /// Deploy a binary to an app
@@ -282,7 +298,16 @@ pub async fn run() -> Result<()> {
             let api_client = ApiClient::new(config);
 
             match cli.command {
-                Commands::Create { app_name } => api_client.create_app(&app_name).await,
+                Commands::Create { app_name } => {
+                    let result = api_client.create_app(&app_name, false).await?;
+                    println!("App '{}' created successfully", result.name);
+                    println!("  URL:          {}", result.url);
+                    println!("  Deploy token: {}", result.deploy_token);
+                    println!(
+                        "(save the deploy token now — it will not be shown again; use it as the DEPLOY_TOKEN secret for the deploy hook)"
+                    );
+                    Ok(())
+                }
                 Commands::Start { app_name } => api_client.start_app(&app_name).await,
                 Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
                 Commands::Restart { app_name } => {
@@ -290,23 +315,27 @@ pub async fn run() -> Result<()> {
                     Ok(())
                 }
                 Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
-                Commands::Deploy {
-                    app_name,
-                    image_path,
-                    image_tag,
-                    git_commit,
-                    no_start,
-                } => {
-                    api_client
-                        .deploy_app(
-                            &app_name,
-                            &image_path,
-                            image_tag.as_deref(),
-                            git_commit.as_deref(),
-                            no_start,
-                        )
-                        .await
+                Commands::Deploy { app_name, image, sha } => {
+                    let result = api_client.deploy_app(&app_name, &image, sha.as_deref()).await?;
+                    if result.status == "succeeded" {
+                        println!("App '{}' deployed successfully (deploy {})", app_name, result.deploy_id);
+                        Ok(())
+                    } else {
+                        eprintln!(
+                            "Deploy {} failed: {}",
+                            result.deploy_id,
+                            result.error.as_deref().unwrap_or("unknown error")
+                        );
+                        std::process::exit(1);
+                    }
                 }
+                Commands::Deploys {
+                    app_name,
+                    limit,
+                    json,
+                    wait,
+                    timeout,
+                } => run_deploys(&api_client, &app_name, limit, json, wait, timeout).await,
                 Commands::Env {
                     app_name,
                     key,
@@ -392,5 +421,92 @@ pub async fn run() -> Result<()> {
                 }
             }
         }
+    }
+}
+
+/// `lh deploys <app>`: show deploy history, optionally polling until the
+/// newest deploy settles. This is the primitive CI/agents use to verify a
+/// deploy actually finished: `lh deploys <app> --wait` exits 0 on success,
+/// 1 (with the failure reason on stderr) on failure, 2 on timeout.
+async fn run_deploys(
+    api_client: &ApiClient,
+    app_name: &str,
+    limit: u32,
+    json: bool,
+    wait: bool,
+    timeout_secs: u64,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+    loop {
+        let deploys = api_client.list_deploys(app_name, limit).await?;
+
+        let settled = deploys.first().map(|d| d.status != "in_progress").unwrap_or(true);
+
+        if !wait || settled || std::time::Instant::now() >= deadline {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&deploys.iter().map(|d| {
+                    serde_json::json!({
+                        "id": d.id,
+                        "status": d.status,
+                        "image": d.image,
+                        "git_sha": d.git_sha,
+                        "error": d.error,
+                        "created_at": d.created_at,
+                        "updated_at": d.updated_at,
+                    })
+                }).collect::<Vec<_>>())?);
+            } else {
+                println!(
+                    "{:<10} {:<12} {:<12} {:<40} {}",
+                    "ID", "STATUS", "SHA", "IMAGE", "CREATED"
+                );
+                for d in &deploys {
+                    let short_id = d.id.chars().take(8).collect::<String>();
+                    let short_sha = d
+                        .git_sha
+                        .as_deref()
+                        .map(|s| s.chars().take(10).collect::<String>())
+                        .unwrap_or_else(|| "-".to_string());
+                    println!(
+                        "{:<10} {:<12} {:<12} {:<40} {}",
+                        short_id, d.status, short_sha, d.image, d.created_at
+                    );
+                }
+            }
+
+            if !wait {
+                return Ok(());
+            }
+
+            if !settled {
+                eprintln!(
+                    "Timed out after {}s waiting for deploy to finish (still in_progress)",
+                    timeout_secs
+                );
+                std::process::exit(2);
+            }
+
+            return match deploys.first() {
+                Some(d) if d.status == "succeeded" => {
+                    println!("Deploy {} succeeded", d.id);
+                    Ok(())
+                }
+                Some(d) => {
+                    eprintln!(
+                        "Deploy {} failed: {}",
+                        d.id,
+                        d.error.as_deref().unwrap_or("unknown error")
+                    );
+                    std::process::exit(1);
+                }
+                None => {
+                    eprintln!("No deploys found for app '{}'", app_name);
+                    std::process::exit(1);
+                }
+            };
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     }
 }

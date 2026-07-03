@@ -7,6 +7,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod deploy;
 pub mod github;
 pub mod install;
 pub mod models;
