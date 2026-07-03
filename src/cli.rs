@@ -754,8 +754,12 @@ async fn run_create(
             // The app already exists on the server at this point — don't
             // leave the user stranded not knowing that much succeeded.
             eprintln!(
-                "App '{}' was created on the server, but setting up {} failed: {}",
+                "App '{}' was created on the server, but setting up {} failed: {:#}",
                 create_result.name, repo, e
+            );
+            eprintln!(
+                "Hint: committing workflow files requires a GitHub token with the `workflow` \
+                 scope — if you use the gh CLI, run: gh auth refresh -h github.com -s workflow"
             );
             eprintln!("To finish manually:");
             eprintln!(
