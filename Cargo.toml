@@ -42,6 +42,7 @@ crypto_box = { version = "0.9", features = ["seal"] }
 base64 = "0.22"
 aws-sdk-s3 = "1"
 aws-credential-types = "1"
+askama = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"
