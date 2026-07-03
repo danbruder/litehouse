@@ -109,12 +109,20 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
                 let last = db::system_config::get_last_backup_date(&pool).await.ok().flatten();
                 if last.as_deref() != Some(today.as_str()) {
                     match backup::run_backup(&pool, &docker_conn).await {
-                        Ok(report) => {
+                        // Only mark the day done when *everything* succeeded:
+                        // run_backup returns Ok even when individual apps (or
+                        // the state DB) failed, and a partial backup should be
+                        // retried next hour, not counted as today's backup.
+                        Ok(report) if report.failed.is_empty() => {
                             if let Err(e) = db::system_config::set_last_backup_date(&pool, &today).await {
                                 tracing::error!("failed to record last_backup_date: {e:#}");
                             }
                             tracing::info!(?report, "daily backup complete");
                         }
+                        Ok(report) => tracing::error!(
+                            ?report,
+                            "daily backup completed with failures, will retry next hour"
+                        ),
                         Err(e) => tracing::error!("daily backup failed, will retry next hour: {e:#}"),
                     }
                 }

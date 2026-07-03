@@ -225,7 +225,11 @@ enum Commands {
     },
 
     /// Restore all apps from the newest S3 backup (disaster recovery)
-    Restore,
+    Restore {
+        /// Skip the confirmation prompt (for scripts/agents)
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -506,7 +510,22 @@ pub async fn run() -> Result<()> {
                         Ok(())
                     }
                 },
-                Commands::Restore => {
+                Commands::Restore { yes } => {
+                    if !yes {
+                        eprint!(
+                            "Restoring stops and recreates app containers from the newest S3 backup — continue? [y/N] "
+                        );
+                        use std::io::Write;
+                        std::io::stderr().flush().ok();
+                        let mut answer = String::new();
+                        std::io::stdin()
+                            .read_line(&mut answer)
+                            .context("reading confirmation")?;
+                        if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+                            eprintln!("Aborted. Re-run with --yes to skip this prompt.");
+                            std::process::exit(1);
+                        }
+                    }
                     let report = api_client.restore().await?;
                     println!("Restored {} app(s):", report.restored.len());
                     for name in &report.restored {

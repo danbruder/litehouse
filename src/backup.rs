@@ -49,6 +49,14 @@ use crate::{caddy, config, db, docker, volume};
 /// How many daily backups to retain per app / per the litehouse state DB.
 pub const RETENTION_COUNT: usize = 14;
 
+/// Process-wide backup/restore mutex. `run_backup` and `restore_all` both
+/// acquire this for their full duration so the hourly scheduler, a manual
+/// `POST /backups/run`, and a `POST /restore` can never interleave their
+/// container/volume operations (e.g. a restore stopping a container while a
+/// backup's snapshot container has its volume mounted). Callers just get
+/// serialized — the second caller waits, it doesn't error.
+static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     #[error("S3 backup configuration is not set. Run `lh server s3-config set` first.")]
@@ -465,6 +473,9 @@ fn tar_staged_dir(staged_dir: &Path, dest: &Path) -> Result<()> {
 /// recorded in the report rather than aborting the whole run.
 #[instrument(skip(pool, docker))]
 pub async fn run_backup(pool: &Pool<Sqlite>, docker: &Docker) -> Result<BackupReport> {
+    // Serialize against any concurrent backup/restore (see BACKUP_LOCK).
+    let _guard = BACKUP_LOCK.lock().await;
+
     let s3_config = db::system_config::get_s3_config(pool)
         .await?
         .ok_or(BackupError::S3ConfigMissing)?;
@@ -776,10 +787,19 @@ enum RestoreOutcome {
     Skipped(String),
 }
 
-/// Restore one app: pull its recorded image, (re)create its data volume,
-/// download+apply the newest app-data backup (if any), then start the
-/// container. Apps with no recorded image, or with an image but no app-data
-/// backup in S3, are skipped (not errored) — see [`RestoreReport`].
+/// Restore one app: pull its recorded image, download + extract its newest
+/// app-data backup (if any), then — and only then — replace the running
+/// container: stop/remove it, ensure its data volume exists (create-if-
+/// absent, existing volume contents are never wiped; the restore container
+/// overlays the backup on top), apply the backup, and start.
+///
+/// Ordering is deliberate: everything fallible-over-the-network (image
+/// pull, backup download, tarball extract) happens *before* the app's
+/// container is touched, so a failed download/extract leaves a healthy
+/// running app untouched.
+///
+/// Apps with no recorded image, or with an image but no app-data backup in
+/// S3, are skipped (not errored) — see [`RestoreReport`].
 #[instrument(skip(pool, docker, client, backups_dir, ghcr_token, app))]
 async fn restore_app(
     pool: &Pool<Sqlite>,
@@ -807,9 +827,39 @@ async fn restore_app(
         }
     };
 
+    // --- Phase 1: everything fallible, without touching the running app. ---
+
     docker::pull(docker, &image, ghcr_token)
         .await
         .context("failed to pull image")?;
+
+    let stage_dir = backups_dir.join("restore").join(&app.name);
+    let _ = std::fs::remove_dir_all(&stage_dir);
+    std::fs::create_dir_all(&stage_dir)
+        .with_context(|| format!("failed to create restore staging dir {}", stage_dir.display()))?;
+
+    let staged = async {
+        let tarball_path = stage_dir.join("backup.tar.gz");
+        download_file(client, bucket, &newest, &tarball_path)
+            .await
+            .context("failed to download app data backup")?;
+        extract_outer_tarball(&tarball_path, &stage_dir)?;
+        let _ = std::fs::remove_file(&tarball_path);
+        volume::discover_image_user(docker, &image)
+            .await
+            .context("failed to discover image user")
+    }
+    .await;
+    let uid_gid = match staged {
+        Ok(uid_gid) => uid_gid,
+        Err(e) => {
+            // Nothing has been stopped or modified yet — a healthy app stays up.
+            let _ = std::fs::remove_dir_all(&stage_dir);
+            return Err(e);
+        }
+    };
+
+    // --- Phase 2: the backup is staged locally; now replace the container. ---
 
     // If the app's container is already running (e.g. this is a second,
     // idempotent `restore_all` run, or the app never actually went down),
@@ -818,32 +868,23 @@ async fn restore_app(
     // final `start_container` below (which enforces a single-writer
     // guarantee) doesn't collide with the very container it's replacing.
     // Mirrors `deploy::do_deploy`'s unconditional replace.
-    docker::stop_and_remove_container(docker, &app.name)
-        .await
-        .context("failed to stop existing container before restore")?;
+    let replace = async {
+        docker::stop_and_remove_container(docker, &app.name)
+            .await
+            .context("failed to stop existing container before restore")?;
 
-    volume::create_app_volume(docker, &app.id)
-        .await
-        .context("failed to create app volume")?;
+        // Create-if-absent: if the volume survived the disaster (or this is a
+        // rerun) it is reused as-is — never wiped — and the restore container
+        // overlays the backup's files/DBs on top of whatever is in it.
+        volume::create_app_volume(docker, &app.id)
+            .await
+            .context("failed to create app volume")?;
 
-    let stage_dir = backups_dir.join("restore").join(&app.name);
+        run_restore_container(docker, &app.id, &stage_dir, uid_gid).await
+    }
+    .await;
     let _ = std::fs::remove_dir_all(&stage_dir);
-    std::fs::create_dir_all(&stage_dir)
-        .with_context(|| format!("failed to create restore staging dir {}", stage_dir.display()))?;
-
-    let tarball_path = stage_dir.join("backup.tar.gz");
-    download_file(client, bucket, &newest, &tarball_path)
-        .await
-        .context("failed to download app data backup")?;
-    extract_outer_tarball(&tarball_path, &stage_dir)?;
-    let _ = std::fs::remove_file(&tarball_path);
-
-    let uid_gid = volume::discover_image_user(docker, &image)
-        .await
-        .context("failed to discover image user")?;
-    let restore_result = run_restore_container(docker, &app.id, &stage_dir, uid_gid).await;
-    let _ = std::fs::remove_dir_all(&stage_dir);
-    restore_result?;
+    replace?;
 
     start_container(pool, docker, app, &image)
         .await
@@ -855,11 +896,15 @@ async fn restore_app(
 /// Full disaster-recovery restore from S3: download the newest litehouse
 /// state DB snapshot, merge its `app`/`env_var` rows into the live DB
 /// (never clobbering existing local rows — see [`copy_apps_from_snapshot`]),
-/// then for every app with a recorded image, pull it, recreate its volume,
+/// then for every app with a recorded image, pull it, ensure its volume
+/// exists (create-if-absent — an existing volume is reused, never wiped),
 /// restore its newest app-data backup (if any), and start it. Finishes with
 /// one Caddy sync. Idempotent: safe to run repeatedly.
 #[instrument(skip(pool, docker))]
 pub async fn restore_all(pool: &Pool<Sqlite>, docker: &Docker) -> Result<RestoreReport> {
+    // Serialize against any concurrent backup/restore (see BACKUP_LOCK).
+    let _guard = BACKUP_LOCK.lock().await;
+
     let s3_config = db::system_config::get_s3_config(pool)
         .await?
         .ok_or(BackupError::S3ConfigMissing)?;
@@ -1005,6 +1050,29 @@ mod tests {
     #[test]
     fn newest_key_empty() {
         assert_eq!(newest_key(&[]), None);
+    }
+
+    #[test]
+    fn snapshot_script_escapes_filenames_for_sql() {
+        let script = snapshot_script();
+        // Discovered filenames ($f) must be run through the sed
+        // quote-doubling pipeline before being spliced into the
+        // `VACUUM INTO '...'` SQL literal — a filename containing a `'`
+        // could otherwise break out of the literal.
+        assert!(
+            script.contains(r#"esc=$(printf '%s' "$f" | sed "s/'/''/g")"#),
+            "snapshot script must SQL-escape $f via the sed doubling pipeline:\n{script}"
+        );
+        // ...and the VACUUM INTO destination must use the escaped variable,
+        // never the raw filename.
+        assert!(
+            script.contains(r#""VACUUM INTO '/backup/dbs/$esc'""#),
+            "VACUUM INTO must use $esc, not raw $f:\n{script}"
+        );
+        assert!(
+            !script.contains("VACUUM INTO '/backup/dbs/$f'"),
+            "raw $f must not appear inside the SQL literal:\n{script}"
+        );
     }
 
     #[test]
@@ -1194,6 +1262,11 @@ mod integration_tests {
             report.succeeded,
             report.failed
         );
+        assert!(
+            !report.failed.iter().any(|(name, _)| name == app_name),
+            "app backup must not fail (incl. the single-quote-named DB): {:?}",
+            report.failed
+        );
 
         // Verify the object landed in S3. `save_s3_config`/`SystemConfig`
         // defaults an unset `path_prefix` to "litehouse", so re-read the
@@ -1238,6 +1311,16 @@ mod integration_tests {
 
         let conn = rusqlite_check(&db_path);
         assert_eq!(conn, 1, "expected the seeded row to survive the backup");
+
+        // The single-quote-named DB must also have been snapshotted (the
+        // report already asserted no failures above; this confirms the file
+        // itself made it through the VACUUM INTO escaping + tarball).
+        let quoted_db_path = extract_dir.join("dbs").join("it's.db");
+        assert!(
+            quoted_db_path.exists(),
+            "expected {} to exist — single-quote filename must survive the snapshot script",
+            quoted_db_path.display()
+        );
 
         // Cleanup.
         let _ = std::process::Command::new("docker")
@@ -1289,7 +1372,10 @@ mod integration_tests {
             )
             .await;
 
-        let script = "sqlite3 /data/app.db \"CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t DEFAULT VALUES;\"";
+        // Also seed a DB whose filename contains a single quote: a hostile/
+        // awkward name like this must not break the snapshot script's
+        // `VACUUM INTO '...'` SQL literal (see snapshot_script's escaping).
+        let script = r#"sqlite3 /data/app.db "CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t DEFAULT VALUES;" && sqlite3 "/data/it's.db" "CREATE TABLE q (id INTEGER PRIMARY KEY); INSERT INTO q DEFAULT VALUES;""#;
         let container_config = ContainerConfig {
             image: Some("keinos/sqlite3:latest".to_string()),
             entrypoint: Some(vec!["sh".to_string()]),

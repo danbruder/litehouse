@@ -976,9 +976,14 @@ async fn run_backup_now(State(state): State<Arc<RwLock<AppState>>>) -> impl Into
 
     match crate::backup::run_backup(&pool, &docker).await {
         Ok(report) => {
-            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-            if let Err(e) = db_system_config::set_last_backup_date(&pool, &today).await {
-                tracing::warn!("failed to record last_backup_date after manual run: {e:#}");
+            // Same gate as the hourly scheduler: a run with any failures
+            // doesn't count as "today's backup done" — the scheduler should
+            // still retry it next hour.
+            if report.failed.is_empty() {
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                if let Err(e) = db_system_config::set_last_backup_date(&pool, &today).await {
+                    tracing::warn!("failed to record last_backup_date after manual run: {e:#}");
+                }
             }
             Json(report).into_response()
         }
