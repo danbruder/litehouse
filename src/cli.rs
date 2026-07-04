@@ -381,7 +381,17 @@ pub async fn run() -> Result<()> {
                 Commands::Start { app_name } => api_client.start_app(&app_name).await,
                 Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
                 Commands::Restart { app_name } => {
-                    println!("Restarting not implemented for app: {}", app_name);
+                    api_client.stop_app(&app_name).await.map_err(|e| {
+                        anyhow!("Failed to stop app '{}' during restart: {}", app_name, e)
+                    })?;
+                    api_client.start_app(&app_name).await.map_err(|e| {
+                        anyhow!(
+                            "App '{}' was stopped but failed to start during restart: {}",
+                            app_name,
+                            e
+                        )
+                    })?;
+                    println!("App '{}' restarted", app_name);
                     Ok(())
                 }
                 Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
