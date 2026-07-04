@@ -81,34 +81,71 @@ fn download_binary(version: Option<&str>, log_window: Option<&ProgressBar>) -> R
     Ok(binary_path)
 }
 
-/// Installs the new binary to /usr/local/bin/lh
+/// Target path for the installed `lh` binary.
+const INSTALL_PATH: &str = "/usr/local/bin/lh";
+
+/// Builds the shell commands that stage a new binary at `staging_path`
+/// (on the same filesystem as `install_path`) and then atomically rename
+/// it over `install_path`.
+///
+/// Renaming over a running executable is safe on Linux: `rename(2)` just
+/// repoints the directory entry to the new inode, while any process that
+/// already has the old binary open (e.g. the currently-running `lh
+/// upgrade`) keeps running against the old inode until it exits. This
+/// sidesteps `ETXTBSY` ("Text file busy"), which is what an in-place `cp`
+/// over the running binary triggers.
+fn stage_and_rename_commands(source_path: &str, install_path: &str, staging_path: &str) -> Vec<String> {
+    vec![
+        format!("cp '{}' '{}'", source_path, staging_path),
+        format!("chmod +x '{}'", staging_path),
+        format!("mv '{}' '{}'", staging_path, install_path),
+    ]
+}
+
+/// Installs the new binary to /usr/local/bin/lh using a stage-then-atomic-
+/// rename strategy so the currently-running `lh upgrade` process (which has
+/// the old binary open) is never overwritten in place.
 fn install_binary(binary_path: &str, log_window: Option<&ProgressBar>) -> Result<()> {
     if let Some(pb) = log_window {
         pb.set_message("Installing new binary...");
     }
     info!(
-        "Installing binary from {} to /usr/local/bin/lh",
-        binary_path
+        "Installing binary from {} to {}",
+        binary_path, INSTALL_PATH
     );
 
-    // Backup current binary
-    run_command("cp /usr/local/bin/lh /usr/local/bin/lh.backup 2>/dev/null || true")?;
+    let staging_path = format!("{}.new", INSTALL_PATH);
 
-    // Install new binary
-    run_command(&format!("cp '{}' /usr/local/bin/lh", binary_path))?;
-    run_command("chmod +x /usr/local/bin/lh")?;
+    // Backup current binary
+    run_command(&format!(
+        "cp {} {}.backup 2>/dev/null || true",
+        INSTALL_PATH, INSTALL_PATH
+    ))?;
+
+    // Stage the new binary next to the target (same filesystem) and
+    // atomically rename it into place.
+    for cmd in stage_and_rename_commands(binary_path, INSTALL_PATH, &staging_path) {
+        if let Err(e) = run_command(&cmd) {
+            // Clean up any partially-staged file before bailing.
+            run_command(&format!("rm -f '{}'", staging_path)).ok();
+            return Err(e);
+        }
+    }
 
     // Verify it works
-    match run_command("/usr/local/bin/lh --version") {
+    match run_command(&format!("{} --version", INSTALL_PATH)) {
         Ok(version) => {
             info!("Installed version: {}", version.trim());
             // Remove backup
-            run_command("rm -f /usr/local/bin/lh.backup")?;
+            run_command(&format!("rm -f {}.backup", INSTALL_PATH))?;
             Ok(())
         }
         Err(e) => {
             // Restore backup
-            run_command("mv /usr/local/bin/lh.backup /usr/local/bin/lh 2>/dev/null || true")?;
+            run_command(&format!(
+                "mv {}.backup {} 2>/dev/null || true",
+                INSTALL_PATH, INSTALL_PATH
+            ))?;
             anyhow::bail!("New binary failed verification, restored backup: {}", e)
         }
     }
@@ -195,28 +232,22 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
     };
     pb.inc(1);
 
-    // Phase 2: Install new binary
-    pb.set_message("Installing new binary...");
-    if let Err(e) = install_binary(&binary_path, Some(&log_window)) {
-        pb.finish_with_message("❌ Installation failed");
-        if from_path.is_none() {
-            cleanup_temp_dir(&binary_path).ok();
-        }
-        return Err(e);
-    }
-    pb.inc(1);
-
-    // Get new version
-    let new_version = run_command("/usr/local/bin/lh --version 2>&1 || echo 'unknown'")
+    // Get the version reported by the *downloaded* binary directly (without
+    // installing it yet), so we know which image tag to pull even though
+    // the host binary install now happens last.
+    let new_version = run_command(&format!("'{}' --version 2>&1 || echo 'unknown'", binary_path))
         .unwrap_or_else(|_| "unknown".to_string());
     info!("New version: {}", new_version.trim());
 
-    // Cleanup temp directory (only if we downloaded)
-    if from_path.is_none() {
-        cleanup_temp_dir(&binary_path).ok();
-    }
-
-    // Phase 3: Pull the matching litehouse-server image from GHCR
+    // Phase 2: Pull the matching litehouse-server image from GHCR
+    //
+    // This is deliberately done *before* the host binary install (see
+    // below). If the binary-install step ever fails partway through, we
+    // still want the container running the new image - an upgrade that
+    // updates the container but not the host CLI is far less bad than one
+    // that aborts before the container is touched at all, which is what
+    // used to leave the server stuck on an old image after a failed
+    // install.
     pb.set_message("Pulling litehouse container image...");
     log_window.set_message("Pulling new container image...");
 
@@ -234,30 +265,110 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
         Ok(tag) => tag,
         Err(e) => {
             pb.finish_with_message("❌ Image pull failed");
+            if from_path.is_none() {
+                cleanup_temp_dir(&binary_path).ok();
+            }
             return Err(e);
         }
     };
     pb.inc(1);
 
-    // Phase 4: Restart litehouse-server container
+    // Phase 3: Restart litehouse-server container
     pb.set_message("Restarting litehouse-server container...");
     log_window.set_message("Restarting container...");
 
     if let Err(e) = phase9b_start_litehouse_container(&litehouse_uid, &image_tag) {
         pb.finish_with_message("❌ Container restart failed");
+        if from_path.is_none() {
+            cleanup_temp_dir(&binary_path).ok();
+        }
         return Err(e);
     }
     pb.inc(1);
 
-    pb.finish_with_message("✅ Upgrade completed successfully!");
+    // Phase 4: Install the new host binary. The container is already
+    // running the new image at this point, so a failure here is logged as
+    // a warning rather than aborting the upgrade - the server itself is
+    // already upgraded, and the operator can retry `lh upgrade` (or copy
+    // the binary manually) without the container being stuck on the old
+    // image.
+    pb.set_message("Installing new binary on host...");
+    let binary_install_warning = match install_binary(&binary_path, Some(&log_window)) {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::warn!("Host binary install failed (container already upgraded): {}", e);
+            Some(e.to_string())
+        }
+    };
+    pb.inc(1);
+
+    // Cleanup temp directory (only if we downloaded)
+    if from_path.is_none() {
+        cleanup_temp_dir(&binary_path).ok();
+    }
+
+    if binary_install_warning.is_some() {
+        pb.finish_with_message("⚠️  Upgrade completed with a warning");
+    } else {
+        pb.finish_with_message("✅ Upgrade completed successfully!");
+    }
     log_window.finish_and_clear();
 
     // Print success message
     println!("\n{}", "=".repeat(60));
-    println!("✓ litehouse upgraded successfully");
+    if let Some(warning) = &binary_install_warning {
+        println!("⚠ litehouse-server container upgraded, but host binary install failed");
+        println!("  Error: {}", warning);
+        println!("  The container is running the new version; re-run `lh upgrade` to retry the host binary.");
+    } else {
+        println!("✓ litehouse upgraded successfully");
+    }
     println!("  Previous: {}", current_version.trim());
     println!("  Current:  {}", new_version.trim());
     println!("{}", "=".repeat(60));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stage_and_rename_stages_on_same_filesystem_and_renames_over_target() {
+        let cmds = stage_and_rename_commands(
+            "/tmp/new-lh",
+            "/usr/local/bin/lh",
+            "/usr/local/bin/lh.new",
+        );
+
+        assert_eq!(
+            cmds,
+            vec![
+                "cp '/tmp/new-lh' '/usr/local/bin/lh.new'".to_string(),
+                "chmod +x '/usr/local/bin/lh.new'".to_string(),
+                "mv '/usr/local/bin/lh.new' '/usr/local/bin/lh'".to_string(),
+            ]
+        );
+
+        // The staging path must live in the same directory as the install
+        // path, otherwise the final `mv` could cross filesystems and stop
+        // being an atomic rename.
+        let staging_dir = std::path::Path::new(&cmds[0])
+            .to_string_lossy()
+            .to_string();
+        assert!(staging_dir.contains("/usr/local/bin/"));
+    }
+
+    #[test]
+    fn parse_version_extracts_trailing_semver() {
+        assert_eq!(parse_version("lh 0.1.34"), "0.1.34");
+        assert_eq!(parse_version("litehouse 1.2.3-beta"), "1.2.3-beta");
+    }
+
+    #[test]
+    fn parse_version_falls_back_to_latest_on_garbage() {
+        assert_eq!(parse_version("unknown"), "latest");
+        assert_eq!(parse_version(""), "latest");
+    }
 }
