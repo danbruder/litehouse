@@ -35,11 +35,37 @@ pub async fn connect() -> Result<Docker> {
     Ok(docker)
 }
 
+/// Pick the HTTP-facing port from a set of EXPOSEd ports.
+///
+/// Only considers TCP ports (keys ending in "/tcp", or a bare port with no
+/// "/" since Docker defaults to tcp) — UDP ports (e.g. WebRTC media ports)
+/// must never be routed to by Caddy as an HTTP upstream. Among the TCP
+/// candidates, picks the lowest numeric port for determinism (HashMap
+/// iteration order is not stable). Falls back to "3000" if there are no
+/// TCP ports.
+fn pick_http_port<'a>(exposed: impl Iterator<Item = &'a String>) -> String {
+    exposed
+        .filter_map(|key| {
+            let (port_str, proto) = match key.split_once('/') {
+                Some((p, proto)) => (p, proto),
+                None => (key.as_str(), "tcp"),
+            };
+            if proto != "tcp" {
+                return None;
+            }
+            port_str.parse::<u32>().ok()
+        })
+        .min()
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "3000".to_string())
+}
+
 /// Get the exposed port from a Docker image
 ///
-/// Inspects the Docker image and returns the first exposed port.
-/// Defaults to "3000" if no EXPOSE directive is found.
-/// Strips the "/tcp" suffix for a clean port number.
+/// Inspects the Docker image and returns the lowest EXPOSEd TCP port.
+/// Defaults to "3000" if no TCP EXPOSE directive is found. UDP-only ports
+/// (e.g. WebRTC media ranges) are never selected, since this port becomes
+/// Caddy's HTTP upstream.
 #[instrument]
 pub async fn get_exposed_port(image_tag: &str) -> Result<String> {
     let docker = connect().await?;
@@ -50,13 +76,7 @@ pub async fn get_exposed_port(image_tag: &str) -> Result<String> {
         .and_then(|c| c.exposed_ports)
         .unwrap_or_default();
 
-    // Get the first exposed port, or default to 3000
-    let port = if let Some(port_key) = exposed_ports.keys().next() {
-        // Strip the "/tcp" suffix
-        port_key.split('/').next().unwrap_or("3000").to_string()
-    } else {
-        "3000".to_string()
-    };
+    let port = pick_http_port(exposed_ports.keys());
 
     info!("Detected exposed port {} for image {}", port, image_tag);
     Ok(port)
@@ -279,11 +299,6 @@ pub async fn remove(tag: &str) -> Result<()> {
             Err(e.into())
         }
     }
-}
-
-#[instrument]
-pub async fn logs(app_name: &str, lines: usize, follow: bool) -> Result<()> {
-    todo!("implement non-streaming logs");
 }
 
 #[instrument]
@@ -639,6 +654,34 @@ mod tests {
     use super::test_helpers::{cleanup_container, is_container_started};
     use super::*;
     use anyhow::Result;
+
+    #[test]
+    fn pick_http_port_prefers_tcp_over_udp() {
+        let ports = vec![
+            "4000/tcp".to_string(),
+            "50000/udp".to_string(),
+            "50099/udp".to_string(),
+        ];
+        assert_eq!(pick_http_port(ports.iter()), "4000");
+    }
+
+    #[test]
+    fn pick_http_port_picks_lowest_tcp_port() {
+        let ports = vec!["8080/tcp".to_string(), "3000/tcp".to_string()];
+        assert_eq!(pick_http_port(ports.iter()), "3000");
+    }
+
+    #[test]
+    fn pick_http_port_falls_back_when_only_udp() {
+        let ports = vec!["50000/udp".to_string()];
+        assert_eq!(pick_http_port(ports.iter()), "3000");
+    }
+
+    #[test]
+    fn pick_http_port_falls_back_when_empty() {
+        let ports: Vec<String> = vec![];
+        assert_eq!(pick_http_port(ports.iter()), "3000");
+    }
 
     // `run()` always sets the container restart policy to `always` (production
     // behavior, not test-configurable). `alpine:latest`'s default command
