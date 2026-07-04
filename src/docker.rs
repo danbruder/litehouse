@@ -539,6 +539,52 @@ pub async fn stop_and_remove_container(docker: &Docker, app_name: &str) -> Resul
     Ok(())
 }
 
+/// Map a raw Docker container status string (from Bollard's
+/// `ContainerStateStatusEnum` / `docker inspect`) to an [`AppState`] for
+/// display purposes.
+///
+/// "running" → Running; everything else ("exited", "created", "paused",
+/// "dead", "restarting", or an absent container) → Stopped. This is a
+/// read-through mapping: it reflects the live container, not the desired
+/// state stored in the DB.
+fn map_docker_status(status: &str) -> crate::models::AppState {
+    match status {
+        "running" => crate::models::AppState::Running,
+        _ => crate::models::AppState::Stopped,
+    }
+}
+
+/// Inspect the live Docker container backing `app_name` and return its
+/// current [`AppState`].
+///
+/// The container name follows the `{app-name}-container` convention. A
+/// missing container (404) maps to `Stopped`, matching the behavior of a
+/// container that has exited. Any other Docker error is propagated.
+#[instrument]
+pub async fn live_state(app_name: &str) -> Result<crate::models::AppState> {
+    let docker = connect().await?;
+    let container_name = format!("{}-container", app_name);
+
+    match docker.inspect_container(&container_name, None).await {
+        Ok(inspect) => {
+            let status = inspect
+                .state
+                .and_then(|s| s.status)
+                .map(|s| s.as_ref().to_lowercase())
+                .unwrap_or_default();
+            Ok(map_docker_status(&status))
+        }
+        Err(e) => {
+            // 404 = no such container → treat as stopped.
+            if e.to_string().contains("404") {
+                Ok(crate::models::AppState::Stopped)
+            } else {
+                Err(e.into())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_helpers {
     use anyhow::Result;
@@ -654,6 +700,25 @@ mod tests {
     use super::test_helpers::{cleanup_container, is_container_started};
     use super::*;
     use anyhow::Result;
+
+    #[test]
+    fn map_docker_status_running_is_running() {
+        assert_eq!(
+            map_docker_status("running"),
+            crate::models::AppState::Running
+        );
+    }
+
+    #[test]
+    fn map_docker_status_non_running_is_stopped() {
+        for s in ["exited", "created", "paused", "dead", "restarting", ""] {
+            assert_eq!(
+                map_docker_status(s),
+                crate::models::AppState::Stopped,
+                "status {s:?} should map to Stopped"
+            );
+        }
+    }
 
     #[test]
     fn pick_http_port_prefers_tcp_over_udp() {

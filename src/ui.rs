@@ -294,7 +294,13 @@ async fn apps_index(State(state): State<Arc<RwLock<AppState>>>) -> Response {
             Err(_) => "unknown".to_string(),
         };
 
-        let state_str = app.state.to_string();
+        // Read-through: reflect the live Docker container state rather than
+        // the (possibly stale) cached DB column. Fall back to the cached
+        // desired state if Docker can't be reached.
+        let live = crate::docker::live_state(&app.name)
+            .await
+            .unwrap_or(app.state);
+        let state_str = live.to_string();
         let state_class = state_str.clone();
         rows.push(AppRow {
             name: app.name.clone(),
