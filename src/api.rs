@@ -1,6 +1,7 @@
 use crate::commands::app_env;
 use crate::commands::create;
 use crate::commands::delete;
+use crate::commands::domain;
 use crate::commands::logs;
 use crate::commands::server::AppState;
 use crate::commands::{start, stop};
@@ -43,6 +44,9 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/deploys", get(list_deploys))
         .route("/apps/:name/env", post(set_env))
         .route("/apps/:name/env", get(get_env))
+        .route("/apps/:name/domains", get(list_domains))
+        .route("/apps/:name/domains", post(add_domain))
+        .route("/apps/:name/domains", delete(remove_domain))
         .route("/docker/version", get(get_docker_version))
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
@@ -792,6 +796,110 @@ async fn set_env(
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to set environment variable: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AddDomainRequest {
+    domain: String,
+}
+
+/// `GET /api/apps/:name/domains` — list an app's custom top-level domains.
+#[instrument(skip(state))]
+async fn list_domains(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    match domain::list(&pool, &name).await {
+        Ok(domains) => Json(domains).into_response(),
+        Err(domain::DomainError::AppNotFound(_)) => (
+            axum::http::StatusCode::NOT_FOUND,
+            format!("App '{}' not found", name),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list domains for app '{}': {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list domains: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `POST /api/apps/:name/domains` — add a custom top-level domain to an
+/// app's Caddy route (alongside its derived `{name}.{server_domain}` host)
+/// and resync Caddy.
+#[instrument(skip(state, payload))]
+async fn add_domain(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Json(payload): Json<AddDomainRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    match domain::add(&pool, &docker, &name, &payload.domain).await {
+        Ok(_) => (
+            axum::http::StatusCode::OK,
+            format!("Domain '{}' added to app '{}'", payload.domain, name),
+        )
+            .into_response(),
+        Err(domain::DomainError::AppNotFound(_)) => (
+            axum::http::StatusCode::NOT_FOUND,
+            format!("App '{}' not found", name),
+        )
+            .into_response(),
+        Err(e @ domain::DomainError::InvalidDomain(_)) => {
+            (axum::http::StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to add domain '{}' to app '{}': {}", payload.domain, name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to add domain: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `DELETE /api/apps/:name/domains` — remove a custom top-level domain from
+/// an app's Caddy route and resync Caddy.
+#[instrument(skip(state, payload))]
+async fn remove_domain(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Json(payload): Json<AddDomainRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let docker = state.read().await.docker.clone();
+
+    match domain::remove(&pool, &docker, &name, &payload.domain).await {
+        Ok(_) => (
+            axum::http::StatusCode::OK,
+            format!("Domain '{}' removed from app '{}'", payload.domain, name),
+        )
+            .into_response(),
+        Err(domain::DomainError::AppNotFound(_)) => (
+            axum::http::StatusCode::NOT_FOUND,
+            format!("App '{}' not found", name),
+        )
+            .into_response(),
+        Err(e @ domain::DomainError::DomainNotFound(_, _)) => {
+            (axum::http::StatusCode::NOT_FOUND, e.to_string()).into_response()
+        }
+        Err(e) => {
+            tracing::error!("Failed to remove domain '{}' from app '{}': {}", payload.domain, name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to remove domain: {}", e),
             )
                 .into_response()
         }

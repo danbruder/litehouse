@@ -236,6 +236,36 @@ enum Commands {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+
+    /// Manage custom top-level domains routed to an app (in addition to its
+    /// derived `{name}.{server_domain}` host)
+    Domain {
+        #[command(subcommand)]
+        command: DomainCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum DomainCmd {
+    /// Route a custom domain to an app's existing container
+    Add {
+        /// Name of the app
+        app_name: String,
+        /// Domain to route, e.g. familyquotes.app
+        domain: String,
+    },
+    /// Stop routing a custom domain to an app
+    Rm {
+        /// Name of the app
+        app_name: String,
+        /// Domain to remove
+        domain: String,
+    },
+    /// List the custom domains configured for an app
+    List {
+        /// Name of the app
+        app_name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -557,6 +587,41 @@ pub async fn run() -> Result<()> {
                     }
                     Ok(())
                 }
+                Commands::Domain { command } => match command {
+                    DomainCmd::Add { app_name, domain } => {
+                        if !crate::models::is_valid_domain(&domain) {
+                            return Err(anyhow!(
+                                "Invalid domain '{}': domains must be lowercase, contain a '.', \
+                                 and have no scheme, path, or spaces.",
+                                domain
+                            ));
+                        }
+                        api_client.add_domain(&app_name, &domain).await?;
+                        println!("Domain '{}' routed to app '{}'.", domain, app_name);
+                        println!(
+                            "Create an A record: {} -> <server IP>; if on Cloudflare, set it \
+                             DNS-only (grey cloud) so Let's Encrypt HTTP-01 validation succeeds.",
+                            domain
+                        );
+                        Ok(())
+                    }
+                    DomainCmd::Rm { app_name, domain } => {
+                        api_client.remove_domain(&app_name, &domain).await?;
+                        println!("Domain '{}' removed from app '{}'.", domain, app_name);
+                        Ok(())
+                    }
+                    DomainCmd::List { app_name } => {
+                        let domains = api_client.list_domains(&app_name).await?;
+                        if domains.is_empty() {
+                            println!("No custom domains configured for app '{}'.", app_name);
+                        } else {
+                            for d in domains {
+                                println!("{}", d);
+                            }
+                        }
+                        Ok(())
+                    }
+                },
                 Commands::Install { .. }
                 | Commands::Upgrade { .. }
                 | Commands::Serve

@@ -20,6 +20,11 @@ pub struct App {
     pub image: Option<String>,
     pub exposed_port: Option<String>,
     pub deploy_token_hash: Option<String>,
+    /// JSON array of custom top-level domains routed to this app in
+    /// addition to the derived `{name}.{server_domain}` host (e.g.
+    /// `["familyquotes.app", "www.familyquotes.app"]`). NULL/empty means
+    /// no custom domains.
+    pub custom_domains: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +33,10 @@ pub enum AppError {
         "Invalid app name: {0}. App names must be lowercase alphanumeric with optional hyphens or underscores."
     )]
     InvalidName(String),
+    #[error(
+        "Invalid domain: {0}. Domains must be lowercase, contain a '.', and have no scheme, path, or spaces."
+    )]
+    InvalidDomain(String),
 }
 
 impl App {
@@ -50,6 +59,7 @@ impl App {
             image: None,
             exposed_port: None,
             deploy_token_hash: None,
+            custom_domains: None,
         })
     }
 
@@ -72,6 +82,7 @@ impl App {
             image: None,
             exposed_port: None,
             deploy_token_hash: None,
+            custom_domains: None,
         })
     }
 
@@ -90,6 +101,35 @@ impl App {
         self.updated_at = now();
         self
     }
+
+    /// Parse `custom_domains` (a JSON array of hostnames) into a `Vec`.
+    /// Returns an empty vec on NULL or a parse error rather than failing —
+    /// a malformed column should degrade to "no custom domains" instead of
+    /// breaking Caddy sync.
+    pub fn custom_domains_list(&self) -> Vec<String> {
+        match &self.custom_domains {
+            Some(json) => serde_json::from_str(json).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+}
+
+/// Validate a custom domain hostname: must contain a '.', be lowercase,
+/// and have no scheme, path, or whitespace.
+pub fn is_valid_domain(domain: &str) -> bool {
+    if domain.is_empty() || !domain.contains('.') {
+        return false;
+    }
+    if domain != domain.to_lowercase() {
+        return false;
+    }
+    if domain.contains("://") || domain.contains('/') || domain.chars().any(char::is_whitespace) {
+        return false;
+    }
+    // Reasonable hostname character set: alphanumerics, '.', '-'.
+    domain
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
 /// Validate app name

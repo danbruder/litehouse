@@ -279,6 +279,51 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Add a custom top-level domain to an app's Caddy route.
+    pub async fn add_domain(&self, app_name: &str, domain: &str) -> Result<()> {
+        let url = format!("{}/apps/{}/domains", self.config.base_url, app_name);
+        let payload = serde_json::json!({ "domain": domain });
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        Ok(())
+    }
+
+    /// Remove a custom top-level domain from an app's Caddy route.
+    pub async fn remove_domain(&self, app_name: &str, domain: &str) -> Result<()> {
+        let url = format!("{}/apps/{}/domains", self.config.base_url, app_name);
+        let payload = serde_json::json!({ "domain": domain });
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        Ok(())
+    }
+
+    /// List an app's custom top-level domains.
+    pub async fn list_domains(&self, app_name: &str) -> Result<Vec<String>> {
+        let url = format!("{}/apps/{}/domains", self.config.base_url, app_name);
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
+    }
+
     pub async fn get_status(&self, app_name: Option<&str>) -> Result<()> {
         let url = match app_name {
             Some(name) => format!("{}/apps/{}", self.config.base_url, name),

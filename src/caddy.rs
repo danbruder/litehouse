@@ -708,12 +708,18 @@ async fn build_caddy_config(
             }
         };
 
+        // Custom top-level domains (e.g. "familyquotes.app") route to the
+        // same upstream as the derived host -- one route, one container.
+        // Caddy's automatic HTTPS provisions a cert per host in the list.
+        let mut hosts = vec![host];
+        hosts.extend(app.custom_domains_list());
+
         // Use container name for Docker network routing (works on Linux servers)
         // Apps run in containers named {app-name}-container on the same Docker network
         let upstream = format!("{}-container:{}", app.name, port);
 
         let route = Route {
-            match_rules: vec![HostMatcher { host: vec![host] }],
+            match_rules: vec![HostMatcher { host: hosts }],
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream { dial: upstream }],
@@ -907,6 +913,50 @@ mod tests {
             json.contains("admin.s.danbruder.com") && json.contains("litehouse-server:3030"),
             "expected default admin route in config: {json}"
         );
+    }
+
+    #[tokio::test]
+    async fn custom_domain_shares_route_and_upstream_with_derived_host() {
+        let mut app = deployed_app("myapp", Some("8080"));
+        app.custom_domains =
+            Some(serde_json::to_string(&vec!["familyquotes.app", "www.familyquotes.app"]).unwrap());
+
+        let config = build_caddy_config(vec![app], false, Some("s.danbruder.com"), "admin")
+            .await
+            .expect("config should build");
+
+        let server = config
+            .apps
+            .http
+            .servers
+            .get("app_proxy")
+            .expect("app_proxy server present");
+
+        let route = server
+            .routes
+            .iter()
+            .find(|r| {
+                r.match_rules
+                    .iter()
+                    .any(|m| m.host.iter().any(|h| h == "myapp.s.danbruder.com"))
+            })
+            .expect("route for myapp should exist");
+
+        let hosts = &route.match_rules[0].host;
+        assert!(
+            hosts.contains(&"myapp.s.danbruder.com".to_string()),
+            "hosts: {hosts:?}"
+        );
+        assert!(
+            hosts.contains(&"familyquotes.app".to_string()),
+            "hosts: {hosts:?}"
+        );
+        assert!(
+            hosts.contains(&"www.familyquotes.app".to_string()),
+            "hosts: {hosts:?}"
+        );
+
+        assert_eq!(route.handle[0].upstreams[0].dial, "myapp-container:8080");
     }
 
     #[tokio::test]

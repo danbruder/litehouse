@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT OR IGNORE INTO app (\n                id, name, port, organization_id, created_at, updated_at, state,\n                repo, image, exposed_port, deploy_token_hash, custom_domains\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "638f73163638c1cff4e170ea7270d0c99599ce29b91cc567928c58a844389968"
+}
