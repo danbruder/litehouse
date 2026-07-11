@@ -40,6 +40,10 @@
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
       <button type="submit">Restart</button>
     </form>
+    <form class="inline" method="post" action="/apps/{{ app_name }}/redeploy">
+      <input type="hidden" name="next" value="/apps/{{ app_name }}">
+      <button type="submit">Redeploy</button>
+    </form>
   </p>
 </div>
 

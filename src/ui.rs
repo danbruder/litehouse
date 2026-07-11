@@ -262,6 +262,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/start", post(start_app_ui))
         .route("/apps/:name/stop", post(stop_app_ui))
         .route("/apps/:name/restart", post(restart_app_ui))
+        .route("/apps/:name/redeploy", post(redeploy_app_ui))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -478,6 +479,38 @@ async fn restart_app_ui(
         Some("restart-failed")
     } else {
         None
+    };
+    redirect_after_action(next.as_deref(), error)
+}
+
+async fn redeploy_app_ui(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    form: Option<Form<ActionForm>>,
+) -> impl IntoResponse {
+    let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
+    let (pool, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone())
+    };
+
+    let image = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app.image,
+        _ => None,
+    };
+    let Some(image) = image else {
+        return redirect_after_action(next.as_deref(), Some("no-image"));
+    };
+
+    // deploy_app records success/failure in the deploy table; the detail
+    // page's deploy history is the primary feedback channel, so only a
+    // failure to even start the deploy warrants a flash.
+    let error = match crate::deploy::deploy_app(&pool, &docker, &name, &image, None).await {
+        Ok(_) => None,
+        Err(e) => {
+            tracing::error!("ui: failed to redeploy app '{}': {}", name, e);
+            Some("redeploy-failed")
+        }
     };
     redirect_after_action(next.as_deref(), error)
 }
@@ -1029,6 +1062,38 @@ mod tests {
         assert_eq!(
             response.headers().get(header::LOCATION).unwrap(),
             "/apps/whatever?flash=restart-failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn redeploy_app_without_image_redirects_with_no_image_flash() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("noimage-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/noimage-app/redeploy")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("next=/apps/noimage-app"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/apps/noimage-app?flash=no-image"
         );
     }
 
