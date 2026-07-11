@@ -12,7 +12,13 @@
   <span class="muted">{{ backups_summary }}</span>
 </div>
 
-<table>
+{% if apps.is_empty() %}
+<div class="card">
+  <p>No apps yet.</p>
+  <p class="muted">Run <code>lh create &lt;app&gt; --repo owner/name</code>, then <code>git push</code> to deploy.</p>
+</div>
+{% else %}
+<table {% if any_in_progress %}hx-get="/" hx-select="table" hx-swap="outerHTML" hx-trigger="every 5s"{% endif %}>
   <thead>
     <tr>
       <th>Name</th>
@@ -28,7 +34,12 @@
       <td><a href="/apps/{{ app.name }}">{{ app.name }}</a></td>
       <td><span class="badge badge-{{ app.state_class }}">{{ app.state }}</span></td>
       <td><a href="{{ app.url }}" target="_blank" rel="noopener">{{ app.url }}</a></td>
-      <td>{{ app.last_deploy }}</td>
+      <td>
+        {% if let Some(status) = app.deploy_status %}
+        <span class="badge badge-deploy-{{ status }}">{{ status }}</span>
+        {% endif %}
+        {{ app.last_deploy }}
+      </td>
       <td>
         <form class="inline" method="post" action="/apps/{{ app.name }}/start">
           <input type="hidden" name="next" value="/">
@@ -43,4 +54,5 @@
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
 {% endblock %}

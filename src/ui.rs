@@ -214,6 +214,7 @@ struct AppRow {
     state: String,
     state_class: String,
     url: String,
+    deploy_status: Option<String>,
     last_deploy: String,
 }
 
@@ -223,6 +224,7 @@ struct AppsTemplate {
     apps: Vec<AppRow>,
     backups_summary: String,
     flash: Option<String>,
+    any_in_progress: bool,
 }
 
 struct DeployRow {
@@ -346,19 +348,26 @@ async fn apps_index(
         }
     };
 
+    let mut any_in_progress = false;
     let mut rows = Vec::with_capacity(apps.len());
     for app in apps {
-        let last_deploy = match db::deploy::latest_for_app(&pool, &app.id).await {
+        let (deploy_status, last_deploy) = match db::deploy::latest_for_app(&pool, &app.id).await {
             Ok(Some(d)) => {
+                if d.status == "in_progress" {
+                    any_in_progress = true;
+                }
                 let short_sha = d
                     .git_sha
                     .as_deref()
                     .map(|s| s.chars().take(7).collect::<String>())
                     .unwrap_or_else(|| "-".to_string());
-                format!("{} ({}) at {}", d.status, short_sha, d.created_at)
+                (
+                    Some(d.status),
+                    format!("{} · {}", short_sha, relative_time(&d.created_at)),
+                )
             }
-            Ok(None) => "no deploys".to_string(),
-            Err(_) => "unknown".to_string(),
+            Ok(None) => (None, "no deploys".to_string()),
+            Err(_) => (None, "unknown".to_string()),
         };
 
         // Read-through: reflect the live Docker container state rather than
@@ -374,6 +383,7 @@ async fn apps_index(
             state: state_str,
             state_class,
             url: app_url(&app.name, &config),
+            deploy_status,
             last_deploy,
         });
     }
@@ -397,6 +407,7 @@ async fn apps_index(
             .as_deref()
             .and_then(flash_message)
             .map(str::to_string),
+        any_in_progress,
     })
     .into_response()
 }
@@ -665,6 +676,57 @@ mod tests {
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("<table"));
         assert!(body.contains("demo-app"));
+    }
+
+    #[tokio::test]
+    async fn index_shows_deploy_status_badge_and_polls_while_in_progress() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("deploying-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            // Deploy::new inserts with status "in_progress".
+            let deploy = crate::models::Deploy::new(&app.id, "ghcr.io/x/deploying-app:sha", Some("abc1234def"));
+            db::deploy::insert(&s.db_pool, &deploy).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("badge-deploy-in_progress"));
+        assert!(body.contains("hx-trigger=\"every 5s\""));
+    }
+
+    #[tokio::test]
+    async fn index_without_apps_shows_create_hint() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("lh create"));
+        // No polling attribute when nothing is deploying.
+        assert!(!body.contains("hx-trigger=\"every 5s\""));
     }
 
     #[tokio::test]
