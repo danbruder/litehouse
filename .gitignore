@@ -4,3 +4,4 @@ config/litehouse.*
 .beads/
 .dev/
 .claude/
+.worktrees/
