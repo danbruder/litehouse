@@ -612,7 +612,7 @@ async fn app_detail(
 }
 
 async fn log_tail(Path(name): Path<String>) -> impl IntoResponse {
-    match crate::commands::logs::execute(&name, 100, false).await {
+    match crate::commands::logs::execute(&name, 300, false).await {
         Ok(mut stream) => {
             let mut logs = String::new();
             while let Some(chunk) = stream.next().await {
