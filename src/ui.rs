@@ -239,8 +239,16 @@ struct DeployRow {
 #[template(path = "app_detail.html")]
 struct AppDetailTemplate {
     app_name: String,
+    state: String,
+    state_class: String,
+    url: String,
+    image: Option<String>,
+    repo: Option<String>,
+    port: Option<i64>,
+    custom_domains: Vec<String>,
     env_names: Vec<String>,
     deploys: Vec<DeployRow>,
+    flash: Option<String>,
 }
 
 // ---------------------------------------------------------------------
@@ -458,8 +466,12 @@ async fn stop_app_ui(
 async fn app_detail(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
+    Query(q): Query<FlashQuery>,
 ) -> Response {
-    let pool = state.read().await.db_pool.clone();
+    let (pool, config) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone())
+    };
 
     let app = match db::app::get_by_name(&pool, &name).await {
         Ok(Some(app)) => app,
@@ -472,6 +484,11 @@ async fn app_detail(
                 .into_response();
         }
     };
+
+    let live = crate::docker::live_state(&app.name)
+        .await
+        .unwrap_or(app.state);
+    let state_str = live.to_string();
 
     let env_names = db::env_var::get_by_app(&pool, &app.id)
         .await
@@ -497,9 +514,21 @@ async fn app_detail(
         .collect();
 
     HtmlTemplate(AppDetailTemplate {
+        url: app_url(&app.name, &config),
+        state_class: state_str.clone(),
+        state: state_str,
+        image: app.image.clone(),
+        repo: app.repo.clone(),
+        port: app.port,
+        custom_domains: app.custom_domains_list(),
         app_name: app.name,
         env_names,
         deploys,
+        flash: q
+            .flash
+            .as_deref()
+            .and_then(flash_message)
+            .map(str::to_string),
     })
     .into_response()
 }
@@ -753,6 +782,39 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("detail-app"));
+    }
+
+    #[tokio::test]
+    async fn app_detail_header_card_shows_state_url_and_domains() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let mut app = App::new("card-app").unwrap();
+            app.repo = Some("danbruder/card-app".to_string());
+            app.image = Some("ghcr.io/danbruder/card-app:abc".to_string());
+            app.custom_domains = Some(r#"["cardapp.example.com"]"#.to_string());
+            db::app::save(&s.db_pool, &app).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/card-app")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("badge-"));                       // state badge
+        assert!(body.contains("http://card-app.localhost"));    // app URL (local dev)
+        assert!(body.contains("github.com/danbruder/card-app")); // repo link
+        assert!(body.contains("ghcr.io/danbruder/card-app:abc")); // image
+        assert!(body.contains("cardapp.example.com"));           // custom domain
+        assert!(body.contains("/apps/card-app/start"));          // action form
     }
 
     #[tokio::test]

@@ -4,7 +4,40 @@
 
 {% block content %}
 <p><a href="/">&larr; all apps</a></p>
-<h2>{{ app_name }}</h2>
+
+{% if let Some(msg) = flash %}
+<div class="flash">{{ msg }}</div>
+{% endif %}
+
+<h2>{{ app_name }} <span class="badge badge-{{ state_class }}">{{ state }}</span></h2>
+
+<div class="card">
+  <p><strong>URL:</strong> <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></p>
+  {% if !custom_domains.is_empty() %}
+  <p><strong>Domains:</strong>
+    {% for d in custom_domains %}<a href="https://{{ d }}" target="_blank" rel="noopener">{{ d }}</a> {% endfor %}
+  </p>
+  {% endif %}
+  {% if let Some(r) = repo %}
+  <p><strong>Repo:</strong> <a href="https://github.com/{{ r }}" target="_blank" rel="noopener">{{ r }}</a></p>
+  {% endif %}
+  {% if let Some(img) = image %}
+  <p><strong>Image:</strong> <code>{{ img }}</code></p>
+  {% endif %}
+  {% if let Some(p) = port %}
+  <p><strong>Port:</strong> {{ p }}</p>
+  {% endif %}
+  <p>
+    <form class="inline" method="post" action="/apps/{{ app_name }}/start">
+      <input type="hidden" name="next" value="/apps/{{ app_name }}">
+      <button type="submit">Start</button>
+    </form>
+    <form class="inline" method="post" action="/apps/{{ app_name }}/stop">
+      <input type="hidden" name="next" value="/apps/{{ app_name }}">
+      <button type="submit">Stop</button>
+    </form>
+  </p>
+</div>
 
 <h3>Environment</h3>
 <p class="muted">
