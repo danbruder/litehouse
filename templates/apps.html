@@ -8,8 +8,20 @@
 {% endif %}
 
 <div class="card">
-  <strong>Backups:</strong>
-  <span class="muted">{{ backups_summary }}</span>
+  <p>
+    <strong>Backups:</strong>
+    <span class="muted">{{ backup_line }}</span>
+    <form class="inline" method="post" action="/backup/run">
+      <button type="submit">Run backup now</button>
+    </form>
+  </p>
+  {% if !backup_failures.is_empty() %}
+  <ul>
+    {% for f in backup_failures %}
+    <li><strong>{{ f.0 }}</strong>: <span class="muted">{{ f.1 }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </div>
 
 {% if apps.is_empty() %}

@@ -222,7 +222,8 @@ struct AppRow {
 #[template(path = "apps.html")]
 struct AppsTemplate {
     apps: Vec<AppRow>,
-    backups_summary: String,
+    backup_line: String,
+    backup_failures: Vec<(String, String)>,
     flash: Option<String>,
     any_in_progress: bool,
 }
@@ -263,6 +264,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/stop", post(stop_app_ui))
         .route("/apps/:name/restart", post(restart_app_ui))
         .route("/apps/:name/redeploy", post(redeploy_app_ui))
+        .route("/backup/run", post(run_backup_ui))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -338,6 +340,22 @@ async fn login_submit(
 // Apps index
 // ---------------------------------------------------------------------
 
+async fn run_backup_ui(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let (pool, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone())
+    };
+    // Backups VACUUM every app DB and upload to S3 — far too slow to hold a
+    // request open for. Fire and forget; run_backup persists its own report,
+    // which the index card shows on the next load.
+    tokio::spawn(async move {
+        if let Err(e) = crate::backup::run_backup(&pool, &docker).await {
+            tracing::error!("ui: manual backup run failed: {e:#}");
+        }
+    });
+    Redirect::to("/?flash=backup-started")
+}
+
 async fn apps_index(
     State(state): State<Arc<RwLock<AppState>>>,
     Query(q): Query<FlashQuery>,
@@ -398,20 +416,24 @@ async fn apps_index(
         });
     }
 
-    let backups_summary = match db::system_config::get_last_backup_report(&pool).await {
-        Ok(Some(report)) => format!(
-            "{} succeeded, {} failed (last run {})",
-            report.succeeded.len(),
-            report.failed.len(),
-            report.ran_at
-        ),
-        Ok(None) => "n/a".to_string(),
-        Err(_) => "n/a".to_string(),
-    };
+    let (backup_line, backup_failures) =
+        match db::system_config::get_last_backup_report(&pool).await {
+            Ok(Some(report)) => (
+                format!(
+                    "{} succeeded, {} failed (last run {})",
+                    report.succeeded.len(),
+                    report.failed.len(),
+                    relative_time(&report.ran_at)
+                ),
+                report.failed,
+            ),
+            _ => ("no backup has run yet".to_string(), Vec::new()),
+        };
 
     HtmlTemplate(AppsTemplate {
         apps: rows,
-        backups_summary,
+        backup_line,
+        backup_failures,
         flash: q
             .flash
             .as_deref()
@@ -761,6 +783,64 @@ mod tests {
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("<table"));
         assert!(body.contains("demo-app"));
+    }
+
+    #[tokio::test]
+    async fn index_backups_card_lists_failed_apps() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let report = crate::backup::BackupReport {
+                succeeded: vec!["good-app".to_string()],
+                failed: vec![("bad-app".to_string(), "S3 upload timed out".to_string())],
+                ran_at: "2026-07-10T02:00:00Z".to_string(),
+            };
+            db::system_config::set_last_backup_report(&s.db_pool, &report)
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("bad-app"));
+        assert!(body.contains("S3 upload timed out"));
+    }
+
+    #[tokio::test]
+    async fn run_backup_now_redirects_with_started_flash() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/backup/run")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/?flash=backup-started"
+        );
     }
 
     #[tokio::test]
