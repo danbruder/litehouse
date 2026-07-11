@@ -112,6 +112,17 @@ a {
 .badge-running { color: var(--ok); }
 .badge-failed, .badge-crashed { color: var(--danger); }
 
+.badge-deploy-succeeded { color: var(--ok); }
+.badge-deploy-failed { color: var(--danger); }
+.badge-deploy-in_progress { color: var(--accent); }
+
+td.deploy-error {
+  max-width: 320px;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  font-size: 0.8rem;
+}
+
 form.inline {
   display: inline;
 }

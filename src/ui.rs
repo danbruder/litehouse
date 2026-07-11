@@ -230,6 +230,7 @@ struct DeployRow {
     image: String,
     sha: String,
     created_at: String,
+    error: Option<String>,
 }
 
 #[derive(Template)]
@@ -479,7 +480,8 @@ async fn app_detail(
                 .git_sha
                 .map(|s| s.chars().take(7).collect::<String>())
                 .unwrap_or_else(|| "-".to_string()),
-            created_at: d.created_at,
+            created_at: relative_time(&d.created_at),
+            error: d.error,
         })
         .collect();
 
@@ -689,6 +691,38 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("detail-app"));
+    }
+
+    #[tokio::test]
+    async fn app_detail_shows_deploy_error() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("erroring-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            let deploy = crate::models::Deploy::new(&app.id, "ghcr.io/x/erroring-app:sha", Some("abc1234def"));
+            db::deploy::insert(&s.db_pool, &deploy).await.unwrap();
+            db::deploy::set_status(&s.db_pool, &deploy.id, "failed", Some("failed to pull image: manifest unknown"))
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/erroring-app")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("manifest unknown"));
+        assert!(body.contains("badge-deploy-failed"));
+        assert!(body.contains("ago") || body.contains("just now"));
     }
 
     #[tokio::test]

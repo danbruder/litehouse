@@ -22,20 +22,24 @@
       <th>Status</th>
       <th>Image</th>
       <th>SHA</th>
-      <th>Created</th>
+      <th>When</th>
+      <th>Error</th>
     </tr>
   </thead>
   <tbody>
     {% for d in deploys %}
     <tr>
-      <td>{{ d.status }}</td>
+      <td><span class="badge badge-deploy-{{ d.status }}">{{ d.status }}</span></td>
       <td>{{ d.image }}</td>
       <td>{{ d.sha }}</td>
       <td>{{ d.created_at }}</td>
+      <td class="deploy-error">
+        {% if let Some(err) = d.error %}{{ err }}{% else %}<span class="muted">—</span>{% endif %}
+      </td>
     </tr>
     {% endfor %}
     {% if deploys.is_empty() %}
-    <tr><td colspan="4" class="muted">no deploys yet</td></tr>
+    <tr><td colspan="5" class="muted">no deploys yet</td></tr>
     {% endif %}
   </tbody>
 </table>
