@@ -146,6 +146,16 @@ input[type="text"], input[type="password"] {
   margin-bottom: 1rem;
 }
 
+.flash {
+  background: var(--card-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
 .login-box {
   max-width: 360px;
   margin: 4rem auto;

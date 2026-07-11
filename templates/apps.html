@@ -3,6 +3,10 @@
 {% block title %}apps - litehouse{% endblock %}
 
 {% block content %}
+{% if let Some(msg) = flash %}
+<div class="flash">{{ msg }}</div>
+{% endif %}
+
 <div class="card">
   <strong>Backups:</strong>
   <span class="muted">{{ backups_summary }}</span>
@@ -27,9 +31,11 @@
       <td>{{ app.last_deploy }}</td>
       <td>
         <form class="inline" method="post" action="/apps/{{ app.name }}/start">
+          <input type="hidden" name="next" value="/">
           <button type="submit">Start</button>
         </form>
         <form class="inline" method="post" action="/apps/{{ app.name }}/stop">
+          <input type="hidden" name="next" value="/">
           <button type="submit">Stop</button>
         </form>
       </td>

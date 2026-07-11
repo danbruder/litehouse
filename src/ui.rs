@@ -20,7 +20,7 @@
 
 use askama::Template;
 use axum::{
-    extract::{Form, Path, State},
+    extract::{Form, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -71,6 +71,48 @@ fn relative_time_at(rfc3339: &str, now: chrono::DateTime<chrono::Utc>) -> String
 
 fn relative_time(rfc3339: &str) -> String {
     relative_time_at(rfc3339, chrono::Utc::now())
+}
+
+/// Fixed flash-code -> message map. Codes travel in the `?flash=` query
+/// param; anything not in this map renders nothing, so the param is not an
+/// injection surface and needs no encoding.
+fn flash_message(code: &str) -> Option<&'static str> {
+    match code {
+        "start-failed" => Some("Failed to start the app — check the server logs."),
+        "stop-failed" => Some("Failed to stop the app — check the server logs."),
+        "restart-failed" => Some("Failed to restart the app — check the server logs."),
+        "redeploy-failed" => Some("Redeploy could not be started — check the server logs."),
+        "no-image" => Some("This app has no deployed image yet — push to its repo first."),
+        "backup-started" => Some("Backup started — refresh in a minute for the report."),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ActionForm {
+    next: Option<String>,
+}
+
+/// Only same-site absolute paths are honored; anything else ("//evil…",
+/// "https://…", relative paths) falls back to "/".
+fn safe_next(next: Option<&str>) -> String {
+    match next {
+        Some(p) if p.starts_with('/') && !p.starts_with("//") => p.to_string(),
+        _ => "/".to_string(),
+    }
+}
+
+fn redirect_after_action(next: Option<&str>, error_code: Option<&str>) -> Redirect {
+    let base = safe_next(next);
+    match error_code {
+        Some(code) => Redirect::to(&format!("{base}?flash={code}")),
+        None => Redirect::to(&base),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FlashQuery {
+    flash: Option<String>,
 }
 
 /// Thin wrapper turning any `askama::Template` into an axum response.
@@ -180,6 +222,7 @@ struct AppRow {
 struct AppsTemplate {
     apps: Vec<AppRow>,
     backups_summary: String,
+    flash: Option<String>,
 }
 
 struct DeployRow {
@@ -282,7 +325,10 @@ async fn login_submit(
 // Apps index
 // ---------------------------------------------------------------------
 
-async fn apps_index(State(state): State<Arc<RwLock<AppState>>>) -> Response {
+async fn apps_index(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Query(q): Query<FlashQuery>,
+) -> Response {
     let (pool, config) = {
         let s = state.read().await;
         (s.db_pool.clone(), s.server_config.clone())
@@ -345,6 +391,11 @@ async fn apps_index(State(state): State<Arc<RwLock<AppState>>>) -> Response {
     HtmlTemplate(AppsTemplate {
         apps: rows,
         backups_summary,
+        flash: q
+            .flash
+            .as_deref()
+            .and_then(flash_message)
+            .map(str::to_string),
     })
     .into_response()
 }
@@ -356,22 +407,36 @@ async fn apps_index(State(state): State<Arc<RwLock<AppState>>>) -> Response {
 async fn start_app_ui(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
+    form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
+    let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
     let (pool, docker) = {
         let s = state.read().await;
         (s.db_pool.clone(), s.docker.clone())
     };
-    if let Err(e) = crate::commands::start::execute(&pool, &docker, &name).await {
-        tracing::error!("ui: failed to start app '{}': {}", name, e);
-    }
-    Redirect::to("/")
+    let error = match crate::commands::start::execute(&pool, &docker, &name).await {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::error!("ui: failed to start app '{}': {}", name, e);
+            Some("start-failed")
+        }
+    };
+    redirect_after_action(next.as_deref(), error)
 }
 
-async fn stop_app_ui(Path(name): Path<String>) -> impl IntoResponse {
-    if let Err(e) = crate::commands::stop::execute(&name).await {
-        tracing::error!("ui: failed to stop app '{}': {}", name, e);
-    }
-    Redirect::to("/")
+async fn stop_app_ui(
+    Path(name): Path<String>,
+    form: Option<Form<ActionForm>>,
+) -> impl IntoResponse {
+    let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
+    let error = match crate::commands::stop::execute(&name).await {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::error!("ui: failed to stop app '{}': {}", name, e);
+            Some("stop-failed")
+        }
+    };
+    redirect_after_action(next.as_deref(), error)
 }
 
 // ---------------------------------------------------------------------
@@ -722,9 +787,110 @@ mod tests {
             .unwrap();
 
         // The guard lets it through to the handler, which (even when the app
-        // doesn't exist) logs and redirects home — NOT 403, NOT /login.
+        // doesn't exist) logs the error and redirects home with a flash —
+        // NOT 403, NOT /login.
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/");
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/?flash=stop-failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_failure_redirects_back_to_next_with_flash() {
+        let state = test_state().await;
+        let app = router(state);
+
+        // "whatever" doesn't exist, so stop fails -> flash code appended.
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/stop")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("next=/apps/whatever"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/apps/whatever?flash=stop-failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn index_renders_flash_message_for_known_code() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/?flash=stop-failed")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("Failed to stop the app"));
+    }
+
+    #[tokio::test]
+    async fn unknown_flash_code_renders_nothing() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(!body.contains("alert(1)"));
+        assert!(!body.contains("class=\"flash\""));
+    }
+
+    #[tokio::test]
+    async fn next_field_rejects_offsite_redirects() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/stop")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("next=//evil.example.com/phish"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Offsite `next` falls back to "/".
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/?flash=stop-failed"
+        );
     }
 
     #[tokio::test]
