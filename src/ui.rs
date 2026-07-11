@@ -53,6 +53,26 @@ fn app_url(app_name: &str, config: &crate::config::ServerConfig) -> String {
     }
 }
 
+/// "3m ago"-style rendering of an RFC 3339 timestamp, relative to `now`.
+/// Unparseable input is returned verbatim rather than erased — a raw
+/// timestamp is still more useful on the dashboard than a blank cell.
+fn relative_time_at(rfc3339: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    let Ok(ts) = chrono::DateTime::parse_from_rfc3339(rfc3339) else {
+        return rfc3339.to_string();
+    };
+    let secs = (now - ts.with_timezone(&chrono::Utc)).num_seconds().max(0);
+    match secs {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{}m ago", secs / 60),
+        3600..=86_399 => format!("{}h ago", secs / 3600),
+        _ => format!("{}d ago", secs / 86_400),
+    }
+}
+
+fn relative_time(rfc3339: &str) -> String {
+    relative_time_at(rfc3339, chrono::Utc::now())
+}
+
 /// Thin wrapper turning any `askama::Template` into an axum response.
 /// (`askama_axum` was not used here: its 0.4 line requires axum 0.7, but
 /// this project is still on axum 0.6 — see Cargo.toml.)
@@ -443,6 +463,23 @@ mod tests {
     use tower::ServiceExt;
 
     const TEST_TOKEN: &str = "test-admin-token";
+
+    #[test]
+    fn relative_time_formats_ago_buckets() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-11T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(relative_time_at("2026-07-11T11:59:40Z", now), "just now");
+        assert_eq!(relative_time_at("2026-07-11T11:55:00Z", now), "5m ago");
+        assert_eq!(relative_time_at("2026-07-11T09:00:00Z", now), "3h ago");
+        assert_eq!(relative_time_at("2026-07-08T12:00:00Z", now), "3d ago");
+    }
+
+    #[test]
+    fn relative_time_passes_through_unparseable_input() {
+        let now = chrono::Utc::now();
+        assert_eq!(relative_time_at("not-a-date", now), "not-a-date");
+    }
 
     async fn test_state() -> Arc<RwLock<AppState>> {
         let pool = get_test_pool().await;
