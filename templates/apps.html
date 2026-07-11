@@ -49,6 +49,10 @@
           <input type="hidden" name="next" value="/">
           <button type="submit">Stop</button>
         </form>
+        <form class="inline" method="post" action="/apps/{{ app.name }}/restart">
+          <input type="hidden" name="next" value="/">
+          <button type="submit">Restart</button>
+        </form>
       </td>
     </tr>
     {% endfor %}

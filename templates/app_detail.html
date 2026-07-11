@@ -36,6 +36,10 @@
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
       <button type="submit">Stop</button>
     </form>
+    <form class="inline" method="post" action="/apps/{{ app_name }}/restart">
+      <input type="hidden" name="next" value="/apps/{{ app_name }}">
+      <button type="submit">Restart</button>
+    </form>
   </p>
 </div>
 

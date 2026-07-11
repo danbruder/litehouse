@@ -261,6 +261,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name", get(app_detail))
         .route("/apps/:name/start", post(start_app_ui))
         .route("/apps/:name/stop", post(stop_app_ui))
+        .route("/apps/:name/restart", post(restart_app_ui))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -455,6 +456,28 @@ async fn stop_app_ui(
             tracing::error!("ui: failed to stop app '{}': {}", name, e);
             Some("stop-failed")
         }
+    };
+    redirect_after_action(next.as_deref(), error)
+}
+
+async fn restart_app_ui(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    form: Option<Form<ActionForm>>,
+) -> impl IntoResponse {
+    let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
+    let (pool, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone())
+    };
+    let error = if let Err(e) = crate::commands::stop::execute(&name).await {
+        tracing::error!("ui: failed to restart app '{}' (stop step): {}", name, e);
+        Some("restart-failed")
+    } else if let Err(e) = crate::commands::start::execute(&pool, &docker, &name).await {
+        tracing::error!("ui: failed to restart app '{}' (start step): {}", name, e);
+        Some("restart-failed")
+    } else {
+        None
     };
     redirect_after_action(next.as_deref(), error)
 }
@@ -979,6 +1002,33 @@ mod tests {
         assert_eq!(
             response.headers().get(header::LOCATION).unwrap(),
             "/apps/whatever?flash=stop-failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_unknown_app_redirects_with_flash() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/whatever/restart")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from("next=/apps/whatever"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/apps/whatever?flash=restart-failed"
         );
     }
 
