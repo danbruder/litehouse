@@ -11,6 +11,9 @@
   {% block body %}
   <header>
     <a href="/"><h1>litehouse</h1></a>
+    <form method="post" action="/logout">
+      <button type="submit">Sign out</button>
+    </form>
   </header>
   <main>
     {% block content %}{% endblock %}

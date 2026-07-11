@@ -265,6 +265,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/restart", post(restart_app_ui))
         .route("/apps/:name/redeploy", post(redeploy_app_ui))
         .route("/backup/run", post(run_backup_ui))
+        .route("/logout", post(logout))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -331,6 +332,15 @@ async fn login_submit(
 
     let mut response = Redirect::to("/").into_response();
     if let Ok(header_value) = axum::http::HeaderValue::from_str(&cookie_value) {
+        response.headers_mut().insert(header::SET_COOKIE, header_value);
+    }
+    response
+}
+
+async fn logout() -> Response {
+    let mut response = Redirect::to("/login").into_response();
+    let cookie = format!("{COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
+    if let Ok(header_value) = axum::http::HeaderValue::from_str(&cookie) {
         response.headers_mut().insert(header::SET_COOKIE, header_value);
     }
     response
@@ -1035,6 +1045,37 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
         assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[tokio::test]
+    async fn logout_expires_cookie_and_redirects_to_login() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/logout")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/login");
+        let set_cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("litehouse_token=;"));
+        assert!(set_cookie.contains("Max-Age=0"));
     }
 
     #[tokio::test]
