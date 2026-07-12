@@ -3,9 +3,10 @@ use crate::docker;
 use anyhow::{Context, Result};
 use axum::Router;
 use bollard::Docker;
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, RwLock};
 use tracing::{info, instrument};
 
 use crate::api;
@@ -14,6 +15,9 @@ use crate::ui;
 use crate::config::ServerConfig;
 use crate::db;
 
+/// Registry of per-app locks, keyed by app name.
+pub type AppLocks = Arc<StdMutex<HashMap<String, Arc<AsyncMutex<()>>>>>;
+
 /// Shared state for the server
 pub struct AppState {
     pub db_pool: sqlx::Pool<sqlx::Sqlite>,
@@ -21,6 +25,30 @@ pub struct AppState {
     /// sha256 hex hash of the single admin token
     pub admin_token_hash: String,
     pub server_config: ServerConfig,
+    /// Serializes container-lifecycle operations per app — see [`lock_app`].
+    pub app_locks: AppLocks,
+}
+
+/// Acquire the lock for a single app's container-lifecycle operations
+/// (start/stop/restart/redeploy/the GitHub deploy hook).
+///
+/// Without this, a manual action (e.g. clicking "restart" in the admin UI)
+/// and an automated deploy (the GitHub Actions hook firing off a `git push`)
+/// can run fully concurrently against the same app. Both end up calling
+/// `volume::init_app_volume`, which creates an ephemeral helper container
+/// with a name derived only from the app id (`litehouse-init-{app_id}`) —
+/// whichever one's `create_container` call lands first wins, and the other
+/// gets a Docker 409 "name already in use" and its whole deploy/restart
+/// fails. Holding this lock for the duration of any such operation makes
+/// them run one at a time per app instead of racing.
+pub async fn lock_app(locks: &AppLocks, name: &str) -> OwnedMutexGuard<()> {
+    let entry = locks
+        .lock()
+        .unwrap()
+        .entry(name.to_string())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone();
+    entry.lock_owned().await
 }
 
 /// Ensure Caddy is running and its configuration matches the database.
@@ -87,6 +115,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         docker: docker_conn.clone(),
         admin_token_hash,
         server_config: config.clone(),
+        app_locks: Arc::new(StdMutex::new(HashMap::new())),
     }));
 
     // Daily backup: check hourly whether today's (UTC) backup has run; retry
@@ -167,4 +196,57 @@ async fn shutdown_signal() {
         .await
         .expect("Failed to install CTRL+C signal handler");
     println!("\nShutting down...");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lock_app_serializes_operations_on_the_same_app() {
+        let locks: AppLocks = Arc::new(StdMutex::new(HashMap::new()));
+        let events = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let mut handles = Vec::new();
+        for i in 0..5 {
+            let locks = locks.clone();
+            let events = events.clone();
+            handles.push(tokio::spawn(async move {
+                let _guard = lock_app(&locks, "same-app").await;
+                events.lock().await.push((i, "enter"));
+                // Yield so a racing task would interleave here if the lock
+                // weren't actually held for the critical section.
+                tokio::task::yield_now().await;
+                events.lock().await.push((i, "exit"));
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let events = events.lock().await;
+        // Every enter must be immediately followed by that same task's exit —
+        // no two tasks' critical sections interleaved.
+        for pair in events.chunks(2) {
+            assert_eq!(pair[0].0, pair[1].0, "events interleaved: {:?}", *events);
+            assert_eq!(pair[0].1, "enter");
+            assert_eq!(pair[1].1, "exit");
+        }
+    }
+
+    #[tokio::test]
+    async fn lock_app_does_not_block_different_apps() {
+        let locks: AppLocks = Arc::new(StdMutex::new(HashMap::new()));
+
+        // Hold app "a"'s lock, then confirm app "b"'s lock is acquirable
+        // without waiting on "a".
+        let guard_a = lock_app(&locks, "a").await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            lock_app(&locks, "b"),
+        )
+        .await;
+        assert!(result.is_ok(), "locking a different app should not block");
+        drop(guard_a);
+    }
 }

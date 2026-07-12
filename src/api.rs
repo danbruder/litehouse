@@ -142,8 +142,11 @@ async fn start_app(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let pool = state.read().await.db_pool.clone();
-    let docker = state.read().await.docker.clone();
+    let (pool, docker, locks) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
+    };
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
 
     match start::execute(&pool, &docker, &name).await {
         Ok(_) => (
@@ -162,11 +165,14 @@ async fn start_app(
     }
 }
 
-#[instrument(skip(_state))]
+#[instrument(skip(state))]
 async fn stop_app(
-    State(_state): State<Arc<RwLock<AppState>>>,
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    let locks = state.read().await.app_locks.clone();
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
+
     match stop::execute(&name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
@@ -267,9 +273,9 @@ async fn deploy_app(
     Path(name): Path<String>,
     Json(payload): Json<DeployRequest>,
 ) -> impl IntoResponse {
-    let (pool, docker) = {
+    let (pool, docker, locks) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone())
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
 
     match db::app::get_by_name(&pool, &name).await {
@@ -285,6 +291,8 @@ async fn deploy_app(
                 .into_response();
         }
     }
+
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
 
     match crate::deploy::deploy_app(&pool, &docker, &name, &payload.image, payload.sha.as_deref())
         .await
@@ -390,9 +398,9 @@ async fn hook_deploy(
     headers: axum::http::HeaderMap,
     Json(payload): Json<HookDeployRequest>,
 ) -> impl IntoResponse {
-    let (pool, docker) = {
+    let (pool, docker, locks) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone())
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
 
     let unauthorized = || {
@@ -422,6 +430,8 @@ async fn hook_deploy(
     if !hook_authorized(token, app.as_ref()) {
         return unauthorized();
     }
+
+    let _guard = crate::commands::server::lock_app(&locks, &payload.app).await;
 
     match crate::deploy::deploy_app(
         &pool,

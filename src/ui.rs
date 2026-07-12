@@ -469,10 +469,11 @@ async fn start_app_ui(
     form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
     let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
-    let (pool, docker) = {
+    let (pool, docker, locks) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone())
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
     let error = match crate::commands::start::execute(&pool, &docker, &name).await {
         Ok(()) => None,
         Err(e) => {
@@ -484,10 +485,13 @@ async fn start_app_ui(
 }
 
 async fn stop_app_ui(
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
     form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
     let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
+    let locks = state.read().await.app_locks.clone();
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
     let error = match crate::commands::stop::execute(&name).await {
         Ok(()) => None,
         Err(e) => {
@@ -504,10 +508,11 @@ async fn restart_app_ui(
     form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
     let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
-    let (pool, docker) = {
+    let (pool, docker, locks) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone())
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
     let error = if let Err(e) = crate::commands::stop::execute(&name).await {
         tracing::error!("ui: failed to restart app '{}' (stop step): {}", name, e);
         Some("restart-failed")
@@ -526,10 +531,11 @@ async fn redeploy_app_ui(
     form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
     let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
-    let (pool, docker) = {
+    let (pool, docker, locks) = {
         let s = state.read().await;
-        (s.db_pool.clone(), s.docker.clone())
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
 
     let image = match db::app::get_by_name(&pool, &name).await {
         Ok(Some(app)) => app.image,
@@ -748,6 +754,7 @@ mod tests {
             docker: docker_conn,
             admin_token_hash: crate::auth::hash_token(TEST_TOKEN),
             server_config: ServerConfig::default(),
+            app_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }))
     }
 
