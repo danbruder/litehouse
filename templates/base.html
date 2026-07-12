@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}litehouse{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/htmx.min.js"></script>
 </head>
@@ -11,7 +12,7 @@
   {% block body %}
   <div class="scanlines" aria-hidden="true"></div>
   <header>
-    <a class="brand" href="/"><h1>litehouse</h1><span class="cursor">_</span></a>
+    <a class="brand" href="/"><h1>🏠 litehouse</h1><span class="cursor">_</span></a>
     <form method="post" action="/logout">
       <button type="submit">sign out</button>
     </form>
