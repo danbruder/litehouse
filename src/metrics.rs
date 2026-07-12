@@ -129,7 +129,12 @@ pub async fn mem_usage() -> Result<(i64, i64)> {
 /// system CLIs for one-off queries (e.g. `docker build`).
 pub async fn disk_usage() -> Result<(i64, i64)> {
     let dir = config::get_backups_dir().map_err(|e| anyhow!("{e}"))?;
-    let output = tokio::process::Command::new("df").arg("-B1").arg(&dir).output().await?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new("df").arg("-B1").arg(&dir).output(),
+    )
+    .await
+    .map_err(|_| anyhow!("df timed out after 5s"))??;
     if !output.status.success() {
         return Err(anyhow!("df exited with {}", output.status));
     }
