@@ -248,7 +248,7 @@ async fn sample_app(
         }
     };
 
-    let disk_bytes = if tick_count % 10 == 0 {
+    let disk_bytes = if tick_count.is_multiple_of(10) {
         match app_volume_size(docker, &app.id).await {
             Ok(size) => {
                 prev_app_disk.insert(app.id.clone(), size);

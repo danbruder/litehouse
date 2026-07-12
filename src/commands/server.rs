@@ -174,7 +174,7 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
             loop {
                 interval.tick().await;
                 metrics::run_tick(&pool, &docker_conn, &mut prev_host_cpu, tick_count, &mut prev_app_disk).await;
-                if tick_count > 0 && tick_count % 60 == 0 {
+                if tick_count > 0 && tick_count.is_multiple_of(60) {
                     metrics::rollup_and_prune(&pool).await;
                 }
                 tick_count += 1;
