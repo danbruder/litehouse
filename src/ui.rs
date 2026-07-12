@@ -257,6 +257,19 @@ struct AppDetailTemplate {
     flash: Option<String>,
 }
 
+struct BackupRow {
+    app_name: String,
+    s3_key: String,
+    size: String,
+    age: String,
+}
+
+#[derive(Template)]
+#[template(path = "backups.html")]
+struct BackupsTemplate {
+    backups: Vec<BackupRow>,
+}
+
 // ---------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------
@@ -272,6 +285,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/env/set", post(set_env_ui))
         .route("/apps/:name/env/delete", post(delete_env_ui))
         .route("/backup/run", post(run_backup_ui))
+        .route("/backups", get(backups_page))
         .route("/logout", post(logout))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
@@ -459,6 +473,32 @@ async fn apps_index(
         any_in_progress,
     })
     .into_response()
+}
+
+async fn backups_page(State(state): State<Arc<RwLock<AppState>>>) -> Response {
+    let pool = state.read().await.db_pool.clone();
+    let records = match db::backup::list_all(&pool).await {
+        Ok(records) => records,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to list backups: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let backups = records
+        .into_iter()
+        .map(|b| BackupRow {
+            app_name: b.app_name,
+            s3_key: b.s3_key,
+            size: chart::format_bytes(b.size_bytes),
+            age: relative_time(&b.created_at),
+        })
+        .collect();
+
+    HtmlTemplate(BackupsTemplate { backups }).into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -1501,5 +1541,73 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn backups_page_without_cookie_redirects_to_login() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[tokio::test]
+    async fn backups_page_shows_empty_state_with_no_catalog_rows() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("No backups recorded yet"));
+    }
+
+    #[tokio::test]
+    async fn backups_page_lists_catalog_rows() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            db::backup::record_upload(&s.db_pool, "demo-app", "apps/demo-app/2026-07-11.tar.gz", 123456)
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("demo-app"));
+        assert!(body.contains("2026-07-11.tar.gz"));
+        assert!(body.contains("120.6 KB"));
     }
 }

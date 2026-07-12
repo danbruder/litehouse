@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}backups - litehouse{% endblock %}
+
+{% block content %}
+<p><a href="/">&larr; all apps</a></p>
+
+<h2>Backups</h2>
+
+{% if backups.is_empty() %}
+<div class="card">
+  <span class="panel-label">catalog</span>
+  <p class="muted">No backups recorded yet — the catalog fills in as backups run.</p>
+</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>App</th>
+      <th>Date</th>
+      <th>Size</th>
+      <th>Age</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in backups %}
+    <tr>
+      <td>{{ b.app_name }}</td>
+      <td>{{ b.s3_key }}</td>
+      <td>{{ b.size }}</td>
+      <td>{{ b.age }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
