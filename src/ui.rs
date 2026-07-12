@@ -84,6 +84,9 @@ fn flash_message(code: &str) -> Option<&'static str> {
         "redeploy-failed" => Some("Redeploy could not be started — check the server logs."),
         "no-image" => Some("This app has no deployed image yet — push to its repo first."),
         "backup-started" => Some("Backup started — refresh in a minute for the report."),
+        "env-invalid" => Some("Environment variable key can't be empty."),
+        "env-set-failed" => Some("Failed to save the environment variable — check the server logs."),
+        "env-delete-failed" => Some("Failed to delete the environment variable — check the server logs."),
         _ => None,
     }
 }
@@ -264,6 +267,8 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/stop", post(stop_app_ui))
         .route("/apps/:name/restart", post(restart_app_ui))
         .route("/apps/:name/redeploy", post(redeploy_app_ui))
+        .route("/apps/:name/env/set", post(set_env_ui))
+        .route("/apps/:name/env/delete", post(delete_env_ui))
         .route("/backup/run", post(run_backup_ui))
         .route("/logout", post(logout))
         .route("/apps/:name/log-tail", get(log_tail))
@@ -545,6 +550,65 @@ async fn redeploy_app_ui(
         }
     };
     redirect_after_action(next.as_deref(), error)
+}
+
+// ---------------------------------------------------------------------
+// Environment variables
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SetEnvForm {
+    key: String,
+    value: String,
+    next: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteEnvForm {
+    key: String,
+    next: Option<String>,
+}
+
+async fn set_env_ui(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Form(form): Form<SetEnvForm>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let key = form.key.trim();
+    let error = if key.is_empty() {
+        Some("env-invalid")
+    } else {
+        match crate::commands::app_env::set_env(&pool, &name, key, &form.value, false).await {
+            Ok(()) => None,
+            Err(e) => {
+                tracing::error!("ui: failed to set env var '{}' for app '{}': {}", key, name, e);
+                Some("env-set-failed")
+            }
+        }
+    };
+    redirect_after_action(form.next.as_deref(), error)
+}
+
+async fn delete_env_ui(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Form(form): Form<DeleteEnvForm>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let error = match crate::commands::app_env::set_env(&pool, &name, &form.key, "", true).await {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::error!(
+                "ui: failed to delete env var '{}' for app '{}': {}",
+                form.key,
+                name,
+                e
+            );
+            Some("env-delete-failed")
+        }
+    };
+    redirect_after_action(form.next.as_deref(), error)
 }
 
 // ---------------------------------------------------------------------
@@ -1216,6 +1280,128 @@ mod tests {
             response.headers().get(header::LOCATION).unwrap(),
             "/apps/noimage-app?flash=no-image"
         );
+    }
+
+    #[tokio::test]
+    async fn set_env_ui_persists_and_never_echoes_value() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("env-set-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+        }
+        let pool = state.read().await.db_pool.clone();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/env-set-app/env/set")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from(
+                        "key=API_KEY&value=super-secret&next=/apps/env-set-app",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/apps/env-set-app"
+        );
+
+        let app_row = db::app::get_by_name(&pool, "env-set-app")
+            .await
+            .unwrap()
+            .unwrap();
+        let vars = db::env_var::get_by_app(&pool, &app_row.id).await.unwrap();
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].key, "API_KEY");
+        assert_eq!(vars[0].value, "super-secret");
+    }
+
+    #[tokio::test]
+    async fn set_env_ui_rejects_empty_key() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("env-empty-key-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/env-empty-key-app/env/set")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from(
+                        "key=&value=x&next=/apps/env-empty-key-app",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/apps/env-empty-key-app?flash=env-invalid"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_env_ui_removes_var() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new("env-delete-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            db::env_var::save(
+                &s.db_pool,
+                &crate::models::EnvVar::new(&app.id, "TO_DELETE", "whatever"),
+            )
+            .await
+            .unwrap();
+        }
+        let pool = state.read().await.db_pool.clone();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/apps/env-delete-app/env/delete")
+                    .header(header::HOST, "admin.lh.example.com")
+                    .header(header::ORIGIN, "https://admin.lh.example.com")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(axum::body::Body::from(
+                        "key=TO_DELETE&next=/apps/env-delete-app",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let app_row = db::app::get_by_name(&pool, "env-delete-app")
+            .await
+            .unwrap()
+            .unwrap();
+        let vars = db::env_var::get_by_app(&pool, &app_row.id).await.unwrap();
+        assert!(vars.is_empty());
     }
 
     #[tokio::test]

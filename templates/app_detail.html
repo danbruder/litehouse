@@ -11,54 +11,77 @@
 
 <h2>{{ app_name }} <span class="badge badge-{{ state_class }}">{{ state }}</span></h2>
 
-<div class="card">
-  <span class="panel-label">app</span>
-  <p><strong>URL:</strong> <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></p>
-  {% if !custom_domains.is_empty() %}
-  <p><strong>Domains:</strong>
-    {% for d in custom_domains %}<a href="https://{{ d }}" target="_blank" rel="noopener">{{ d }}</a> {% endfor %}
-  </p>
-  {% endif %}
-  {% if let Some(r) = repo %}
-  <p><strong>Repo:</strong> <a href="https://github.com/{{ r }}" target="_blank" rel="noopener">{{ r }}</a></p>
-  {% endif %}
-  {% if let Some(img) = image %}
-  <p><strong>Image:</strong> <code>{{ img }}</code></p>
-  {% endif %}
-  {% if let Some(p) = port %}
-  <p><strong>Port:</strong> {{ p }}</p>
-  {% endif %}
-  <p>
-    <form class="inline" method="post" action="/apps/{{ app_name }}/start">
+<div class="detail-grid">
+  <div class="card">
+    <span class="panel-label">app</span>
+    <p><strong>URL:</strong> <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></p>
+    {% if !custom_domains.is_empty() %}
+    <p><strong>Domains:</strong>
+      {% for d in custom_domains %}<a href="https://{{ d }}" target="_blank" rel="noopener">{{ d }}</a> {% endfor %}
+    </p>
+    {% endif %}
+    {% if let Some(r) = repo %}
+    <p><strong>Repo:</strong> <a href="https://github.com/{{ r }}" target="_blank" rel="noopener">{{ r }}</a></p>
+    {% endif %}
+    {% if let Some(img) = image %}
+    <p><strong>Image:</strong> <code>{{ img }}</code></p>
+    {% endif %}
+    {% if let Some(p) = port %}
+    <p><strong>Port:</strong> {{ p }}</p>
+    {% endif %}
+    <p>
+      <form class="inline" method="post" action="/apps/{{ app_name }}/start">
+        <input type="hidden" name="next" value="/apps/{{ app_name }}">
+        <button type="submit">start</button>
+      </form>
+      <form class="inline" method="post" action="/apps/{{ app_name }}/stop">
+        <input type="hidden" name="next" value="/apps/{{ app_name }}">
+        <button type="submit">stop</button>
+      </form>
+      <form class="inline" method="post" action="/apps/{{ app_name }}/restart">
+        <input type="hidden" name="next" value="/apps/{{ app_name }}">
+        <button type="submit">restart</button>
+      </form>
+      <form class="inline" method="post" action="/apps/{{ app_name }}/redeploy">
+        <input type="hidden" name="next" value="/apps/{{ app_name }}">
+        <button type="submit">redeploy</button>
+      </form>
+    </p>
+  </div>
+
+  <div class="card">
+    <span class="panel-label">environment</span>
+    {% if env_names.is_empty() %}
+    <p class="muted">no environment variables set</p>
+    {% else %}
+    <ul class="env-list">
+      {% for name in env_names %}
+      <li>
+        <span class="tag">{{ name }}</span>
+        <form class="inline" method="post" action="/apps/{{ app_name }}/env/delete">
+          <input type="hidden" name="key" value="{{ name }}">
+          <input type="hidden" name="next" value="/apps/{{ app_name }}">
+          <button type="submit" title="delete {{ name }}">&times;</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <form class="env-form" method="post" action="/apps/{{ app_name }}/env/set">
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">start</button>
+      <input type="text" name="key" placeholder="KEY" required autocomplete="off">
+      <input type="password" name="value" placeholder="value" required autocomplete="off">
+      <button type="submit">set</button>
     </form>
-    <form class="inline" method="post" action="/apps/{{ app_name }}/stop">
-      <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">stop</button>
-    </form>
-    <form class="inline" method="post" action="/apps/{{ app_name }}/restart">
-      <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">restart</button>
-    </form>
-    <form class="inline" method="post" action="/apps/{{ app_name }}/redeploy">
-      <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">redeploy</button>
-    </form>
-  </p>
+    <p class="hint">values are never shown once saved — changes apply on next start, restart, or redeploy</p>
+  </div>
 </div>
 
-<h3>Environment</h3>
-<p class="muted">
-  {% if env_names.is_empty() %}
-  no environment variables set
-  {% else %}
-  {% for name in env_names %}<span class="tag">{{ name }}</span> {% endfor %}
-  {% endif %}
-</p>
-
 <h3>Deploys</h3>
-<table>
+<table class="deploys">
+  <colgroup>
+    <col class="col-status"><col class="col-image"><col class="col-sha"><col class="col-when"><col class="col-error">
+  </colgroup>
   <thead>
     <tr>
       <th>Status</th>
@@ -72,11 +95,11 @@
     {% for d in deploys %}
     <tr>
       <td><span class="badge badge-deploy-{{ d.status }}">{{ d.status }}</span></td>
-      <td>{{ d.image }}</td>
+      <td class="deploy-image" title="{{ d.image }}">{{ d.image }}</td>
       <td>{{ d.sha }}</td>
       <td>{{ d.created_at }}</td>
       <td class="deploy-error">
-        {% if let Some(err) = d.error %}{{ err }}{% else %}<span class="muted">—</span>{% endif %}
+        {% if let Some(err) = d.error %}<div class="deploy-error-body">{{ err }}</div>{% else %}<span class="muted">—</span>{% endif %}
       </td>
     </tr>
     {% endfor %}
