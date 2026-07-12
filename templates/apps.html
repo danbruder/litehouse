@@ -25,6 +25,24 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <span class="panel-label">server resources</span>
+  <div class="metrics-grid">
+    <div>
+      <h4>CPU <span class="muted">24h</span></h4>
+      {{ server_cpu_chart|safe }}
+    </div>
+    <div>
+      <h4>Memory <span class="muted">of {{ server_mem_total }}</span></h4>
+      {{ server_mem_chart|safe }}
+    </div>
+    <div>
+      <h4>Disk <span class="muted">of {{ server_disk_total }}</span></h4>
+      {{ server_disk_chart|safe }}
+    </div>
+  </div>
+</div>
+
 {% if apps.is_empty() %}
 <div class="card">
   <span class="panel-label">getting started</span>

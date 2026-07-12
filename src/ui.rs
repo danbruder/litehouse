@@ -231,6 +231,11 @@ struct AppsTemplate {
     backup_failures: Vec<(String, String)>,
     flash: Option<String>,
     any_in_progress: bool,
+    server_cpu_chart: String,
+    server_mem_chart: String,
+    server_mem_total: String,
+    server_disk_chart: String,
+    server_disk_total: String,
 }
 
 struct DeployRow {
@@ -387,6 +392,31 @@ async fn run_backup_ui(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoR
     Redirect::to("/?flash=backup-started")
 }
 
+async fn build_server_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>) -> (String, String, String, String, String) {
+    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let rows = db::metrics::list_samples_since(pool, "server", &since).await.unwrap_or_default();
+    let cpu: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_pct).collect();
+    let mem: Vec<Option<f64>> = rows.iter().map(|r| r.mem_bytes.map(|v| v as f64)).collect();
+    let disk: Vec<Option<f64>> = rows.iter().map(|r| r.disk_bytes.map(|v| v as f64)).collect();
+
+    let mem_total = match crate::metrics::mem_usage().await {
+        Ok((_, total)) => chart::format_bytes(total),
+        Err(_) => "unknown".to_string(),
+    };
+    let disk_total = match crate::metrics::disk_usage().await {
+        Ok((_, total)) => chart::format_bytes(total),
+        Err(_) => "unknown".to_string(),
+    };
+
+    (
+        chart::line_chart(&cpu, chart::ChartUnit::Percent),
+        chart::line_chart(&mem, chart::ChartUnit::Bytes),
+        mem_total,
+        chart::line_chart(&disk, chart::ChartUnit::Bytes),
+        disk_total,
+    )
+}
+
 async fn apps_index(
     State(state): State<Arc<RwLock<AppState>>>,
     Query(q): Query<FlashQuery>,
@@ -461,6 +491,9 @@ async fn apps_index(
             _ => ("no backup has run yet".to_string(), Vec::new()),
         };
 
+    let (server_cpu_chart, server_mem_chart, server_mem_total, server_disk_chart, server_disk_total) =
+        build_server_metrics_charts(&pool).await;
+
     HtmlTemplate(AppsTemplate {
         apps: rows,
         backup_line,
@@ -471,6 +504,11 @@ async fn apps_index(
             .and_then(flash_message)
             .map(str::to_string),
         any_in_progress,
+        server_cpu_chart,
+        server_mem_chart,
+        server_mem_total,
+        server_disk_chart,
+        server_disk_total,
     })
     .into_response()
 }
@@ -1581,6 +1619,64 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("No backups recorded yet"));
+    }
+
+    #[tokio::test]
+    async fn index_shows_server_resources_card_with_no_samples() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("server resources"));
+        assert!(body.contains("no data yet"));
+    }
+
+    #[tokio::test]
+    async fn index_server_resources_card_renders_chart_from_samples() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            // Timestamps relative to "now" (rather than a fixed date) so this
+            // test stays valid regardless of when the suite actually runs —
+            // `build_server_metrics_charts` only queries the last 24h.
+            let now = chrono::Utc::now();
+            let ts1 = (now - chrono::Duration::minutes(2)).to_rfc3339();
+            let ts2 = (now - chrono::Duration::minutes(1)).to_rfc3339();
+            db::metrics::insert_sample(&s.db_pool, &ts1, "server", Some(12.0), Some(1_000_000), Some(2_000_000))
+                .await
+                .unwrap();
+            db::metrics::insert_sample(&s.db_pool, &ts2, "server", Some(18.0), Some(1_100_000), Some(2_000_000))
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("<polyline"));
+        assert!(body.contains("18.0%"));
     }
 
     #[tokio::test]
