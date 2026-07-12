@@ -35,6 +35,8 @@ use tokio::sync::RwLock;
 use crate::commands::server::AppState;
 use crate::db;
 
+mod chart;
+
 const COOKIE_NAME: &str = "litehouse_token";
 
 fn is_local_dev() -> bool {
@@ -116,6 +118,12 @@ fn redirect_after_action(next: Option<&str>, error_code: Option<&str>) -> Redire
 #[derive(Debug, Deserialize)]
 struct FlashQuery {
     flash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppDetailQuery {
+    flash: Option<String>,
+    range: Option<String>,
 }
 
 /// Thin wrapper turning any `askama::Template` into an axum response.
@@ -229,6 +237,11 @@ struct AppsTemplate {
     backup_failures: Vec<(String, String)>,
     flash: Option<String>,
     any_in_progress: bool,
+    server_cpu_chart: String,
+    server_mem_chart: String,
+    server_mem_total: String,
+    server_disk_chart: String,
+    server_disk_total: String,
 }
 
 struct DeployRow {
@@ -253,6 +266,23 @@ struct AppDetailTemplate {
     env_names: Vec<String>,
     deploys: Vec<DeployRow>,
     flash: Option<String>,
+    metrics_range: String,
+    cpu_chart: String,
+    mem_chart: String,
+    disk_chart: String,
+}
+
+struct BackupRow {
+    app_name: String,
+    s3_key: String,
+    size: String,
+    age: String,
+}
+
+#[derive(Template)]
+#[template(path = "backups.html")]
+struct BackupsTemplate {
+    backups: Vec<BackupRow>,
 }
 
 // ---------------------------------------------------------------------
@@ -270,6 +300,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/env/set", post(set_env_ui))
         .route("/apps/:name/env/delete", post(delete_env_ui))
         .route("/backup/run", post(run_backup_ui))
+        .route("/backups", get(backups_page))
         .route("/logout", post(logout))
         .route("/apps/:name/log-tail", get(log_tail))
         .layer(axum::middleware::from_fn_with_state(
@@ -371,6 +402,63 @@ async fn run_backup_ui(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoR
     Redirect::to("/?flash=backup-started")
 }
 
+async fn build_server_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>) -> (String, String, String, String, String) {
+    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let rows = db::metrics::list_samples_since(pool, "server", &since).await.unwrap_or_default();
+    let cpu: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_pct).collect();
+    let mem: Vec<Option<f64>> = rows.iter().map(|r| r.mem_bytes.map(|v| v as f64)).collect();
+    let disk: Vec<Option<f64>> = rows.iter().map(|r| r.disk_bytes.map(|v| v as f64)).collect();
+
+    let mem_total = match crate::metrics::mem_usage().await {
+        Ok((_, total)) => chart::format_bytes(total),
+        Err(_) => "unknown".to_string(),
+    };
+    let disk_total = match crate::metrics::disk_usage().await {
+        Ok((_, total)) => chart::format_bytes(total),
+        Err(_) => "unknown".to_string(),
+    };
+
+    (
+        chart::line_chart(&cpu, chart::ChartUnit::Percent),
+        chart::line_chart(&mem, chart::ChartUnit::Bytes),
+        mem_total,
+        chart::line_chart(&disk, chart::ChartUnit::Bytes),
+        disk_total,
+    )
+}
+
+async fn build_app_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>, scope: &str, range: &str) -> (String, String, String) {
+    if range == "30d" {
+        let since = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+        let rows = db::metrics::list_hourly_since(pool, scope, &since).await.unwrap_or_default();
+        let cpu_avg: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_avg).collect();
+        let cpu_min: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_min).collect();
+        let cpu_max: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_max).collect();
+        let mem_avg: Vec<Option<f64>> = rows.iter().map(|r| r.mem_avg.map(|v| v as f64)).collect();
+        let mem_min: Vec<Option<f64>> = rows.iter().map(|r| r.mem_min.map(|v| v as f64)).collect();
+        let mem_max: Vec<Option<f64>> = rows.iter().map(|r| r.mem_max.map(|v| v as f64)).collect();
+        let disk_avg: Vec<Option<f64>> = rows.iter().map(|r| r.disk_avg.map(|v| v as f64)).collect();
+        let disk_min: Vec<Option<f64>> = rows.iter().map(|r| r.disk_min.map(|v| v as f64)).collect();
+        let disk_max: Vec<Option<f64>> = rows.iter().map(|r| r.disk_max.map(|v| v as f64)).collect();
+        (
+            chart::band_chart(&cpu_avg, &cpu_min, &cpu_max, chart::ChartUnit::Percent),
+            chart::band_chart(&mem_avg, &mem_min, &mem_max, chart::ChartUnit::Bytes),
+            chart::band_chart(&disk_avg, &disk_min, &disk_max, chart::ChartUnit::Bytes),
+        )
+    } else {
+        let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        let rows = db::metrics::list_samples_since(pool, scope, &since).await.unwrap_or_default();
+        let cpu: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_pct).collect();
+        let mem: Vec<Option<f64>> = rows.iter().map(|r| r.mem_bytes.map(|v| v as f64)).collect();
+        let disk: Vec<Option<f64>> = rows.iter().map(|r| r.disk_bytes.map(|v| v as f64)).collect();
+        (
+            chart::line_chart(&cpu, chart::ChartUnit::Percent),
+            chart::line_chart(&mem, chart::ChartUnit::Bytes),
+            chart::line_chart(&disk, chart::ChartUnit::Bytes),
+        )
+    }
+}
+
 async fn apps_index(
     State(state): State<Arc<RwLock<AppState>>>,
     Query(q): Query<FlashQuery>,
@@ -445,6 +533,9 @@ async fn apps_index(
             _ => ("no backup has run yet".to_string(), Vec::new()),
         };
 
+    let (server_cpu_chart, server_mem_chart, server_mem_total, server_disk_chart, server_disk_total) =
+        build_server_metrics_charts(&pool).await;
+
     HtmlTemplate(AppsTemplate {
         apps: rows,
         backup_line,
@@ -455,8 +546,39 @@ async fn apps_index(
             .and_then(flash_message)
             .map(str::to_string),
         any_in_progress,
+        server_cpu_chart,
+        server_mem_chart,
+        server_mem_total,
+        server_disk_chart,
+        server_disk_total,
     })
     .into_response()
+}
+
+async fn backups_page(State(state): State<Arc<RwLock<AppState>>>) -> Response {
+    let pool = state.read().await.db_pool.clone();
+    let records = match db::backup::list_all(&pool).await {
+        Ok(records) => records,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to list backups: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let backups = records
+        .into_iter()
+        .map(|b| BackupRow {
+            app_name: b.app_name,
+            s3_key: b.s3_key,
+            size: chart::format_bytes(b.size_bytes),
+            age: relative_time(&b.created_at),
+        })
+        .collect();
+
+    HtmlTemplate(BackupsTemplate { backups }).into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -624,7 +746,7 @@ async fn delete_env_ui(
 async fn app_detail(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
-    Query(q): Query<FlashQuery>,
+    Query(q): Query<AppDetailQuery>,
 ) -> Response {
     let (pool, config) = {
         let s = state.read().await;
@@ -671,6 +793,12 @@ async fn app_detail(
         })
         .collect();
 
+    let metrics_range = match q.range.as_deref() {
+        Some("30d") => "30d".to_string(),
+        _ => "24h".to_string(),
+    };
+    let (cpu_chart, mem_chart, disk_chart) = build_app_metrics_charts(&pool, &app.id, &metrics_range).await;
+
     HtmlTemplate(AppDetailTemplate {
         url: app_url(&app.name, &config),
         state_class: state_str.clone(),
@@ -687,6 +815,10 @@ async fn app_detail(
             .as_deref()
             .and_then(flash_message)
             .map(str::to_string),
+        metrics_range,
+        cpu_chart,
+        mem_chart,
+        disk_chart,
     })
     .into_response()
 }
@@ -756,6 +888,16 @@ mod tests {
             server_config: ServerConfig::default(),
             app_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }))
+    }
+
+    async fn state_with_app(name: &str) -> Arc<RwLock<AppState>> {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            let app = App::new(name).unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+        }
+        state
     }
 
     fn router(state: Arc<RwLock<AppState>>) -> Router {
@@ -1499,5 +1641,182 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn backups_page_without_cookie_redirects_to_login() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(response.headers().get(header::LOCATION).unwrap(), "/login");
+    }
+
+    #[tokio::test]
+    async fn backups_page_shows_empty_state_with_no_catalog_rows() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("No backups recorded yet"));
+    }
+
+    #[tokio::test]
+    async fn index_shows_server_resources_card_with_no_samples() {
+        let state = test_state().await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("server resources"));
+        assert!(body.contains("no data yet"));
+    }
+
+    #[tokio::test]
+    async fn index_server_resources_card_renders_chart_from_samples() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            // Timestamps relative to "now" (rather than a fixed date) so this
+            // test stays valid regardless of when the suite actually runs —
+            // `build_server_metrics_charts` only queries the last 24h.
+            let now = chrono::Utc::now();
+            let ts1 = (now - chrono::Duration::minutes(2)).to_rfc3339();
+            let ts2 = (now - chrono::Duration::minutes(1)).to_rfc3339();
+            db::metrics::insert_sample(&s.db_pool, &ts1, "server", Some(12.0), Some(1_000_000), Some(2_000_000))
+                .await
+                .unwrap();
+            db::metrics::insert_sample(&s.db_pool, &ts2, "server", Some(18.0), Some(1_100_000), Some(2_000_000))
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("<polyline"));
+        assert!(body.contains("18.0%"));
+    }
+
+    #[tokio::test]
+    async fn backups_page_lists_catalog_rows() {
+        let state = test_state().await;
+        {
+            let s = state.read().await;
+            db::backup::record_upload(&s.db_pool, "demo-app", "apps/demo-app/2026-07-11.tar.gz", 123456)
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/backups")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("demo-app"));
+        assert!(body.contains("2026-07-11.tar.gz"));
+        assert!(body.contains("120.6 KB"));
+    }
+
+    #[tokio::test]
+    async fn app_detail_shows_resources_card_with_no_samples() {
+        let state = state_with_app("metrics-app").await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/metrics-app")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("Resources"));
+        assert!(body.contains("no data yet"));
+    }
+
+    #[tokio::test]
+    async fn app_detail_range_toggle_switches_to_hourly_rollups() {
+        let state = state_with_app("metrics-app-30d").await;
+        {
+            let s = state.read().await;
+            let app_row = db::app::get_by_name(&s.db_pool, "metrics-app-30d").await.unwrap().unwrap();
+            db::metrics::insert_sample(&s.db_pool, "2026-07-12T10:00:00+00:00", &app_row.id, Some(5.0), Some(1000), Some(2000))
+                .await
+                .unwrap();
+            db::metrics::rollup_hour(&s.db_pool, "2026-07-12T10:00:00+00:00", "2026-07-12T11:00:00+00:00")
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/metrics-app-30d?range=30d")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("5.0% avg"));
     }
 }

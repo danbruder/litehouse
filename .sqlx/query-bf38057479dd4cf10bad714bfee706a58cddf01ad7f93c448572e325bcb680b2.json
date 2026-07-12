@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM metric_sample WHERE ts < ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "bf38057479dd4cf10bad714bfee706a58cddf01ad7f93c448572e325bcb680b2"
+}

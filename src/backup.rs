@@ -258,9 +258,11 @@ async fn delete_keys(client: &S3Client, bucket: &str, keys: &[String]) -> Result
     Ok(())
 }
 
-/// Prune old backups under `prefix`, keeping the newest `RETENTION_COUNT`.
-#[instrument(skip(client))]
-async fn prune_old_backups(client: &S3Client, bucket: &str, prefix: &str) -> Result<()> {
+/// Prune old backups under `prefix`, keeping the newest `RETENTION_COUNT`,
+/// and remove the matching rows from the `backup` catalog so it never lists
+/// an artifact that no longer exists in S3.
+#[instrument(skip(pool, client))]
+async fn prune_old_backups(pool: &Pool<Sqlite>, client: &S3Client, bucket: &str, prefix: &str) -> Result<()> {
     let keys = list_keys(client, bucket, prefix).await?;
     let doomed = keys_to_prune(&keys, RETENTION_COUNT);
     if !doomed.is_empty() {
@@ -269,6 +271,9 @@ async fn prune_old_backups(client: &S3Client, bucket: &str, prefix: &str) -> Res
             doomed.len()
         );
         delete_keys(client, bucket, &doomed).await?;
+        if let Err(e) = db::backup::delete_by_keys(pool, &doomed).await {
+            warn!("failed to prune backup catalog rows for s3://{bucket}/{prefix}: {e:#}");
+        }
     }
     Ok(())
 }
@@ -520,7 +525,7 @@ pub async fn run_backup(pool: &Pool<Sqlite>, docker: &Docker) -> Result<BackupRe
     // 2. Every app.
     let apps = db::app::get_all(pool).await.context("failed to list apps")?;
     for app in apps {
-        match backup_app(docker, &client, &bucket, prefix.as_deref(), &date, &backups_dir, &app.id, &app.name)
+        match backup_app(pool, docker, &client, &bucket, prefix.as_deref(), &date, &backups_dir, &app.id, &app.name)
             .await
         {
             Ok(()) => succeeded.push(app.name.clone()),
@@ -573,9 +578,14 @@ async fn backup_state_db(
 
     let key = state_backup_key(prefix, date);
     upload_file(client, bucket, &key, &snapshot_path).await?;
+    let size_bytes = std::fs::metadata(&snapshot_path).map(|m| m.len() as i64).unwrap_or(0);
     let _ = std::fs::remove_file(&snapshot_path);
 
-    prune_old_backups(client, bucket, &state_prefix_root(prefix)).await?;
+    if let Err(e) = db::backup::record_upload(pool, "litehouse-state", &key, size_bytes).await {
+        warn!("failed to catalog litehouse state backup: {e:#}");
+    }
+
+    prune_old_backups(pool, client, bucket, &state_prefix_root(prefix)).await?;
     Ok(())
 }
 
@@ -594,6 +604,7 @@ fn app_prefix_root(prefix: Option<&str>, app_name: &str) -> String {
 }
 
 async fn backup_app(
+    pool: &Pool<Sqlite>,
     docker: &Docker,
     client: &S3Client,
     bucket: &str,
@@ -618,6 +629,7 @@ async fn backup_app(
 
     let key = app_backup_key(prefix, app_name, date);
     let upload_result = upload_file(client, bucket, &key, &tarball_path).await;
+    let size_bytes = std::fs::metadata(&tarball_path).map(|m| m.len() as i64).unwrap_or(0);
 
     // Clean up local staging regardless of upload outcome.
     let _ = std::fs::remove_file(&tarball_path);
@@ -625,7 +637,11 @@ async fn backup_app(
 
     upload_result?;
 
-    prune_old_backups(client, bucket, &app_prefix_root(prefix, app_name)).await?;
+    if let Err(e) = db::backup::record_upload(pool, app_name, &key, size_bytes).await {
+        warn!("failed to catalog backup for app '{app_name}': {e:#}");
+    }
+
+    prune_old_backups(pool, client, bucket, &app_prefix_root(prefix, app_name)).await?;
     Ok(())
 }
 

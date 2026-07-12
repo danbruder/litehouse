@@ -10,6 +10,7 @@ pub mod db;
 pub mod deploy;
 pub mod github;
 pub mod install;
+pub mod metrics;
 pub mod models;
 pub mod docker;
 pub mod ui;

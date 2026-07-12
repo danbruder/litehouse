@@ -77,6 +77,18 @@
   </div>
 </div>
 
+<h3>Resources</h3>
+<p class="inline-links">
+  <a href="/apps/{{ app_name }}?range=24h"{% if metrics_range == "24h" %} class="active"{% endif %}>24h</a>
+  &middot;
+  <a href="/apps/{{ app_name }}?range=30d"{% if metrics_range == "30d" %} class="active"{% endif %}>30d</a>
+</p>
+<div class="metrics-grid">
+  <div><h4>CPU</h4>{{ cpu_chart|safe }}</div>
+  <div><h4>Memory</h4>{{ mem_chart|safe }}</div>
+  <div><h4>Data size</h4>{{ disk_chart|safe }}</div>
+</div>
+
 <h3>Deploys</h3>
 <table class="deploys">
   <colgroup>

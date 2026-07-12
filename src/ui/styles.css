@@ -656,3 +656,56 @@ pre.log::-webkit-scrollbar-thumb {
 pre.log::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ---------------------------------------------------------------------
+   Resource charts
+   --------------------------------------------------------------------- */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.25rem;
+  margin-top: 0.5rem;
+}
+
+.metrics-grid h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg);
+}
+
+.inline-links a {
+  margin-right: 0.25rem;
+}
+
+.inline-links a.active {
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.chart {
+  color: var(--accent);
+}
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: 70px;
+}
+
+.chart-label {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.chart-empty {
+  height: 70px;
+  display: flex;
+  align-items: center;
+}

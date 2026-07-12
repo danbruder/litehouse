@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT scope FROM metric_sample WHERE ts >= ? AND ts < ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "scope",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f0431b6fa75c6f32928f182a2e6f9b9913ea9afefe8fc7de18aef7780c98fe11"
+}

@@ -1,5 +1,6 @@
 target
 config/litehouse.*
+config/*.db*
 .env
 .beads/
 .dev/

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT hour, scope, cpu_avg, cpu_min, cpu_max,\n               mem_avg, mem_min, mem_max,\n               disk_avg, disk_min, disk_max, samples\n        FROM metric_hourly\n        WHERE scope = ? AND hour >= ?\n        ORDER BY hour ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "hour",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "scope",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "cpu_avg",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "cpu_min",
+        "ordinal": 3,
+        "type_info": "Float"
+      },
+      {
+        "name": "cpu_max",
+        "ordinal": 4,
+        "type_info": "Float"
+      },
+      {
+        "name": "mem_avg",
+        "ordinal": 5,
+        "type_info": "Int64"
+      },
+      {
+        "name": "mem_min",
+        "ordinal": 6,
+        "type_info": "Int64"
+      },
+      {
+        "name": "mem_max",
+        "ordinal": 7,
+        "type_info": "Int64"
+      },
+      {
+        "name": "disk_avg",
+        "ordinal": 8,
+        "type_info": "Int64"
+      },
+      {
+        "name": "disk_min",
+        "ordinal": 9,
+        "type_info": "Int64"
+      },
+      {
+        "name": "disk_max",
+        "ordinal": 10,
+        "type_info": "Int64"
+      },
+      {
+        "name": "samples",
+        "ordinal": 11,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "22803d75b980ee716b1bd3a61608292ed8447d831b87de39176ba8e6c72ba21e"
+}

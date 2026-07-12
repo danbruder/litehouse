@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT ts, scope, cpu_pct, mem_bytes, disk_bytes\n        FROM metric_sample\n        WHERE scope = ? AND ts >= ?\n        ORDER BY ts ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "ts",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "scope",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "cpu_pct",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "mem_bytes",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "disk_bytes",
+        "ordinal": 4,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "fde8ef3cc8f328e3d3fb14db78c6787e379921a39ce1a8af7567f031b4406a4c"
+}
