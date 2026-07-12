@@ -35,6 +35,8 @@ use tokio::sync::RwLock;
 use crate::commands::server::AppState;
 use crate::db;
 
+mod chart;
+
 const COOKIE_NAME: &str = "litehouse_token";
 
 fn is_local_dev() -> bool {
