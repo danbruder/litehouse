@@ -107,6 +107,191 @@ pub fn cpu_pct_from_docker_stats(curr: &CPUStats, prev: &CPUStats) -> Option<f64
     Some((cpu_delta as f64 / system_delta as f64) * online_cpus * 100.0)
 }
 
+use anyhow::{anyhow, Result};
+use bollard::container::{Stats, StatsOptions};
+use bollard::Docker;
+use chrono::Timelike;
+use futures_util::StreamExt;
+use std::collections::HashMap;
+use tracing::warn;
+
+use crate::{config, db};
+
+/// Live host memory usage: `(used_bytes, total_bytes)`.
+pub async fn mem_usage() -> Result<(i64, i64)> {
+    let contents = tokio::fs::read_to_string("/proc/meminfo").await?;
+    mem_usage_from_meminfo(&contents).ok_or_else(|| anyhow!("failed to parse /proc/meminfo"))
+}
+
+/// Live disk usage of the filesystem backing the backups/data directory, via
+/// `df -B1`: `(used_bytes, total_bytes)`. Shelling out (rather than adding a
+/// `statvfs`-wrapping crate) matches how this codebase already invokes
+/// system CLIs for one-off queries (e.g. `docker build`).
+pub async fn disk_usage() -> Result<(i64, i64)> {
+    let dir = config::get_backups_dir().map_err(|e| anyhow!("{e}"))?;
+    let output = tokio::process::Command::new("df").arg("-B1").arg(&dir).output().await?;
+    if !output.status.success() {
+        return Err(anyhow!("df exited with {}", output.status));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_df_output(&stdout).ok_or_else(|| anyhow!("unparseable df output: {stdout}"))
+}
+
+async fn docker_stats_once(docker: &Docker, container_name: &str) -> Result<Stats> {
+    let mut stream = docker.stats(container_name, Some(StatsOptions { stream: false, one_shot: false }));
+    match stream.next().await {
+        Some(Ok(stats)) => Ok(stats),
+        Some(Err(e)) => Err(e.into()),
+        None => Err(anyhow!("no stats returned for container '{container_name}'")),
+    }
+}
+
+async fn app_volume_size(docker: &Docker, app_id: &str) -> Result<i64> {
+    let volume_name = crate::volume::get_app_volume_name(app_id);
+    let usage = docker.df().await?;
+    let size = usage
+        .volumes
+        .unwrap_or_default()
+        .into_iter()
+        .find(|v| v.name == volume_name)
+        .and_then(|v| v.usage_data)
+        .map(|u| u.size)
+        .unwrap_or(0);
+    Ok(size)
+}
+
+/// One 60-second sampling tick: reads server-wide CPU/mem/disk and, for
+/// every currently-running app, its container CPU/mem plus (every 10th tick
+/// only — data-volume size changes slowly and `docker df` walks the whole
+/// volume) its data size, persisting all of it to `metric_sample`. Never
+/// panics — a sampling failure for one scope just logs a warning and skips
+/// that scope's row for this tick.
+pub async fn run_tick(
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    docker: &Docker,
+    prev_host_cpu: &mut Option<ProcStatCpu>,
+    tick_count: u64,
+    prev_app_disk: &mut HashMap<String, i64>,
+) {
+    let ts = chrono::Utc::now().to_rfc3339();
+    sample_server(pool, &ts, prev_host_cpu).await;
+
+    let apps = match db::app::get_all(pool).await {
+        Ok(apps) => apps,
+        Err(e) => {
+            warn!("metrics: failed to list apps for sampling: {e:#}");
+            return;
+        }
+    };
+
+    prev_app_disk.retain(|id, _| apps.iter().any(|a| &a.id == id));
+
+    for app in apps {
+        sample_app(pool, docker, &app, &ts, tick_count, prev_app_disk).await;
+    }
+}
+
+async fn sample_server(pool: &sqlx::Pool<sqlx::Sqlite>, ts: &str, prev_host_cpu: &mut Option<ProcStatCpu>) {
+    let cpu_pct = match tokio::fs::read_to_string("/proc/stat").await {
+        Ok(contents) => match parse_proc_stat_cpu_line(&contents) {
+            Some(curr) => {
+                let pct = prev_host_cpu.as_ref().and_then(|prev| cpu_pct_from_proc_stat(prev, &curr));
+                *prev_host_cpu = Some(curr);
+                pct
+            }
+            None => {
+                warn!("metrics: failed to parse /proc/stat");
+                None
+            }
+        },
+        Err(e) => {
+            warn!("metrics: failed to read /proc/stat: {e}");
+            None
+        }
+    };
+
+    let mem_bytes = mem_usage().await.map(|(used, _)| used).ok();
+    let disk_bytes = disk_usage().await.map(|(used, _)| used).ok();
+
+    if let Err(e) = db::metrics::insert_sample(pool, ts, "server", cpu_pct, mem_bytes, disk_bytes).await {
+        warn!("metrics: failed to save server sample: {e:#}");
+    }
+}
+
+async fn sample_app(
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    docker: &Docker,
+    app: &crate::models::App,
+    ts: &str,
+    tick_count: u64,
+    prev_app_disk: &mut HashMap<String, i64>,
+) {
+    let live = crate::docker::live_state(&app.name).await.unwrap_or(app.state);
+    if live != crate::models::AppState::Running {
+        return;
+    }
+
+    let container_name = format!("{}-container", app.name);
+    let (cpu_pct, mem_bytes) = match docker_stats_once(docker, &container_name).await {
+        Ok(stats) => (
+            cpu_pct_from_docker_stats(&stats.cpu_stats, &stats.precpu_stats),
+            stats.memory_stats.usage.map(|u| u as i64),
+        ),
+        Err(e) => {
+            warn!("metrics: failed to sample container stats for '{}': {e:#}", app.name);
+            (None, None)
+        }
+    };
+
+    let disk_bytes = if tick_count % 10 == 0 {
+        match app_volume_size(docker, &app.id).await {
+            Ok(size) => {
+                prev_app_disk.insert(app.id.clone(), size);
+                Some(size)
+            }
+            Err(e) => {
+                warn!("metrics: failed to measure data volume for '{}': {e:#}", app.name);
+                prev_app_disk.get(&app.id).copied()
+            }
+        }
+    } else {
+        prev_app_disk.get(&app.id).copied()
+    };
+
+    if let Err(e) = db::metrics::insert_sample(pool, ts, &app.id, cpu_pct, mem_bytes, disk_bytes).await {
+        warn!("metrics: failed to save sample for app '{}': {e:#}", app.name);
+    }
+}
+
+/// Roll the most recently completed UTC hour's samples into `metric_hourly`,
+/// then prune samples older than 24h and hourly rows older than 30 days.
+/// Called once per hour from the sampler loop in `commands::server::execute`.
+pub async fn rollup_and_prune(pool: &sqlx::Pool<sqlx::Sqlite>) {
+    let now = chrono::Utc::now();
+    let hour_end = now
+        .date_naive()
+        .and_hms_opt(now.hour(), 0, 0)
+        .expect("hour/0/0 is always a valid time")
+        .and_utc();
+    let hour_start = hour_end - chrono::Duration::hours(1);
+    let hour_start_s = hour_start.to_rfc3339();
+    let hour_end_s = hour_end.to_rfc3339();
+
+    if let Err(e) = db::metrics::rollup_hour(pool, &hour_start_s, &hour_end_s).await {
+        warn!("metrics: hourly rollup failed: {e:#}");
+    }
+
+    let sample_cutoff = (now - chrono::Duration::hours(24)).to_rfc3339();
+    if let Err(e) = db::metrics::prune_samples_older_than(pool, &sample_cutoff).await {
+        warn!("metrics: sample prune failed: {e:#}");
+    }
+
+    let hourly_cutoff = (now - chrono::Duration::days(30)).to_rfc3339();
+    if let Err(e) = db::metrics::prune_hourly_older_than(pool, &hourly_cutoff).await {
+        warn!("metrics: hourly prune failed: {e:#}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
