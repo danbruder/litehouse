@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO backup (id, app_name, s3_key, size_bytes, status, created_at)\n        VALUES (?, ?, ?, ?, ?, ?)\n        ON CONFLICT(s3_key) DO UPDATE SET\n            size_bytes = excluded.size_bytes,\n            status = excluded.status,\n            created_at = excluded.created_at\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "2164d8950604bd379dfebedd52db71dc1e116bef932cb4e074d90b3667a83708"
+}

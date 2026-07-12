@@ -25,7 +25,7 @@ CREATE TABLE metric_hourly (
 CREATE INDEX idx_metric_hourly_scope_hour ON metric_hourly (scope, hour);
 
 CREATE TABLE backup (
-    id         TEXT PRIMARY KEY,
+    id         TEXT PRIMARY KEY NOT NULL,
     app_name   TEXT NOT NULL,        -- app name, or 'litehouse-state' for the state DB snapshot
     s3_key     TEXT NOT NULL UNIQUE,
     size_bytes INTEGER NOT NULL,
