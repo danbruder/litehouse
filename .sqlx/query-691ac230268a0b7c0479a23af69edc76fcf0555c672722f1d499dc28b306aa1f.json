@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT INTO metric_sample (ts, scope, cpu_pct, mem_bytes, disk_bytes)\n        VALUES (?, ?, ?, ?, ?)\n        ON CONFLICT(ts, scope) DO UPDATE SET\n            cpu_pct = excluded.cpu_pct,\n            mem_bytes = excluded.mem_bytes,\n            disk_bytes = excluded.disk_bytes\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "691ac230268a0b7c0479a23af69edc76fcf0555c672722f1d499dc28b306aa1f"
+}

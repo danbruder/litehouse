@@ -5,6 +5,7 @@ use tracing::{debug, info, instrument};
 pub mod app;
 pub mod deploy;
 pub mod env_var;
+pub mod metrics;
 pub mod system_config;
 
 use crate::config;

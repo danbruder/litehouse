@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO metric_hourly (\n                hour, scope,\n                cpu_avg, cpu_min, cpu_max,\n                mem_avg, mem_min, mem_max,\n                disk_avg, disk_min, disk_max,\n                samples\n            )\n            SELECT\n                ?, ?,\n                AVG(cpu_pct), MIN(cpu_pct), MAX(cpu_pct),\n                CAST(AVG(mem_bytes) AS INTEGER), MIN(mem_bytes), MAX(mem_bytes),\n                CAST(AVG(disk_bytes) AS INTEGER), MIN(disk_bytes), MAX(disk_bytes),\n                COUNT(*)\n            FROM metric_sample\n            WHERE scope = ? AND ts >= ? AND ts < ?\n            ON CONFLICT(hour, scope) DO UPDATE SET\n                cpu_avg = excluded.cpu_avg, cpu_min = excluded.cpu_min, cpu_max = excluded.cpu_max,\n                mem_avg = excluded.mem_avg, mem_min = excluded.mem_min, mem_max = excluded.mem_max,\n                disk_avg = excluded.disk_avg, disk_min = excluded.disk_min, disk_max = excluded.disk_max,\n                samples = excluded.samples\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "7f1055b8770033373389a9c83ee1f19b6bedc2c087dad02af694759da831e642"
+}
