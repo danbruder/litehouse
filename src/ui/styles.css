@@ -677,6 +677,16 @@ pre.log::-webkit-scrollbar-track {
   color: var(--fg);
 }
 
+.inline-links a {
+  margin-right: 0.25rem;
+}
+
+.inline-links a.active {
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 700;
+}
+
 .chart {
   color: var(--accent);
 }
