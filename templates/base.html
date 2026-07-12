@@ -9,10 +9,11 @@
 </head>
 <body>
   {% block body %}
+  <div class="scanlines" aria-hidden="true"></div>
   <header>
-    <a href="/"><h1>litehouse</h1></a>
+    <a class="brand" href="/"><h1>litehouse</h1><span class="cursor">_</span></a>
     <form method="post" action="/logout">
-      <button type="submit">Sign out</button>
+      <button type="submit">sign out</button>
     </form>
   </header>
   <main>

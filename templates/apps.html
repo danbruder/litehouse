@@ -8,11 +8,11 @@
 {% endif %}
 
 <div class="card">
+  <span class="panel-label">backups</span>
   <p>
-    <strong>Backups:</strong>
     <span class="muted">{{ backup_line }}</span>
     <form class="inline" method="post" action="/backup/run">
-      <button type="submit">Run backup now</button>
+      <button type="submit">run now</button>
     </form>
   </p>
   {% if !backup_failures.is_empty() %}
@@ -26,6 +26,7 @@
 
 {% if apps.is_empty() %}
 <div class="card">
+  <span class="panel-label">getting started</span>
   <p>No apps yet.</p>
   <p class="muted">Run <code>lh create &lt;app&gt; --repo owner/name</code>, then <code>git push</code> to deploy.</p>
 </div>

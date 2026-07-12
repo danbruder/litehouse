@@ -12,6 +12,7 @@
 <h2>{{ app_name }} <span class="badge badge-{{ state_class }}">{{ state }}</span></h2>
 
 <div class="card">
+  <span class="panel-label">app</span>
   <p><strong>URL:</strong> <a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></p>
   {% if !custom_domains.is_empty() %}
   <p><strong>Domains:</strong>
@@ -30,19 +31,19 @@
   <p>
     <form class="inline" method="post" action="/apps/{{ app_name }}/start">
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">Start</button>
+      <button type="submit">start</button>
     </form>
     <form class="inline" method="post" action="/apps/{{ app_name }}/stop">
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">Stop</button>
+      <button type="submit">stop</button>
     </form>
     <form class="inline" method="post" action="/apps/{{ app_name }}/restart">
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">Restart</button>
+      <button type="submit">restart</button>
     </form>
     <form class="inline" method="post" action="/apps/{{ app_name }}/redeploy">
       <input type="hidden" name="next" value="/apps/{{ app_name }}">
-      <button type="submit">Redeploy</button>
+      <button type="submit">redeploy</button>
     </form>
   </p>
 </div>
@@ -52,7 +53,7 @@
   {% if env_names.is_empty() %}
   no environment variables set
   {% else %}
-  {% for name in env_names %}<span class="badge">{{ name }}</span> {% endfor %}
+  {% for name in env_names %}<span class="tag">{{ name }}</span> {% endfor %}
   {% endif %}
 </p>
 
@@ -86,7 +87,13 @@
 </table>
 
 <h3>Logs</h3>
-<pre class="log" hx-get="/apps/{{ app_name }}/log-tail" hx-trigger="load, every 5s" hx-swap="innerHTML">loading...</pre>
+<div class="terminal">
+  <div class="terminal-bar">
+    <span class="terminal-dot"></span>
+    {{ app_name }} — live tail
+  </div>
+  <pre class="log" hx-get="/apps/{{ app_name }}/log-tail" hx-trigger="load, every 5s" hx-swap="innerHTML">loading...</pre>
+</div>
 <script>
   document.body.addEventListener("htmx:afterSwap", function (e) {
     if (e.target.classList && e.target.classList.contains("log")) {
