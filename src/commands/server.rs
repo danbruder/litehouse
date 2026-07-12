@@ -11,6 +11,7 @@ use tracing::{info, instrument};
 
 use crate::api;
 use crate::backup;
+use crate::metrics;
 use crate::ui;
 use crate::config::ServerConfig;
 use crate::db;
@@ -155,6 +156,28 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
                         Err(e) => tracing::error!("daily backup failed, will retry next hour: {e:#}"),
                     }
                 }
+            }
+        });
+    }
+
+    // Resource-usage sampler: every 60s, snapshot host + per-running-app
+    // CPU/mem/disk into `metric_sample`; once an hour, roll the completed
+    // hour up into `metric_hourly` and prune old rows. See src/metrics.rs.
+    {
+        let pool = pool.clone();
+        let docker_conn = docker_conn.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut prev_host_cpu = None;
+            let mut prev_app_disk = std::collections::HashMap::new();
+            let mut tick_count: u64 = 0;
+            loop {
+                interval.tick().await;
+                metrics::run_tick(&pool, &docker_conn, &mut prev_host_cpu, tick_count, &mut prev_app_disk).await;
+                if tick_count > 0 && tick_count % 60 == 0 {
+                    metrics::rollup_and_prune(&pool).await;
+                }
+                tick_count += 1;
             }
         });
     }
