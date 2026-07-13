@@ -281,16 +281,20 @@ docker volume create litehouse_data 2>/dev/null || true
 mkdir -p /opt/litehouse/backups
 chmod 777 /opt/litehouse/backups
 
-# Copy server-config.toml from host into the Docker volume
-# This ensures the container sees the production configuration
-echo "Copying server-config.toml into Docker volume..."
+# Seed server-config.toml into the (empty) Docker volume on first boot only.
+# This container is (re)started on every `lh upgrade`/deploy, not just on
+# first install — copying unconditionally here would clobber any change made
+# to the live volume config since install (e.g. an admin token rotation)
+# with the stale host-side snapshot, silently reverting it on every deploy.
+# Once the volume has a config file, it — not the host file — is the source
+# of truth.
+echo "Seeding server-config.toml into Docker volume (first boot only)..."
 if [ -f /opt/litehouse/config/server-config.toml ]; then
   docker run --rm \
     -v litehouse_config:/target \
     -v /opt/litehouse/config/server-config.toml:/source/server-config.toml:ro \
     alpine:3.20 \
-    sh -c 'cp /source/server-config.toml /target/server-config.toml'
-  echo "Server config copied successfully"
+    sh -c 'if [ ! -f /target/server-config.toml ]; then cp /source/server-config.toml /target/server-config.toml; echo "Server config seeded from host (volume was empty)"; else echo "Server config already present in volume, leaving it in place"; fi'
 else
   echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
 fi
@@ -400,6 +404,21 @@ mod tests {
         assert!(script.contains("LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups"));
         assert!(!script.to_lowercase().contains("litestream"));
         assert!(!script.contains("docker build"));
+    }
+
+    #[test]
+    fn litehouse_run_script_seeds_config_volume_only_if_empty() {
+        // The container is (re)started on every `lh upgrade`/deploy, not just
+        // on first install. If the copy runs unconditionally, it clobbers
+        // any change made to the live volume config since install (e.g. an
+        // admin token rotation) with the stale host-side snapshot, silently
+        // invalidating the current admin token on every deploy.
+        let script = start_litehouse_container_script("1000", "1.2.3");
+        assert!(
+            script.contains("if [ ! -f /target/server-config.toml ]"),
+            "container start script must only seed the config volume when it's empty, \
+             not overwrite it unconditionally on every restart/upgrade"
+        );
     }
 
     #[test]
