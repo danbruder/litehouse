@@ -49,6 +49,20 @@ use crate::{caddy, config, db, docker, volume};
 /// How many daily backups to retain per app / per the litehouse state DB.
 pub const RETENTION_COUNT: usize = 14;
 
+/// Env var name every app container receives at start (see
+/// `commands::start::ensure_blob_path_env_var`), pointing at the directory
+/// it should write incrementally-backed-up blobs into.
+pub const BLOB_PATH_ENV_VAR: &str = "LITEHOUSE_BLOB_PATH";
+
+/// Path (inside the app's own `/data` mount) apps are told to use for blobs
+/// via `BLOB_PATH_ENV_VAR`.
+pub const BLOB_MOUNT_PATH: &str = "/data/blobs";
+
+/// Name of the directory relative to `/data` (and relative to the per-app
+/// backup staging dir) used for blobs. Must match the trailing path
+/// component of `BLOB_MOUNT_PATH`.
+const BLOB_DIR_NAME: &str = "blobs";
+
 /// Process-wide backup/restore mutex. `run_backup` and `restore_all` both
 /// acquire this for their full duration so the hourly scheduler, a manual
 /// `POST /backups/run`, and a `POST /restore` can never interleave their
@@ -603,6 +617,43 @@ fn app_prefix_root(prefix: Option<&str>, app_name: &str) -> String {
     }
 }
 
+/// Build the S3 key for one blob file. Deliberately lives under its own
+/// top-level `blobs/` prefix — NOT nested under `apps/{app_name}/` — because
+/// that prefix is also used by `newest_key`/`prune_old_backups` for the
+/// dated tarball backups, which assume every key there is a dated
+/// `YYYY-MM-DD.tar.gz` snapshot. See the design doc for the full reasoning.
+pub fn blob_key(prefix: Option<&str>, app_name: &str, relative_path: &str) -> String {
+    match prefix.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{p}/blobs/{app_name}/{relative_path}"),
+        None => format!("blobs/{app_name}/{relative_path}"),
+    }
+}
+
+/// Build the S3 prefix under which all of one app's blobs live.
+pub fn blob_prefix_root(prefix: Option<&str>, app_name: &str) -> String {
+    match prefix.filter(|p| !p.is_empty()) {
+        Some(p) => format!("{p}/blobs/{app_name}/"),
+        None => format!("blobs/{app_name}/"),
+    }
+}
+
+/// Given the relative paths of every blob file found locally and the set of
+/// keys already present in S3 under this app's blob prefix, return the
+/// relative paths that still need to be uploaded (pure, no I/O — the
+/// existing-keys listing and the upload itself happen in `backup_blobs`).
+pub fn blobs_missing_from_s3(
+    local_relative_paths: &[String],
+    existing_keys: &[String],
+    prefix: Option<&str>,
+    app_name: &str,
+) -> Vec<String> {
+    local_relative_paths
+        .iter()
+        .filter(|rel| !existing_keys.contains(&blob_key(prefix, app_name, rel)))
+        .cloned()
+        .collect()
+}
+
 async fn backup_app(
     pool: &Pool<Sqlite>,
     docker: &Docker,
@@ -1128,6 +1179,43 @@ mod tests {
             hostile.matches('\'').count() * 2,
             "every embedded quote must be doubled"
         );
+    }
+
+    #[test]
+    fn blob_key_layout() {
+        assert_eq!(
+            blob_key(Some("prod"), "hello", "photo.jpg"),
+            "prod/blobs/hello/photo.jpg"
+        );
+        assert_eq!(blob_key(None, "hello", "photo.jpg"), "blobs/hello/photo.jpg");
+    }
+
+    #[test]
+    fn blob_prefix_root_layout() {
+        assert_eq!(blob_prefix_root(Some("prod"), "hello"), "prod/blobs/hello/");
+        assert_eq!(blob_prefix_root(None, "hello"), "blobs/hello/");
+    }
+
+    #[test]
+    fn blobs_missing_from_s3_skips_existing_uploads_new() {
+        let local = vec!["a.jpg".to_string(), "b.jpg".to_string()];
+        let existing = vec!["blobs/myapp/a.jpg".to_string()];
+        let missing = blobs_missing_from_s3(&local, &existing, None, "myapp");
+        assert_eq!(missing, vec!["b.jpg".to_string()]);
+    }
+
+    #[test]
+    fn blobs_missing_from_s3_empty_when_all_present() {
+        let local = vec!["a.jpg".to_string()];
+        let existing = vec!["blobs/myapp/a.jpg".to_string()];
+        assert!(blobs_missing_from_s3(&local, &existing, None, "myapp").is_empty());
+    }
+
+    #[test]
+    fn blobs_missing_from_s3_all_missing_when_none_exist() {
+        let local = vec!["a.jpg".to_string(), "b.jpg".to_string()];
+        let missing = blobs_missing_from_s3(&local, &[], None, "myapp");
+        assert_eq!(missing, local);
     }
 }
 
