@@ -814,6 +814,41 @@ fn extract_outer_tarball(tarball_path: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Download every object under this app's blob prefix into
+/// `{stage_dir}/blobs/<relative_path>`, recreating the directory structure.
+/// A no-op if the app has no blobs. Always downloads everything (restore is
+/// a rare disaster-recovery path, not a daily job — no incrementality
+/// needed here, unlike `backup_blobs`).
+#[instrument(skip(client))]
+async fn restore_blobs(
+    client: &S3Client,
+    bucket: &str,
+    prefix: Option<&str>,
+    app_name: &str,
+    stage_dir: &Path,
+) -> Result<()> {
+    let blob_prefix = blob_prefix_root(prefix, app_name);
+    let keys = list_keys(client, bucket, &blob_prefix).await?;
+    if keys.is_empty() {
+        return Ok(());
+    }
+
+    let blobs_dir = stage_dir.join(BLOB_DIR_NAME);
+    for key in &keys {
+        let relative_path = key
+            .strip_prefix(&blob_prefix)
+            .with_context(|| format!("blob key {key} missing expected prefix {blob_prefix}"))?;
+        let dest = blobs_dir.join(relative_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        download_file(client, bucket, key, &dest).await?;
+    }
+
+    Ok(())
+}
+
 /// Run a one-shot `alpine:3.20` container that applies a restore staging
 /// directory (bind-mounted read-only at `/restore`, containing `files.tar.gz`
 /// and/or a `dbs/` tree as produced by [`extract_outer_tarball`]) onto the
@@ -845,6 +880,7 @@ async fn run_restore_container(
 mkdir -p /data
 if [ -f /restore/files.tar.gz ]; then tar xzf /restore/files.tar.gz -C /data; fi
 if [ -d /restore/dbs ]; then cp -a /restore/dbs/. /data/; fi
+if [ -d /restore/blobs ]; then mkdir -p /data/blobs && cp -a /restore/blobs/. /data/blobs/; fi
 {perm_fix}
 "#
     );
@@ -993,6 +1029,11 @@ async fn restore_app(
             .context("failed to download app data backup")?;
         extract_outer_tarball(&tarball_path, &stage_dir)?;
         let _ = std::fs::remove_file(&tarball_path);
+
+        restore_blobs(client, bucket, prefix, &app.name, &stage_dir)
+            .await
+            .context("failed to download blob backups")?;
+
         volume::discover_image_user(docker, &image)
             .await
             .context("failed to discover image user")
@@ -1689,6 +1730,120 @@ mod integration_tests {
         let _ = docker
             .remove_container(&container.id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
             .await;
+    }
+
+    /// Full backup-then-restore round trip for blobs: seeds a blob, backs
+    /// up, deletes the app's volume entirely (simulating disaster), then
+    /// restores and checks the blob file is back at `/data/blobs/photo.jpg`
+    /// with its original contents.
+    ///
+    /// Requires Docker. Run with:
+    ///   DOCKER_API_VERSION=1.42 cargo test test_restore_blobs_roundtrip_minio -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_restore_blobs_roundtrip_minio() {
+        let db_dir = tempfile::tempdir().expect("tempdir for test db");
+        let pool = get_file_backed_test_pool(db_dir.path()).await;
+        let docker = crate::docker::connect().await.expect("connect to docker");
+
+        let minio_container = "litehouse-restore-blobs-test-minio";
+        let minio_port = 19002u16;
+        cleanup_minio(minio_container);
+
+        let status = std::process::Command::new("docker")
+            .args([
+                "run", "-d", "--rm", "--name", minio_container,
+                "-p", &format!("{minio_port}:9000"),
+                "-e", "MINIO_ROOT_USER=minioadmin",
+                "-e", "MINIO_ROOT_PASSWORD=minioadmin",
+                "minio/minio", "server", "/data",
+            ])
+            .status()
+            .expect("start minio");
+        assert!(status.success(), "failed to start minio container");
+        wait_for_port(minio_port).await;
+
+        let s3_config = S3Config {
+            access_key_id: "minioadmin".to_string(),
+            secret_access_key: "minioadmin".to_string(),
+            bucket: "litehouse-restore-blobs-test".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint: Some(format!("http://localhost:{minio_port}")),
+            path_prefix: None,
+        };
+        let client = s3_client(&s3_config);
+        let _ = client.create_bucket().bucket(&s3_config.bucket).send().await;
+
+        let system_config = crate::models::SystemConfig::new_s3_config(&s3_config);
+        db::system_config::save_s3_config(&pool, &system_config).await.expect("save s3 config");
+
+        let app_name = "restore-blobs-test-app";
+        let mut app = crate::models::App::new(app_name).expect("valid app name");
+        app.image = Some("alpine:3.20".to_string());
+        db::app::save(&pool, &app).await.expect("save app");
+
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
+            .output();
+        crate::volume::create_app_volume(&docker, &app.id).await.expect("create app volume");
+        crate::volume::init_app_volume(&docker, &app.id, &crate::volume::get_app_volume_name(&app.id), None)
+            .await
+            .expect("init volume permissions");
+
+        seed_app_db(&docker, &app.id).await;
+        seed_blob_file(&docker, &app.id, "photo.jpg", "original-photo-bytes").await;
+
+        let report = run_backup(&pool, &docker).await.expect("run_backup");
+        assert!(report.succeeded.contains(&app_name.to_string()), "backup failed: {:?}", report.failed);
+
+        // Simulate disaster: wipe the app's volume entirely.
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
+            .output();
+
+        let report = restore_all(&pool, &docker).await.expect("restore_all");
+        assert!(report.restored.contains(&app_name.to_string()), "restore skipped/failed: {:?}", report.skipped);
+
+        // Read back the restored blob file directly from the volume via a one-shot container.
+        let read_container = "litehouse-restore-blobs-verify";
+        let _ = docker
+            .remove_container(read_container, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+            .await;
+        let verify_config = ContainerConfig {
+            image: Some("alpine:3.20".to_string()),
+            cmd: Some(vec!["cat".to_string(), "/data/blobs/photo.jpg".to_string()]),
+            host_config: Some(HostConfig {
+                binds: Some(vec![format!("{}:/data:ro", crate::volume::get_app_volume_name(&app.id))]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let container = docker
+            .create_container(Some(CreateContainerOptions { name: read_container.to_string(), platform: None }), verify_config)
+            .await
+            .expect("create verify container");
+        docker.start_container::<String>(&container.id, None).await.expect("start verify container");
+
+        let logs_options = Some(LogsOptions::<String> { stdout: true, stderr: true, tail: "10".to_string(), ..Default::default() });
+        let mut stream = docker.logs(&container.id, logs_options);
+        let mut out = String::new();
+        while let Some(chunk) = stream.next().await {
+            if let Ok(log) = chunk {
+                out.push_str(&log.to_string());
+            }
+        }
+        assert_eq!(out, "original-photo-bytes", "restored blob file contents must match what was backed up");
+
+        let _ = docker
+            .remove_container(&container.id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+            .await;
+
+        // Stop the restored app container and clean up.
+        let _ = crate::docker::stop_and_remove_container(&docker, app_name).await;
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
+            .output();
+        cleanup_minio(minio_container);
     }
 
     fn cleanup_minio(name: &str) {
