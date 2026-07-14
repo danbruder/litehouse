@@ -58,6 +58,7 @@ The v2 refactor (external builds via GHCR, push-to-deploy, daily S3 backups, sin
 - `lh deploys <app> --wait` blocks until the in-flight deploy succeeds or fails (exit 0/1/2) — the CI/agent verification primitive
 - Single admin token (sha256 hash stored server-side); `lh connect <url> --token <TOKEN>` — no users/orgs/JWT
 - Daily backups (VACUUM INTO snapshots, tar.gz to S3, 14-day retention); `lh backup run` / `lh backup status --json`
+- Incremental blob backup: apps get `LITEHOUSE_BLOB_PATH=/data/blobs` and anything written there is backed up to its own S3 prefix (`blobs/{app_name}/...`, NOT nested under `apps/{app_name}/`) on an upload-once basis — unchanged files are never re-uploaded. Restored automatically as part of `lh restore --yes`. See `docs/superpowers/specs/2026-07-14-blob-backup-design.md`.
 - Disaster recovery: `lh install --domain ...` on a fresh node → `lh connect` → `lh restore --yes` rebuilds state, apps, and volumes from GHCR + S3
 - Server-rendered admin UI (Askama + HTMX) served from the same binary, cookie-authenticated with the admin token
 - `e2e/acceptance.sh` and `e2e/dr-drill.sh` automate the full push-to-deploy and disaster-recovery flows against a real droplet; `examples/hello` is the reference app used by both

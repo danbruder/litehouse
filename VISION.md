@@ -29,6 +29,10 @@ A built-in daily job (no host cron) takes a consistent snapshot of every app's S
 
 S3 credentials are collected during `lh install` (or set later via `lh config s3 set`) and stored in the server's database, not a config file.
 
+### Incremental Blob Backup — SHIPPED
+
+Every app is handed a `LITEHOUSE_BLOB_PATH` env var (`/data/blobs`) at container start. Files written there are excluded from the daily full tarball and instead backed up individually to their own S3 prefix (`blobs/{app_name}/...`), uploaded once and never re-uploaded once present — unlike the tarball snapshot, which re-uploads everything every day regardless of change. Restored automatically by `lh restore --yes` alongside the dated tarball. No deletion sync and no per-file backup catalog — see `docs/superpowers/specs/2026-07-14-blob-backup-design.md` for the full design and rationale (in particular, why blob keys live under their own top-level prefix rather than nested under `apps/{app_name}/`).
+
 ### Single Admin Token — SHIPPED
 
 One operator, one server: no users, organizations, or JWTs. `lh install` generates a random admin token, prints it once, and stores only its SHA-256 hash. The CLI presents it as a bearer header; the browser presents it as a cookie after a login form. `lh connect <url> --token <token>` is the only auth setup a client needs.

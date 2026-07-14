@@ -9,6 +9,7 @@ The server never builds anything. GitHub Actions builds each app's image and pus
 - `lh create myapp --repo owner/myapp` registers the app, commits a ready-made GitHub Actions workflow to the repo, and sets a per-app deploy secret — no manual CI setup.
 - `git push` builds the image on GitHub, pushes it to `ghcr.io/owner/myapp`, and calls the server's deploy hook, which pulls the image, replaces the running container, and updates the Caddy reverse proxy (automatic HTTPS, subdomain routing).
 - A built-in daily job snapshots every app's SQLite data (and the server's own state) to S3; `lh restore --yes` on a freshly installed server rebuilds everything — apps, images, data — from GHCR + S3.
+- Apps get a `LITEHOUSE_BLOB_PATH` env var (currently `/data/blobs`) for storing binary blobs (photos, attachments, etc.) that don't belong in the daily SQLite/tarball snapshot. Files written there back up incrementally — uploaded to S3 once, never re-uploaded on later days if unchanged — instead of riding along in the full daily tarball. See `docs/superpowers/specs/2026-07-14-blob-backup-design.md`.
 
 ## Quickstart
 
