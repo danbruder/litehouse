@@ -41,6 +41,7 @@ use sqlx::{Pool, Sqlite};
 use std::fs::File;
 use std::path::Path;
 use tracing::{info, instrument, warn};
+use walkdir::WalkDir;
 
 use crate::commands::start::start_container;
 use crate::models::S3Config;
@@ -676,6 +677,13 @@ async fn backup_app(
         );
     }
 
+    // Upload any blobs first, then drop the staged copy so the outer dated
+    // tarball below doesn't also capture them — blobs get their own
+    // incremental S3 prefix (`blob_prefix_root`), not the daily tarball.
+    let blob_result = backup_blobs(client, bucket, prefix, app_name, &staged_dir).await;
+    let _ = std::fs::remove_dir_all(staged_dir.join(BLOB_DIR_NAME));
+    blob_result?;
+
     let tarball_path = backups_dir.join(format!("{app_name}-{date}.tar.gz"));
     tar_staged_dir(&staged_dir, &tarball_path)?;
 
@@ -694,6 +702,60 @@ async fn backup_app(
     }
 
     prune_old_backups(pool, client, bucket, &app_prefix_root(prefix, app_name)).await?;
+    Ok(())
+}
+
+/// Upload every file under `{staged_dir}/blobs` whose S3 key doesn't already
+/// exist, skipping the rest. A no-op if the app has no blobs directory.
+/// Single `list_keys` call up front (not one HEAD per file) — see the
+/// design doc for why this is safe given the write-once contract on blob
+/// paths.
+#[instrument(skip(client))]
+async fn backup_blobs(
+    client: &S3Client,
+    bucket: &str,
+    prefix: Option<&str>,
+    app_name: &str,
+    staged_dir: &Path,
+) -> Result<()> {
+    let blobs_dir = staged_dir.join(BLOB_DIR_NAME);
+    if !blobs_dir.exists() {
+        return Ok(());
+    }
+
+    let local_relative_paths: Vec<String> = WalkDir::new(&blobs_dir)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(&blobs_dir)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|s| s.to_string())
+        })
+        .collect();
+
+    if local_relative_paths.is_empty() {
+        return Ok(());
+    }
+
+    let existing_keys = list_keys(client, bucket, &blob_prefix_root(prefix, app_name)).await?;
+    let to_upload = blobs_missing_from_s3(&local_relative_paths, &existing_keys, prefix, app_name);
+
+    info!(
+        "app '{app_name}': {} blob(s) already backed up, uploading {} new",
+        local_relative_paths.len() - to_upload.len(),
+        to_upload.len()
+    );
+
+    for relative_path in &to_upload {
+        let key = blob_key(prefix, app_name, relative_path);
+        let path = blobs_dir.join(relative_path);
+        upload_file(client, bucket, &key, &path).await?;
+    }
+
     Ok(())
 }
 
@@ -1467,6 +1529,166 @@ mod integration_tests {
             .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
             .output();
         cleanup_minio(minio_container);
+    }
+
+    /// Verifies the incremental-upload behavior end to end: seeds a blob
+    /// file in the app's data volume, runs `run_backup` twice, and checks
+    /// (a) the object lands under `blobs/{app}/`, NOT `apps/{app}/`, and
+    /// (b) the second run doesn't re-upload it (its S3 `last_modified`
+    /// timestamp is unchanged).
+    ///
+    /// Requires Docker. Run with:
+    ///   DOCKER_API_VERSION=1.42 cargo test test_backup_blobs_incremental_minio -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_backup_blobs_incremental_minio() {
+        let pool = get_test_pool().await;
+        let docker = crate::docker::connect().await.expect("connect to docker");
+
+        let minio_container = "litehouse-backup-blobs-test-minio";
+        let minio_port = 19001u16;
+        cleanup_minio(minio_container);
+
+        let status = std::process::Command::new("docker")
+            .args([
+                "run", "-d", "--rm", "--name", minio_container,
+                "-p", &format!("{minio_port}:9000"),
+                "-e", "MINIO_ROOT_USER=minioadmin",
+                "-e", "MINIO_ROOT_PASSWORD=minioadmin",
+                "minio/minio", "server", "/data",
+            ])
+            .status()
+            .expect("start minio");
+        assert!(status.success(), "failed to start minio container");
+        wait_for_port(minio_port).await;
+
+        let s3_config = S3Config {
+            access_key_id: "minioadmin".to_string(),
+            secret_access_key: "minioadmin".to_string(),
+            bucket: "litehouse-blobs-test".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint: Some(format!("http://localhost:{minio_port}")),
+            path_prefix: None,
+        };
+        let client = s3_client(&s3_config);
+        let _ = client.create_bucket().bucket(&s3_config.bucket).send().await;
+
+        let system_config = crate::models::SystemConfig::new_s3_config(&s3_config);
+        db::system_config::save_s3_config(&pool, &system_config)
+            .await
+            .expect("save s3 config");
+
+        let app_name = "backup-blobs-test-app";
+        let app = crate::models::App::new(app_name).expect("valid app name");
+        db::app::save(&pool, &app).await.expect("save app");
+
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
+            .output();
+        crate::volume::create_app_volume(&docker, &app.id)
+            .await
+            .expect("create app volume");
+        crate::volume::init_app_volume(&docker, &app.id, &crate::volume::get_app_volume_name(&app.id), None)
+            .await
+            .expect("init volume permissions");
+
+        // Seed a SQLite DB (so backup_app has something to do) and one blob file.
+        seed_app_db(&docker, &app.id).await;
+        seed_blob_file(&docker, &app.id, "photo.jpg", "fake-jpeg-bytes").await;
+
+        // First backup run: the blob should be uploaded.
+        let report = run_backup(&pool, &docker).await.expect("first run_backup");
+        assert!(report.succeeded.contains(&app_name.to_string()), "first backup failed: {:?}", report.failed);
+
+        let stored_config = db::system_config::get_s3_config(&pool).await.unwrap().unwrap();
+        let prefix = stored_config.path_prefix.as_deref();
+        let blob_prefix = blob_prefix_root(prefix, app_name);
+
+        let keys_after_first = list_keys(&client, &s3_config.bucket, &blob_prefix).await.expect("list keys");
+        assert_eq!(keys_after_first.len(), 1, "expected exactly one blob key, got {keys_after_first:?}");
+        let expected_key = blob_key(prefix, app_name, "photo.jpg");
+        assert!(keys_after_first.contains(&expected_key), "expected {expected_key} in {keys_after_first:?}");
+
+        // Also assert the tarball backup did NOT capture the blob (it's excluded from files.tar.gz).
+        let app_prefix = app_prefix_root(prefix, app_name);
+        let tarball_keys = list_keys(&client, &s3_config.bucket, &app_prefix).await.expect("list app keys");
+        assert_eq!(tarball_keys.len(), 1, "expected exactly one dated tarball, got {tarball_keys:?}");
+
+        let last_modified_after_first = client
+            .head_object()
+            .bucket(&s3_config.bucket)
+            .key(&expected_key)
+            .send()
+            .await
+            .expect("head object")
+            .last_modified()
+            .cloned();
+
+        // Second backup run: the same blob must NOT be re-uploaded.
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let report2 = run_backup(&pool, &docker).await.expect("second run_backup");
+        assert!(report2.succeeded.contains(&app_name.to_string()), "second backup failed: {:?}", report2.failed);
+
+        let keys_after_second = list_keys(&client, &s3_config.bucket, &blob_prefix).await.expect("list keys");
+        assert_eq!(keys_after_second.len(), 1, "blob count must not change on a second run");
+
+        let last_modified_after_second = client
+            .head_object()
+            .bucket(&s3_config.bucket)
+            .key(&expected_key)
+            .send()
+            .await
+            .expect("head object")
+            .last_modified()
+            .cloned();
+        assert_eq!(
+            last_modified_after_first, last_modified_after_second,
+            "blob must not be re-uploaded on the second backup run"
+        );
+
+        // Cleanup.
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &crate::volume::get_app_volume_name(&app.id)])
+            .output();
+        cleanup_minio(minio_container);
+    }
+
+    /// Seed a single blob file into the app's data volume at `/data/blobs/<name>`.
+    async fn seed_blob_file(docker: &Docker, app_id: &str, name: &str, contents: &str) {
+        let app_volume = crate::volume::get_app_volume_name(app_id);
+        let container_name = "litehouse-backup-test-seed-blob";
+        let _ = docker
+            .remove_container(container_name, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+            .await;
+
+        let script = format!("mkdir -p /data/blobs && printf '%s' '{contents}' > /data/blobs/{name}");
+        let container_config = ContainerConfig {
+            image: Some("keinos/sqlite3:latest".to_string()),
+            entrypoint: Some(vec!["sh".to_string()]),
+            cmd: Some(vec!["-c".to_string(), script]),
+            host_config: Some(HostConfig {
+                binds: Some(vec![format!("{}:/data", app_volume)]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let container = docker
+            .create_container(Some(CreateContainerOptions { name: container_name.to_string(), platform: None }), container_config)
+            .await
+            .expect("create seed-blob container");
+        docker.start_container::<String>(&container.id, None).await.expect("start seed-blob container");
+
+        let mut wait_stream = docker.wait_container(&container.id, None::<WaitContainerOptions<String>>);
+        while let Some(result) = wait_stream.next().await {
+            let _ = result;
+        }
+        let inspect = docker.inspect_container(&container.id, None).await.unwrap();
+        assert_eq!(inspect.state.and_then(|s| s.exit_code).unwrap_or(-1), 0, "seeding blob file failed");
+
+        let _ = docker
+            .remove_container(&container.id, Some(RemoveContainerOptions { force: true, ..Default::default() }))
+            .await;
     }
 
     fn cleanup_minio(name: &str) {
