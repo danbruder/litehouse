@@ -2,10 +2,11 @@ use bollard::Docker;
 use sqlx::{Pool, Sqlite};
 use tracing::{info, instrument};
 
+use crate::backup::{BLOB_MOUNT_PATH, BLOB_PATH_ENV_VAR};
 use crate::caddy;
 use crate::db;
 use crate::docker;
-use crate::models::{App, AppState};
+use crate::models::{App, AppState, EnvVar};
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum StartError {
@@ -37,6 +38,17 @@ impl From<crate::db::DatabaseError> for StartError {
     }
 }
 
+/// Give every app a stable place to write incrementally-backed-up blobs
+/// (see `backup` module docs and `docs/superpowers/specs/2026-07-14-blob-backup-design.md`)
+/// without hardcoding the path. Only appends the default if the app hasn't
+/// explicitly set its own value for this key via `lh env set`.
+fn ensure_blob_path_env_var(mut env_vars: Vec<EnvVar>, app_id: &str) -> Vec<EnvVar> {
+    if !env_vars.iter().any(|e| e.key == BLOB_PATH_ENV_VAR) {
+        env_vars.push(EnvVar::new(app_id, BLOB_PATH_ENV_VAR, BLOB_MOUNT_PATH));
+    }
+    env_vars
+}
+
 /// Create (or recreate) and start the container for `app` running `image_tag`,
 /// including volume provisioning and environment variables. Does not touch
 /// the app's database record or Caddy — callers are responsible for both,
@@ -59,6 +71,7 @@ pub async fn start_container(
         .map_err(|e| StartError::DatabaseError(e.to_string()))?;
 
     tracing::info!("Found {} environment variables", env_vars.len());
+    let env_vars = ensure_blob_path_env_var(env_vars, &app.id);
 
     // Create app volume if it doesn't exist (idempotent)
     let volume_name = crate::volume::create_app_volume(docker, &app.id)
@@ -154,4 +167,35 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::EnvVar;
+
+    #[test]
+    fn ensure_blob_path_env_var_adds_default_when_absent() {
+        let env_vars = ensure_blob_path_env_var(vec![], "app-1");
+        assert_eq!(env_vars.len(), 1);
+        assert_eq!(env_vars[0].key, "LITEHOUSE_BLOB_PATH");
+        assert_eq!(env_vars[0].value, "/data/blobs");
+    }
+
+    #[test]
+    fn ensure_blob_path_env_var_respects_explicit_override() {
+        let explicit = EnvVar::new("app-1", "LITEHOUSE_BLOB_PATH", "/data/custom-blobs");
+        let env_vars = ensure_blob_path_env_var(vec![explicit], "app-1");
+        assert_eq!(env_vars.len(), 1);
+        assert_eq!(env_vars[0].value, "/data/custom-blobs");
+    }
+
+    #[test]
+    fn ensure_blob_path_env_var_leaves_other_vars_untouched() {
+        let other = EnvVar::new("app-1", "SOME_OTHER_KEY", "some-value");
+        let env_vars = ensure_blob_path_env_var(vec![other], "app-1");
+        assert_eq!(env_vars.len(), 2);
+        assert!(env_vars.iter().any(|e| e.key == "SOME_OTHER_KEY"));
+        assert!(env_vars.iter().any(|e| e.key == "LITEHOUSE_BLOB_PATH"));
+    }
 }
