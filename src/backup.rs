@@ -315,15 +315,16 @@ fn today() -> String {
 /// protects against shell metacharacters/word-splitting).
 fn snapshot_script() -> String {
     r#"set -e
-rm -rf /backup/dbs /backup/files.tar.gz
+rm -rf /backup/dbs /backup/files.tar.gz /backup/blobs
 mkdir -p /backup/dbs
 cd /data
-find . -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' | while read -r f; do
+find . -path './blobs' -prune -o -name '*.db' -print -o -name '*.sqlite' -print -o -name '*.sqlite3' -print | while read -r f; do
   mkdir -p "/backup/dbs/$(dirname "$f")"
   esc=$(printf '%s' "$f" | sed "s/'/''/g")
   sqlite3 "file:$f?mode=ro&immutable=0" "VACUUM INTO '/backup/dbs/$esc'"
 done
-tar czf /backup/files.tar.gz --exclude='*.db' --exclude='*.sqlite' --exclude='*.sqlite3' --exclude='*-wal' --exclude='*-shm' .
+tar czf /backup/files.tar.gz --exclude='*.db' --exclude='*.sqlite' --exclude='*.sqlite3' --exclude='*-wal' --exclude='*-shm' --exclude='./blobs' .
+[ -d blobs ] && cp -a blobs /backup/blobs || true
 "#
     .to_string()
 }
@@ -1157,6 +1158,23 @@ mod tests {
         assert!(
             !script.contains("VACUUM INTO '/backup/dbs/$f'"),
             "raw $f must not appear inside the SQL literal:\n{script}"
+        );
+    }
+
+    #[test]
+    fn snapshot_script_excludes_and_stages_blobs() {
+        let script = snapshot_script();
+        assert!(
+            script.contains("-path './blobs' -prune"),
+            "find must skip the blobs dir so it doesn't scan every blob file looking for databases:\n{script}"
+        );
+        assert!(
+            script.contains("--exclude='./blobs'"),
+            "tar must exclude the blobs dir — it's staged and uploaded separately, not swept into files.tar.gz:\n{script}"
+        );
+        assert!(
+            script.contains("[ -d blobs ] && cp -a blobs /backup/blobs"),
+            "script must stage the blobs dir into the backup staging area if present:\n{script}"
         );
     }
 
