@@ -29,6 +29,8 @@ pub enum RestartOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RestartError {
+    #[error("failed to load env vars: {0}")]
+    EnvVarLoadFailed(String),
     #[error("failed to stop container: {0}")]
     StopFailed(String),
     #[error("failed to start container: {0}")]
@@ -66,7 +68,7 @@ pub async fn restart_one_app(
     // Docker inspect call.
     let env_vars = db::env_var::get_by_app(pool, &app.id)
         .await
-        .map_err(|e| RestartError::StopFailed(format!("failed to load env vars: {e}")))?;
+        .map_err(|e| RestartError::EnvVarLoadFailed(e.to_string()))?;
     if env_vars
         .iter()
         .any(|e| e.key == SKIP_ENV_VAR && e.value.eq_ignore_ascii_case("true"))
@@ -94,7 +96,11 @@ pub async fn restart_one_app(
     // container).
     match docker::live_state(&app.name).await {
         Ok(crate::models::AppState::Running) => {}
-        _ => return Ok(RestartOutcome::Skipped("no longer running")),
+        Ok(_) => return Ok(RestartOutcome::Skipped("no longer running")),
+        Err(e) => {
+            tracing::warn!(app = %app.name, "nightly restart: failed to re-check live state after acquiring lock: {e:#}");
+            return Ok(RestartOutcome::Skipped("live state re-check failed"));
+        }
     }
 
     let image = app.image.as_deref().ok_or(RestartError::NoImage)?;

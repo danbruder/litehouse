@@ -54,14 +54,16 @@ other system_config row, updated in isolation.
 Given the pool and docker connection, for every app in the database
 (`db::app::get_all`):
 
-1. Query live Docker state via `docker::live_state(&app.name)` — the
-   existing source of truth for "is this app actually running," already
-   used in preference to the cached `app.state` DB column elsewhere in
-   the codebase. Skip apps that aren't `AppState::Running`.
-2. Skip if the app has an env var opt-out: `db::env_var::get_by_app` and
+1. Skip if the app has an env var opt-out: `db::env_var::get_by_app` and
    check for a `LITEHOUSE_SKIP_NIGHTLY_RESTART` key with value `"true"`.
    This reuses the existing per-app env var mechanism (no migration
    needed), the same mechanism already used for the blob-path override.
+   Checked before the live Docker state so an app that has opted out
+   never pays the cost of (and can't race on) a Docker inspect call.
+2. Query live Docker state via `docker::live_state(&app.name)` — the
+   existing source of truth for "is this app actually running," already
+   used in preference to the cached `app.state` DB column elsewhere in
+   the codebase. Skip apps that aren't `AppState::Running`.
 3. Attempt to acquire that app's lock via a new `try_lock_app` (see
    below). If another operation currently holds it — a deploy hook
    firing, a manual start/stop/restart from the admin UI — skip this app
