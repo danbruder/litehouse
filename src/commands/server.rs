@@ -43,13 +43,7 @@ pub struct AppState {
 /// fails. Holding this lock for the duration of any such operation makes
 /// them run one at a time per app instead of racing.
 pub async fn lock_app(locks: &AppLocks, name: &str) -> OwnedMutexGuard<()> {
-    let entry = locks
-        .lock()
-        .unwrap()
-        .entry(name.to_string())
-        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-        .clone();
-    entry.lock_owned().await
+    get_or_create_entry(locks, name).lock_owned().await
 }
 
 /// Non-blocking variant of [`lock_app`] — for callers that must yield to an
@@ -57,13 +51,16 @@ pub async fn lock_app(locks: &AppLocks, name: &str) -> OwnedMutexGuard<()> {
 /// an app mid-deploy should never be delayed or interrupted by a scheduled
 /// maintenance restart).
 pub fn try_lock_app(locks: &AppLocks, name: &str) -> Option<OwnedMutexGuard<()>> {
-    let entry = locks
+    get_or_create_entry(locks, name).try_lock_owned().ok()
+}
+
+fn get_or_create_entry(locks: &AppLocks, name: &str) -> Arc<AsyncMutex<()>> {
+    locks
         .lock()
         .unwrap()
         .entry(name.to_string())
         .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-        .clone();
-    entry.try_lock_owned().ok()
+        .clone()
 }
 
 /// Ensure Caddy is running and its configuration matches the database.
