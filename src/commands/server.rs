@@ -171,6 +171,44 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
         });
     }
 
+    // Nightly app restart: check hourly whether it's the 3am US-Eastern
+    // hour and today's (Eastern) restart pass hasn't run yet. Skips apps
+    // that are locked (mid-deploy/manual action) or opted out via
+    // LITEHOUSE_SKIP_NIGHTLY_RESTART — see
+    // docs/superpowers/specs/2026-07-15-nightly-app-restart-design.md.
+    //
+    // Unlike the backup loop, the day is marked done once the pass
+    // *completes*, regardless of individual app failures — this is
+    // best-effort maintenance, not something that should retry hourly and
+    // potentially restart an app multiple times in one night.
+    {
+        let pool = pool.clone();
+        let docker_conn = docker_conn.clone();
+        let app_locks = state.read().await.app_locks.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                let now_eastern = chrono::Utc::now().with_timezone(&chrono_tz::America::New_York);
+                let last = db::system_config::get_last_nightly_restart_date(&pool)
+                    .await
+                    .ok()
+                    .flatten();
+                if crate::restart::should_run_now(now_eastern, last.as_deref()) {
+                    let today = now_eastern.format("%Y-%m-%d").to_string();
+                    let report =
+                        crate::restart::restart_running_apps(&pool, &docker_conn, &app_locks).await;
+                    tracing::info!(?report, "nightly app restart complete");
+                    if let Err(e) =
+                        db::system_config::set_last_nightly_restart_date(&pool, &today).await
+                    {
+                        tracing::error!("failed to record last_nightly_restart_date: {e:#}");
+                    }
+                }
+            }
+        });
+    }
+
     // Resource-usage sampler: every 60s, snapshot host + per-running-app
     // CPU/mem/disk into `metric_sample`; once an hour, roll the completed
     // hour up into `metric_hourly` and prune old rows. See src/metrics.rs.
