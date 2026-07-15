@@ -586,7 +586,7 @@ pub async fn live_state(app_name: &str) -> Result<crate::models::AppState> {
 }
 
 #[cfg(test)]
-mod test_helpers {
+pub(crate) mod test_helpers {
     use anyhow::Result;
     use std::process::Command;
 
