@@ -52,6 +52,20 @@ pub async fn lock_app(locks: &AppLocks, name: &str) -> OwnedMutexGuard<()> {
     entry.lock_owned().await
 }
 
+/// Non-blocking variant of [`lock_app`] — for callers that must yield to an
+/// in-progress operation rather than wait for it (the nightly restart pass:
+/// an app mid-deploy should never be delayed or interrupted by a scheduled
+/// maintenance restart).
+pub fn try_lock_app(locks: &AppLocks, name: &str) -> Option<OwnedMutexGuard<()>> {
+    let entry = locks
+        .lock()
+        .unwrap()
+        .entry(name.to_string())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone();
+    entry.try_lock_owned().ok()
+}
+
 /// Ensure Caddy is running and its configuration matches the database.
 ///
 /// Container liveness for app containers is handled by Docker's own restart
@@ -271,5 +285,28 @@ mod tests {
         .await;
         assert!(result.is_ok(), "locking a different app should not block");
         drop(guard_a);
+    }
+
+    #[tokio::test]
+    async fn try_lock_app_succeeds_when_free() {
+        let locks: AppLocks = Arc::new(StdMutex::new(HashMap::new()));
+        let guard = try_lock_app(&locks, "free-app");
+        assert!(guard.is_some(), "should acquire the lock when nothing else holds it");
+    }
+
+    #[tokio::test]
+    async fn try_lock_app_returns_none_when_already_held() {
+        let locks: AppLocks = Arc::new(StdMutex::new(HashMap::new()));
+        let _held = lock_app(&locks, "busy-app").await;
+        let attempt = try_lock_app(&locks, "busy-app");
+        assert!(attempt.is_none(), "should not acquire a lock already held elsewhere");
+    }
+
+    #[tokio::test]
+    async fn try_lock_app_does_not_block_different_apps() {
+        let locks: AppLocks = Arc::new(StdMutex::new(HashMap::new()));
+        let _held = lock_app(&locks, "a").await;
+        let attempt = try_lock_app(&locks, "b");
+        assert!(attempt.is_some(), "a different app's lock should be free");
     }
 }
