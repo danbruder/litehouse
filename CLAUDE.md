@@ -59,6 +59,7 @@ The v2 refactor (external builds via GHCR, push-to-deploy, daily S3 backups, sin
 - Single admin token (sha256 hash stored server-side); `lh connect <url> --token <TOKEN>` — no users/orgs/JWT
 - Daily backups (VACUUM INTO snapshots, tar.gz to S3, 14-day retention); `lh backup run` / `lh backup status --json`
 - Incremental blob backup: apps get `LITEHOUSE_BLOB_PATH=/data/blobs` and anything written there is backed up to its own S3 prefix (`blobs/{app_name}/...`, NOT nested under `apps/{app_name}/`) on an upload-once basis — unchanged files are never re-uploaded. Restored automatically as part of `lh restore --yes`. See `docs/superpowers/specs/2026-07-14-blob-backup-design.md`.
+- Nightly app restart: every running app is restarted once a night at 3am US Eastern time (best-effort maintenance, not a redeploy — same image, just a fresh container). An app can opt out via `lh env set <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`. Apps mid-deploy or otherwise locked are skipped for that night rather than delayed. See `docs/superpowers/specs/2026-07-15-nightly-app-restart-design.md`.
 - Disaster recovery: `lh install --domain ...` on a fresh node → `lh connect` → `lh restore --yes` rebuilds state, apps, and volumes from GHCR + S3
 - Server-rendered admin UI (Askama + HTMX) served from the same binary, cookie-authenticated with the admin token
 - `e2e/acceptance.sh` and `e2e/dr-drill.sh` automate the full push-to-deploy and disaster-recovery flows against a real droplet; `examples/hello` is the reference app used by both
@@ -240,6 +241,7 @@ docker restart litehouse-server
 - If containers won't start: Check Docker socket is accessible at `/var/run/docker.sock`
 - If backups are missing: `lh backup status --json` shows the last successful date and the last report; a backup day is only stamped when every app backs up with zero failures
 - If disaster recovery fails: confirm `lh config s3 get` / `lh config ghcr get` are populated on the fresh install before running `lh restore --yes`
+- If an app restarted unexpectedly overnight: check `docker logs litehouse-server` for `"nightly app restart complete"` around 3am Eastern — it logs which apps were restarted, skipped (and why), or failed. Opt an app out with `lh env set <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`.
 
 ## Known Issues & TODOs
 
