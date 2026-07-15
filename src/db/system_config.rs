@@ -217,6 +217,46 @@ pub async fn get_last_backup_date(pool: &Pool<Sqlite>) -> Result<Option<String>>
     Ok(record.and_then(|r| r.last_backup_date))
 }
 
+/// Record the Eastern-time date (YYYY-MM-DD) the nightly app-restart
+/// scheduler last completed a pass. Stored under its own `config_type` row
+/// (`nightly_restart_meta`), independent of `backup_meta` and every other
+/// system_config row.
+#[instrument(skip(pool))]
+pub async fn set_last_nightly_restart_date(pool: &Pool<Sqlite>, date: &str) -> Result<()> {
+    let now = crate::models::now();
+    let id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query!(
+        r#"
+        INSERT INTO system_config (id, config_type, last_nightly_restart_date, created_at, updated_at)
+        VALUES (?, 'nightly_restart_meta', ?, ?, ?)
+        ON CONFLICT(config_type) DO UPDATE SET
+            last_nightly_restart_date = excluded.last_nightly_restart_date,
+            updated_at = excluded.updated_at
+        "#,
+        id,
+        date,
+        now,
+        now,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Get the Eastern-time date (YYYY-MM-DD) of the last completed nightly
+/// restart pass, if any has run yet.
+#[instrument(skip(pool))]
+pub async fn get_last_nightly_restart_date(pool: &Pool<Sqlite>) -> Result<Option<String>> {
+    let record = sqlx::query!(
+        r#"SELECT last_nightly_restart_date FROM system_config WHERE config_type = 'nightly_restart_meta'"#,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record.and_then(|r| r.last_nightly_restart_date))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +508,42 @@ mod tests {
         assert_eq!(
             get_last_backup_report(&pool).await.unwrap().unwrap().ran_at,
             "2026-07-03T00:00:00Z"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_last_nightly_restart_date() {
+        let pool = get_test_pool().await;
+        assert!(get_last_nightly_restart_date(&pool).await.unwrap().is_none());
+
+        set_last_nightly_restart_date(&pool, "2026-07-15").await.unwrap();
+        assert_eq!(
+            get_last_nightly_restart_date(&pool).await.unwrap(),
+            Some("2026-07-15".to_string())
+        );
+
+        // Overwriting updates the same row rather than erroring or inserting
+        // a second one.
+        set_last_nightly_restart_date(&pool, "2026-07-16").await.unwrap();
+        assert_eq!(
+            get_last_nightly_restart_date(&pool).await.unwrap(),
+            Some("2026-07-16".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_last_nightly_restart_date_independent_of_last_backup_date() {
+        let pool = get_test_pool().await;
+        set_last_backup_date(&pool, "2026-07-01").await.unwrap();
+        set_last_nightly_restart_date(&pool, "2026-07-02").await.unwrap();
+
+        assert_eq!(
+            get_last_backup_date(&pool).await.unwrap(),
+            Some("2026-07-01".to_string())
+        );
+        assert_eq!(
+            get_last_nightly_restart_date(&pool).await.unwrap(),
+            Some("2026-07-02".to_string())
         );
     }
 

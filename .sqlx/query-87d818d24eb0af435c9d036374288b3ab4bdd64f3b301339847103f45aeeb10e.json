@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT last_nightly_restart_date FROM system_config WHERE config_type = 'nightly_restart_meta'",
+  "describe": {
+    "columns": [
+      {
+        "name": "last_nightly_restart_date",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "87d818d24eb0af435c9d036374288b3ab4bdd64f3b301339847103f45aeeb10e"
+}
