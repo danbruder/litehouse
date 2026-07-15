@@ -12,6 +12,7 @@ pub mod github;
 pub mod install;
 pub mod metrics;
 pub mod models;
+pub mod restart;
 pub mod docker;
 pub mod ui;
 pub mod volume;
