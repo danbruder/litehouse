@@ -113,6 +113,12 @@ pub async fn restart_one_app(
         .await
         .map_err(|e| RestartError::StartFailed(e.to_string()))?;
 
+    let mut updated_app = app.clone();
+    updated_app.state = crate::models::AppState::Running;
+    db::app::save(pool, &updated_app)
+        .await
+        .map_err(|e| RestartError::StartFailed(format!("restarted but failed to save state: {e}")))?;
+
     Ok(RestartOutcome::Restarted)
 }
 
@@ -249,6 +255,9 @@ mod tests {
 
         let state = crate::docker::test_helpers::get_container_state(&container_name).unwrap();
         assert_eq!(state, "running");
+
+        let reloaded = crate::db::app::get_by_name(&pool, app_name).await.unwrap().unwrap();
+        assert_eq!(reloaded.state, crate::models::AppState::Running);
 
         crate::docker::test_helpers::cleanup_container(&container_name).unwrap();
     }
