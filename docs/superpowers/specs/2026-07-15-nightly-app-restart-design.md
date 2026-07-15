@@ -71,7 +71,7 @@ Given the pool and docker connection, for every app in the database
    in-flight deploy must never be blocked or interrupted by the nightly
    job.
 4. With the lock held, re-check `docker::live_state` — it may have
-   changed between steps 1 and 3 (e.g. a deploy just finished and
+   changed between steps 2 and 3 (e.g. a deploy just finished and
    replaced the container). If no longer `Running`, skip.
 5. Restart by composing the existing lifecycle primitives, not a raw
    Bollard `restart_container` call: `docker::stop(&app)` followed by
