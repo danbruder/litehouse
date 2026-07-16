@@ -38,6 +38,23 @@ impl From<crate::db::DatabaseError> for StartError {
     }
 }
 
+/// Env var an app can set (via `lh env set`) to override its container's
+/// memory cap in megabytes. See `docker::DEFAULT_APP_MEMORY_LIMIT_MB` for
+/// the default applied when this isn't set (or is malformed).
+pub const MEMORY_LIMIT_ENV_VAR: &str = "LITEHOUSE_MEMORY_LIMIT_MB";
+
+/// Resolve the container memory cap (in MB) for an app from its env vars,
+/// falling back to `docker::DEFAULT_APP_MEMORY_LIMIT_MB` when the override
+/// is absent or fails to parse as a positive integer.
+fn resolve_memory_limit_mb(env_vars: &[EnvVar]) -> i64 {
+    env_vars
+        .iter()
+        .find(|e| e.key == MEMORY_LIMIT_ENV_VAR)
+        .and_then(|e| e.value.parse::<i64>().ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(docker::DEFAULT_APP_MEMORY_LIMIT_MB)
+}
+
 /// Give every app a stable place to write incrementally-backed-up blobs
 /// (see `backup` module docs and `docs/superpowers/specs/2026-07-14-blob-backup-design.md`)
 /// without hardcoding the path. Only appends the default if the app hasn't
@@ -71,6 +88,7 @@ pub async fn start_container(
         .map_err(|e| StartError::DatabaseError(e.to_string()))?;
 
     tracing::info!("Found {} environment variables", env_vars.len());
+    let memory_limit_mb = resolve_memory_limit_mb(&env_vars);
     let env_vars = ensure_blob_path_env_var(env_vars, &app.id);
 
     // Create app volume if it doesn't exist (idempotent)
@@ -116,7 +134,7 @@ pub async fn start_container(
 
     // Start the app container
     tracing::info!("Running {} with image {}", &app.name, image_tag);
-    docker::run(&app.name, image_tag, env_vars, volume_binds)
+    docker::run(&app.name, image_tag, env_vars, volume_binds, memory_limit_mb)
         .await
         .map_err(|e| StartError::AppStartFailed(e.to_string()))?;
 
@@ -173,6 +191,24 @@ pub async fn execute(pool: &Pool<Sqlite>, docker: &Docker, app_name: &str) -> Re
 mod tests {
     use super::*;
     use crate::models::EnvVar;
+
+    #[test]
+    fn resolve_memory_limit_mb_uses_default_when_unset() {
+        let env_vars = vec![];
+        assert_eq!(resolve_memory_limit_mb(&env_vars), docker::DEFAULT_APP_MEMORY_LIMIT_MB);
+    }
+
+    #[test]
+    fn resolve_memory_limit_mb_uses_override_when_set() {
+        let env_vars = vec![EnvVar::new("app-1", MEMORY_LIMIT_ENV_VAR, "512")];
+        assert_eq!(resolve_memory_limit_mb(&env_vars), 512);
+    }
+
+    #[test]
+    fn resolve_memory_limit_mb_falls_back_to_default_on_malformed_value() {
+        let env_vars = vec![EnvVar::new("app-1", MEMORY_LIMIT_ENV_VAR, "not-a-number")];
+        assert_eq!(resolve_memory_limit_mb(&env_vars), docker::DEFAULT_APP_MEMORY_LIMIT_MB);
+    }
 
     #[test]
     fn ensure_blob_path_env_var_adds_default_when_absent() {

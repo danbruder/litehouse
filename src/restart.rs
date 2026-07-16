@@ -243,7 +243,7 @@ mod tests {
         // Clean up any leftover container from a previous failed/interrupted run.
         let _ = crate::docker::test_helpers::cleanup_container(&container_name);
 
-        crate::docker::run(app_name, image_tag, vec![], vec![]).await.unwrap();
+        crate::docker::run(app_name, image_tag, vec![], vec![], crate::docker::DEFAULT_APP_MEMORY_LIMIT_MB).await.unwrap();
         assert!(crate::docker::test_helpers::is_container_started(&container_name).unwrap());
 
         let mut app = make_app(&pool, app_name).await;
