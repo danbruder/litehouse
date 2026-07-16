@@ -70,7 +70,7 @@ pub async fn execute(
     let multi = MultiProgress::new();
 
     // Create progress bar for phases
-    let total_phases = if skip_verify { 11 } else { 12 };
+    let total_phases = if skip_verify { 13 } else { 14 };
     let pb = multi.add(ProgressBar::new(total_phases));
     pb.set_style(
         ProgressStyle::default_bar()
@@ -289,6 +289,24 @@ pub async fn execute(
     if let Err(e) = phase10_enable_docker_restart(&litehouse_uid) {
         pb.finish_with_message("❌ Docker restart configuration failed");
         error!("Phase 10 failed: {}", e);
+        return Err(e);
+    }
+    pb.inc(1);
+
+    // Phase 12: Hourly dial-stdio cleanup timer
+    pb.set_message("Enabling dial-stdio cleanup timer...");
+    if let Err(e) = phase12_dial_stdio_cleanup_timer() {
+        pb.finish_with_message("❌ Dial-stdio cleanup timer setup failed");
+        error!("Phase 12 failed: {}", e);
+        return Err(e);
+    }
+    pb.inc(1);
+
+    // Phase 13: Weekly reboot timer
+    pb.set_message("Enabling weekly reboot timer...");
+    if let Err(e) = phase13_weekly_reboot_timer() {
+        pb.finish_with_message("❌ Weekly reboot timer setup failed");
+        error!("Phase 13 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
