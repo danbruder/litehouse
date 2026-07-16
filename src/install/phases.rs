@@ -371,6 +371,48 @@ pub fn phase10_enable_docker_restart(_litehouse_uid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Phase 12: Hourly dial-stdio cleanup timer
+#[instrument]
+pub fn phase12_dial_stdio_cleanup_timer() -> Result<()> {
+    info!("Phase 12: Dial-stdio cleanup timer");
+
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-dial-stdio-cleanup.service",
+        templates::dial_stdio_cleanup_service(),
+    )?;
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-dial-stdio-cleanup.timer",
+        templates::dial_stdio_cleanup_timer(),
+    )?;
+
+    run_command("sudo systemctl daemon-reload")?;
+    run_command("sudo systemctl enable --now litehouse-dial-stdio-cleanup.timer")?;
+
+    info!("Phase 12 completed successfully");
+    Ok(())
+}
+
+/// Phase 13: Weekly host reboot timer
+#[instrument]
+pub fn phase13_weekly_reboot_timer() -> Result<()> {
+    info!("Phase 13: Weekly reboot timer");
+
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-weekly-reboot.service",
+        templates::weekly_reboot_service(),
+    )?;
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-weekly-reboot.timer",
+        templates::weekly_reboot_timer(),
+    )?;
+
+    run_command("sudo systemctl daemon-reload")?;
+    run_command("sudo systemctl enable --now litehouse-weekly-reboot.timer")?;
+
+    info!("Phase 13 completed successfully");
+    Ok(())
+}
+
 /// Phase 11: Verification
 #[instrument]
 pub fn phase11_verification(domain: &str, admin_label: &str) -> Result<()> {
