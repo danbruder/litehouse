@@ -75,6 +75,38 @@ SuccessExitStatus=0 1
 "#
 }
 
+/// systemd timer unit for the weekly host reboot. Matches the "3am US
+/// Eastern" convention already established by the nightly app-restart
+/// feature; systemd resolves the trailing timezone against tzdata
+/// (DST-safe) without changing the host's system timezone. See
+/// docs/superpowers/specs/2026-07-16-server-hardening-design.md §3.
+pub fn weekly_reboot_timer() -> &'static str {
+    r#"[Unit]
+Description=Weekly host reboot to bound dial-stdio process accumulation
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"#
+}
+
+/// systemd service unit for the weekly host reboot. Safe because every
+/// container (litehouse-server, caddy, and every app) runs with
+/// --restart=unless-stopped/always, so a reboot is self-healing. See
+/// docs/superpowers/specs/2026-07-16-server-hardening-design.md §3.
+pub fn weekly_reboot_service() -> &'static str {
+    r#"[Unit]
+Description=Weekly host reboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl reboot
+"#
+}
+
 /// Bootstrap script for system preparation
 pub fn system_preparation_script() -> &'static str {
     r#"#!/bin/bash
@@ -503,5 +535,19 @@ mod tests {
         let service = dial_stdio_cleanup_service();
         assert!(service.contains("Type=oneshot"));
         assert!(service.contains("ExecStart=/usr/bin/pkill -f 'docker system dial-stdio'"));
+    }
+
+    #[test]
+    fn weekly_reboot_timer_runs_sunday_3am_eastern() {
+        let timer = weekly_reboot_timer();
+        assert!(timer.contains("OnCalendar=Sun *-*-* 03:00:00 America/New_York"));
+        assert!(timer.contains("[Timer]"));
+    }
+
+    #[test]
+    fn weekly_reboot_service_reboots_the_host() {
+        let service = weekly_reboot_service();
+        assert!(service.contains("Type=oneshot"));
+        assert!(service.contains("ExecStart=/usr/bin/systemctl reboot"));
     }
 }
