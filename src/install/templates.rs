@@ -260,6 +260,35 @@ if ! sudo -u litehouse docker info > /dev/null 2>&1; then
 fi
 
 echo "Docker configuration completed successfully"
+
+# --- Firewall guardrail for published container ports ------------------------
+# Docker publishes container ports through its own iptables DOCKER chain, which
+# is evaluated BEFORE ufw's INPUT rules. That means a container port published
+# to 0.0.0.0 is reachable from the internet regardless of the ufw rules set in
+# the security-hardening phase (which only allow 22/80/443). In the litehouse
+# model the ONLY port that must be public is Caddy's 80/443; the Caddy admin
+# API (2019) and all app containers are reached over the internal bridge only.
+#
+# Defense-in-depth: explicitly drop WAN access to the Caddy admin API at the
+# DOCKER-USER hook, so even a stray/legacy port publish can never expose it.
+# (Kept targeted rather than a blanket default-drop because apps may legitimately
+# publish their own ports — e.g. a WebRTC UDP media range — which a blanket rule
+# would silently break.)
+WAN_IF=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -1)
+WAN_IF=${WAN_IF:-eth0}
+{
+  iptables -nL DOCKER-USER >/dev/null 2>&1 || iptables -N DOCKER-USER
+  iptables -C DOCKER-USER -i "$WAN_IF" -p tcp --dport 2019 -j DROP 2>/dev/null \
+    || iptables -I DOCKER-USER 1 -i "$WAN_IF" -p tcp --dport 2019 -j DROP
+  # Persist across reboots.
+  if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save
+  else
+    mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4
+  fi
+  echo "DOCKER-USER guard for Caddy admin port installed on $WAN_IF"
+} || echo "Warning: could not install DOCKER-USER firewall guard (continuing)"
+
 echo "UID:$LITEHOUSE_UID"
 "#
 }
@@ -343,8 +372,17 @@ docker volume create litehouse_data 2>/dev/null || true
 # Backups staging area is a HOST directory (not a named volume) so the server
 # container and the one-shot snapshot containers it spawns can share it by
 # absolute path: the server passes this same path as a bind to siblings.
+#
+# Lock the top-level dir to 0700 root:root. The snapshots staged here are
+# plaintext copies of the state DB (S3 creds, GHCR token, admin-token hash)
+# and per-app data, so they must NOT be readable by other local host users.
+# litehouse-server runs as root inside its container and reaches this dir via
+# a bind mount (root bypasses the mode), and the snapshot containers get their
+# per-app subdir bind-mounted directly, so 0700 on this parent blocks local
+# traversal without breaking either writer.
 mkdir -p /opt/litehouse/backups
-chmod 777 /opt/litehouse/backups
+chmod 700 /opt/litehouse/backups
+chown root:root /opt/litehouse/backups
 
 # Seed server-config.toml into the (empty) Docker volume on first boot only.
 # This container is (re)started on every `lh upgrade`/deploy, not just on
