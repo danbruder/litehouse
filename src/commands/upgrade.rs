@@ -4,7 +4,8 @@ use tracing::{info, instrument};
 
 use crate::install::executor::run_command;
 use crate::install::phases::{
-    get_litehouse_uid, phase6a_pull_litehouse_image, phase9b_start_litehouse_container,
+    get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
+    phase6a_pull_litehouse_image, phase9b_start_litehouse_container,
 };
 
 const GITHUB_REPO: &str = "danbruder/litehouse";
@@ -285,6 +286,27 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
         return Err(e);
     }
     pb.inc(1);
+
+    // Phase 3b: Re-apply maintenance timers. Idempotent (see phase12/13
+    // doc comments) so every upgrade re-applies the latest unit-file
+    // content rather than only setting it up once at install time - any
+    // future edits to the cleanup cadence propagate on the next upgrade
+    // instead of silently drifting from what's on disk.
+    pb.set_message("Re-applying maintenance timers...");
+    if let Err(e) = phase12_dial_stdio_cleanup_timer() {
+        pb.finish_with_message("❌ Dial-stdio cleanup timer setup failed");
+        if from_path.is_none() {
+            cleanup_temp_dir(&binary_path).ok();
+        }
+        return Err(e);
+    }
+    if let Err(e) = phase13_weekly_reboot_timer() {
+        pb.finish_with_message("❌ Weekly reboot timer setup failed");
+        if from_path.is_none() {
+            cleanup_temp_dir(&binary_path).ok();
+        }
+        return Err(e);
+    }
 
     // Phase 4: Install the new host binary. The container is already
     // running the new image at this point, so a failure here is logged as
