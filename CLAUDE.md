@@ -96,7 +96,7 @@ Uses Bollard to communicate with Docker via Unix socket. Key functions:
 - `logs_stream(app_name, lines, follow)` - Streams container logs
 - `connect()` - Establishes Docker API connection via `resolve_docker_socket_path()`
 
-**Socket resolution:** Checks `DOCKER_SSH_SOCK`, `DOCKER_SOCK`, `CONTAINER_HOST` env vars, then queries `docker system connection ls` for default connection. On macOS with Docker Machine, uses `docker machine inspect` to find the forwarded socket.
+**Socket resolution:** Checks `DOCKER_HOST` (stripping a leading `unix://` if present), then falls back to `/var/run/docker.sock` regardless of whether that path actually exists (see `resolve_docker_socket_path()` in `src/docker.rs`).
 
 **Naming convention:** Container name = `{app-name}-container`
 
