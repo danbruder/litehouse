@@ -181,30 +181,13 @@ async fn ui_auth_middleware<B: Send + 'static>(
     // against *same-site* origins — tenant apps live on sibling subdomains of
     // the admin UI, so a malicious deployed app could POST here with the
     // cookie attached. Require the Origin (or Referer) host to match ours.
-    if req.method() != axum::http::Method::GET {
-        let our_host = req
-            .headers()
-            .get(axum::http::header::HOST)
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("");
-        let source = req
-            .headers()
-            .get(axum::http::header::ORIGIN)
-            .or_else(|| req.headers().get(axum::http::header::REFERER))
-            .and_then(|h| h.to_str().ok());
-        let source_host = source
-            .and_then(|s| s.split("//").nth(1))
-            .map(|rest| rest.split('/').next().unwrap_or(rest));
-        match source_host {
-            Some(host) if host == our_host && !our_host.is_empty() => {}
-            _ => {
-                return (
-                    axum::http::StatusCode::FORBIDDEN,
-                    "cross-origin request rejected",
-                )
-                    .into_response();
-            }
-        }
+    // (Shared with the JSON API's `admin_auth_middleware`.)
+    if req.method() != axum::http::Method::GET && !crate::auth::same_origin(req.headers()) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cross-origin request rejected",
+        )
+            .into_response();
     }
 
     next.run(req).await

@@ -476,14 +476,13 @@ async fn create_and_start_container(
         }]),
     );
 
-    // Bind Caddy admin API port (container port 2019 -> host port 2019)
-    port_bindings.insert(
-        "2019/tcp".to_string(),
-        Some(vec![PortBinding {
-            host_ip: Some("0.0.0.0".to_string()),
-            host_port: Some("2019".to_string()),
-        }]),
-    );
+    // Caddy's admin API (2019) is deliberately NOT published to a host port.
+    // litehouse-server reaches it over the internal `litehouse-network` bridge
+    // as `caddy-container:2019` (see the CADDY_ADMIN env below, which makes
+    // Caddy listen on 0.0.0.0 *inside* the container so sibling containers can
+    // connect). Publishing 2019 to the host previously exposed the fully
+    // unauthenticated admin API to the internet — anyone could rewrite the
+    // proxy config or take the edge down. Keep it bridge-only.
 
     // Create container config with proper port bindings
     let container_config = Config {

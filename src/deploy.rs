@@ -24,6 +24,29 @@ pub fn verify_deploy_token(provided: &str, stored_hash: Option<&str>) -> bool {
     }
 }
 
+/// True when `image` belongs to the app's own GHCR namespace derived from
+/// `repo` (`"owner/name"`). Guards the public deploy hook: a per-app deploy
+/// token lives as a GitHub Actions secret, so a leaked token must only be able
+/// to (re)deploy *that app's own* images — not an arbitrary registry
+/// reference that would run attacker code under the app's identity and volume.
+///
+/// GHCR image paths are always lowercase (GitHub enforces it), matching what
+/// the committed workflow pushes: `ghcr.io/{owner}/{repo}:{tag|@digest}`.
+/// A missing/empty `repo` cannot be validated and is therefore rejected.
+pub fn image_matches_repo(image: &str, repo: Option<&str>) -> bool {
+    let Some(repo) = repo.filter(|r| !r.is_empty()) else {
+        return false;
+    };
+    let expected = format!("ghcr.io/{}", repo.to_lowercase());
+    match image.strip_prefix(&expected) {
+        // Exact match (no tag), or the next char begins a tag / digest. The
+        // char check prevents `ghcr.io/o/app-evil` from matching `.../app`.
+        Some("") => true,
+        Some(rest) => rest.starts_with(':') || rest.starts_with('@'),
+        None => false,
+    }
+}
+
 /// Pull `image`, recreate the app container, sync Caddy, and record the
 /// deploy. The old container keeps running until the new image has been
 /// pulled successfully — a failed pull leaves the previous deploy untouched.
@@ -131,6 +154,50 @@ mod tests {
     fn verify_deploy_token_empty_hash() {
         assert!(!verify_deploy_token("anything", Some("")));
         assert!(!verify_deploy_token("", Some("")));
+    }
+
+    #[test]
+    fn image_matches_repo_accepts_own_namespace() {
+        let repo = Some("danbruder/hello");
+        assert!(image_matches_repo("ghcr.io/danbruder/hello:latest", repo));
+        assert!(image_matches_repo("ghcr.io/danbruder/hello:abc123sha", repo));
+        assert!(image_matches_repo(
+            "ghcr.io/danbruder/hello@sha256:deadbeef",
+            repo
+        ));
+        assert!(image_matches_repo("ghcr.io/danbruder/hello", repo));
+    }
+
+    #[test]
+    fn image_matches_repo_lowercases_repo() {
+        // app.repo may be stored with the GitHub owner's original casing;
+        // GHCR paths are lowercase, so the comparison must normalize.
+        assert!(image_matches_repo(
+            "ghcr.io/danbruder/hello:latest",
+            Some("DanBruder/Hello")
+        ));
+    }
+
+    #[test]
+    fn image_matches_repo_rejects_foreign_and_prefix_confusion() {
+        let repo = Some("danbruder/hello");
+        // Different registry / owner / repo.
+        assert!(!image_matches_repo("ghcr.io/attacker/evil:latest", repo));
+        assert!(!image_matches_repo("docker.io/library/nginx:latest", repo));
+        // Prefix-confusion: a repo that merely starts with ours.
+        assert!(!image_matches_repo("ghcr.io/danbruder/hello-evil:latest", repo));
+        assert!(!image_matches_repo("ghcr.io/danbruder/helloworld", repo));
+        // Registry-host confusion.
+        assert!(!image_matches_repo(
+            "ghcr.io.attacker.com/danbruder/hello:latest",
+            repo
+        ));
+    }
+
+    #[test]
+    fn image_matches_repo_rejects_missing_repo() {
+        assert!(!image_matches_repo("ghcr.io/danbruder/hello:latest", None));
+        assert!(!image_matches_repo("ghcr.io/danbruder/hello:latest", Some("")));
     }
 }
 

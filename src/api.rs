@@ -430,6 +430,22 @@ async fn hook_deploy(
     if !hook_authorized(token, app.as_ref()) {
         return unauthorized();
     }
+    // Authorized implies the app exists (`hook_authorized` is false for None).
+    let app = app.expect("authorized deploy hook implies the app exists");
+
+    // Constrain the image to the app's own GHCR namespace. Without this, a
+    // leaked per-app deploy token could deploy an arbitrary image (attacker
+    // code) under this app's identity and data volume. Reported post-auth, so
+    // the uniform-401 enumeration guarantee above is unaffected.
+    if !crate::deploy::image_matches_repo(&payload.image, app.repo.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "image does not belong to this app's repository"
+            })),
+        )
+            .into_response();
+    }
 
     let _guard = crate::commands::server::lock_app(&locks, &payload.app).await;
 
