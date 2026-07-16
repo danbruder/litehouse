@@ -42,6 +42,39 @@ pub fn logrotate_template() -> &'static str {
 "#
 }
 
+/// systemd timer unit for the hourly dial-stdio cleanup. See
+/// docs/superpowers/specs/2026-07-16-server-hardening-design.md §2.
+pub fn dial_stdio_cleanup_timer() -> &'static str {
+    r#"[Unit]
+Description=Hourly cleanup of orphaned docker dial-stdio helper processes
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"#
+}
+
+/// systemd service unit for the hourly dial-stdio cleanup. Intentionally
+/// blunt: it does not distinguish orphaned dial-stdio processes from ones
+/// serving an active `docker` CLI command, since litehouse's production
+/// code never shells out to the `docker` CLI. See
+/// docs/superpowers/specs/2026-07-16-server-hardening-design.md §2.
+pub fn dial_stdio_cleanup_service() -> &'static str {
+    r#"[Unit]
+Description=Kill orphaned docker system dial-stdio helper processes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pkill -f 'docker system dial-stdio'
+# pkill exits 1 when no matching process is found - that's the common
+# case (nothing to clean up), not a failure.
+SuccessExitStatus=0 1
+"#
+}
+
 /// Bootstrap script for system preparation
 pub fn system_preparation_script() -> &'static str {
     r#"#!/bin/bash
@@ -456,5 +489,19 @@ mod tests {
     fn server_config_template_includes_custom_admin_subdomain() {
         let config = server_config_template("example.com", "deadbeef", Some("admin2"));
         assert!(config.contains("admin_subdomain = \"admin2\""));
+    }
+
+    #[test]
+    fn dial_stdio_cleanup_timer_runs_hourly() {
+        let timer = dial_stdio_cleanup_timer();
+        assert!(timer.contains("OnCalendar=hourly"));
+        assert!(timer.contains("[Timer]"));
+    }
+
+    #[test]
+    fn dial_stdio_cleanup_service_kills_orphaned_dial_stdio_processes() {
+        let service = dial_stdio_cleanup_service();
+        assert!(service.contains("Type=oneshot"));
+        assert!(service.contains("ExecStart=/usr/bin/pkill -f 'docker system dial-stdio'"));
     }
 }
