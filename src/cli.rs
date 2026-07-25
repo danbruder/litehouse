@@ -243,6 +243,19 @@ enum Commands {
         #[command(subcommand)]
         command: DomainCmd,
     },
+
+    /// Run an MCP (Model Context Protocol) server over stdio so AI agents can
+    /// manage litehouse apps. Reuses the client config + admin token.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum McpCmd {
+    /// Start the MCP server on stdio (JSON-RPC 2.0).
+    Serve,
 }
 
 #[derive(Subcommand)]
@@ -386,6 +399,9 @@ pub async fn run() -> Result<()> {
             let config = ServerConfig::load()?;
             server::execute(config).await
         }
+        Commands::Mcp { command } => match command {
+            McpCmd::Serve => crate::mcp::serve().await,
+        },
         Commands::Connect { base_url, token } => {
             // Preserve any previously stored GitHub token — connecting to a
             // (possibly different) server has no bearing on GitHub auth.
@@ -645,7 +661,8 @@ pub async fn run() -> Result<()> {
                 Commands::Install { .. }
                 | Commands::Upgrade { .. }
                 | Commands::Serve
-                | Commands::Connect { .. } => {
+                | Commands::Connect { .. }
+                | Commands::Mcp { .. } => {
                     unreachable!("Already handled above")
                 }
             }
@@ -786,136 +803,42 @@ async fn run_create(
     rotate_token: bool,
     json: bool,
 ) -> Result<()> {
-    let repo = match repo {
-        Some(r) => r,
-        None => infer_repo_from_git()?,
-    };
-
-    let (owner, repo_name) = repo.split_once('/').ok_or_else(|| {
-        anyhow!(
-            "--repo must be in 'owner/name' form, got '{}'",
-            repo
-        )
-    })?;
-
-    let create_result = match api_client.create_app(app_name, Some(&repo), rotate_token).await {
-        Ok(r) => r,
-        Err(e) if !rotate_token && e.to_string().contains("already exists") => {
-            return Err(anyhow!(
-                "App '{}' already exists. Re-run with --rotate-token to re-link it \
-                 (mints a fresh deploy token and re-commits the deploy workflow).",
-                app_name
-            ));
-        }
-        Err(e) => return Err(e),
-    };
-
-    // The server's base_url already ends in /api; the deploy hook lives
-    // alongside the rest of the admin API at /api/hooks/deploy.
-    let hook_url = format!("{}/hooks/deploy", config.base_url.trim_end_matches('/'));
-
     // --json implies non-interactive: never block on a device-flow prompt
     // when the caller is a script/agent expecting a single JSON line.
     let allow_interactive = !json;
 
-    let workflow_setup = async {
-        let token = crate::commands::github_login::resolve_github_token(allow_interactive).await?;
-        crate::github::actions::put_actions_secret(
-            &token,
-            owner,
-            repo_name,
-            "LITEHOUSE_DEPLOY_TOKEN",
-            &create_result.deploy_token,
-        )
-        .await
-        .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
-
-        let workflow =
-            crate::workflow::render_deploy_workflow(owner, repo_name, app_name, &hook_url);
-        crate::github::actions::put_file(
-            &token,
-            owner,
-            repo_name,
-            ".github/workflows/litehouse-deploy.yml",
-            &workflow,
-            "Add litehouse deploy workflow",
-        )
-        .await
-        .context("committing .github/workflows/litehouse-deploy.yml")?;
-
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-
-    match workflow_setup {
-        Ok(()) => {
+    match crate::provision::provision_app(
+        api_client,
+        config,
+        app_name,
+        repo,
+        rotate_token,
+        allow_interactive,
+    )
+    .await
+    {
+        Ok(outcome) => {
             if json {
                 println!(
                     "{}",
                     serde_json::to_string(&serde_json::json!({
-                        "name": create_result.name,
-                        "url": create_result.url,
-                        "repo": repo,
-                        "workflow_committed": true,
+                        "name": outcome.name,
+                        "url": outcome.url,
+                        "repo": outcome.repo,
+                        "workflow_committed": outcome.workflow_committed,
                     }))?
                 );
             } else {
-                println!("App '{}' created", create_result.name);
-                println!("  URL:  {}", create_result.url);
-                println!("  Repo: {}", repo);
+                println!("App '{}' created", outcome.name);
+                println!("  URL:  {}", outcome.url);
+                println!("  Repo: {}", outcome.repo);
                 println!("git push to deploy.");
             }
             Ok(())
         }
         Err(e) => {
-            // The app already exists on the server at this point — don't
-            // leave the user stranded not knowing that much succeeded.
-            eprintln!(
-                "App '{}' was created on the server, but setting up {} failed: {:#}",
-                create_result.name, repo, e
-            );
-            eprintln!(
-                "Hint: committing workflow files requires a GitHub token with the `workflow` \
-                 scope — if you use the gh CLI, run: gh auth refresh -h github.com -s workflow"
-            );
-            eprintln!("To finish manually:");
-            eprintln!(
-                "  1. Set the repo secret LITEHOUSE_DEPLOY_TOKEN on {} \
-                 (run `lh create {} --repo {} --rotate-token` to mint a fresh token if needed)",
-                repo, app_name, repo
-            );
-            eprintln!(
-                "  2. Commit .github/workflows/litehouse-deploy.yml to {} with a job that builds \
-                 and pushes to ghcr.io, then POSTs to {}",
-                repo, hook_url
-            );
+            eprintln!("{:#}", e);
             std::process::exit(1);
         }
     }
-}
-
-/// Infer "owner/name" from the `origin` git remote in the current
-/// directory. Supports both GitHub HTTPS and SSH remote URL forms.
-fn infer_repo_from_git() -> Result<String> {
-    let output = std::process::Command::new("git")
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .context("running `git remote get-url origin`")?;
-
-    if !output.status.success() {
-        return Err(anyhow!(
-            "Could not find a git remote named 'origin' in the current directory. \
-             Pass --repo owner/name explicitly."
-        ));
-    }
-
-    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let (owner, repo) = crate::github::api::parse_repo_url(&url).map_err(|_| {
-        anyhow!(
-            "The 'origin' remote ('{}') is not a github.com repo. Pass --repo owner/name explicitly.",
-            url
-        )
-    })?;
-
-    Ok(format!("{}/{}", owner, repo))
 }
