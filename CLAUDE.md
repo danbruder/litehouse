@@ -145,6 +145,7 @@ Each command module corresponds to a CLI subcommand:
 - `check_dns.rs` - Verify wildcard DNS for the configured domain
 - `github_login.rs` - Device-flow OAuth for `lh github login`
 - `server.rs` - `lh serve` (the admin API + deploy hook + UI + backup scheduler)
+- `mcp.rs` (top-level `src/mcp.rs`) - `lh mcp serve`: MCP server over stdio exposing app management as tools for AI agents (deploy, status, logs, env, domains, backups, create). Reuses `ApiClient` + the client-config admin token; no server-side changes.
 
 Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `src/backup.rs`) rather than under `commands/`, since they're invoked from both the CLI and the HTTP API.
 
@@ -164,6 +165,8 @@ Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `
 3. Server pulls the image, recreates the container, syncs Caddy config, records the deploy
 4. `lh deploys myapp --wait` blocks until that deploy succeeds or fails (exit 0/1/2)
 5. App accessible at `myapp.{domain}` over HTTPS
+
+**AI-agent access (MCP):** `lh mcp serve` runs a Model Context Protocol server on stdio. Point an MCP-capable agent at the command `lh mcp serve` (on a host where `lh connect` has already stored the admin token). Tools mirror the CLI: `deploy`, `list_apps`, `app_status`, `list_deploys` (with `wait`), `logs`, `env_set`, `start_app`/`stop_app`/`delete_app`, `add_domain`/`remove_domain`/`list_domains`, `backup_status`/`run_backup`, and `create_app`. `create_app` needs a GitHub token already available ($GITHUB_TOKEN, `gh`, or a prior `lh github login`) since device-flow login can't run through MCP.
 
 **Server startup:**
 1. Server starts → Connects to SQLite and Docker
