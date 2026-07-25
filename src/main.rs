@@ -13,6 +13,7 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .without_time()
         .with_level(true)
+        .with_writer(std::io::stderr)
         .compact()
         .init();
 

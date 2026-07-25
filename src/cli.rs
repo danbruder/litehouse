@@ -408,8 +408,16 @@ pub async fn run() -> Result<()> {
                     rotate_token,
                     json,
                 } => run_create(&api_client, &config, &app_name, repo, rotate_token, json).await,
-                Commands::Start { app_name } => api_client.start_app(&app_name).await,
-                Commands::Stop { app_name } => api_client.stop_app(&app_name).await,
+                Commands::Start { app_name } => {
+                    api_client.start_app(&app_name).await?;
+                    println!("App '{}' started successfully", app_name);
+                    Ok(())
+                }
+                Commands::Stop { app_name } => {
+                    api_client.stop_app(&app_name).await?;
+                    println!("App '{}' stopped successfully", app_name);
+                    Ok(())
+                }
                 Commands::Restart { app_name } => {
                     api_client.stop_app(&app_name).await.map_err(|e| {
                         anyhow!("Failed to stop app '{}' during restart: {}", app_name, e)
@@ -424,7 +432,11 @@ pub async fn run() -> Result<()> {
                     println!("App '{}' restarted", app_name);
                     Ok(())
                 }
-                Commands::Delete { app_name } => api_client.delete_app(&app_name).await,
+                Commands::Delete { app_name } => {
+                    api_client.delete_app(&app_name).await?;
+                    println!("App '{}' deleted successfully", app_name);
+                    Ok(())
+                }
                 Commands::Deploy { app_name, image, sha } => {
                     let result = api_client.deploy_app(&app_name, &image, sha.as_deref()).await?;
                     if result.status == "succeeded" {
@@ -451,8 +463,16 @@ pub async fn run() -> Result<()> {
                     key,
                     value,
                     delete,
-                } => api_client.set_env(&app_name, &key, &value, delete).await,
-                Commands::Status { app_name } => api_client.get_status(app_name.as_deref()).await,
+                } => {
+                    api_client.set_env(&app_name, &key, &value, delete).await?;
+                    println!("Environment variable set for app '{}'", app_name);
+                    Ok(())
+                }
+                Commands::Status { app_name } => {
+                    let status = api_client.get_status_json(app_name.as_deref()).await?;
+                    println!("Status: {}", status);
+                    Ok(())
+                }
                 Commands::Logs {
                     app_name,
                     lines,

@@ -21,14 +21,14 @@ pub struct CreateAppResult {
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, serde::Serialize)]
 pub struct DeployResult {
     pub status: String,
     pub deploy_id: String,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, serde::Serialize)]
 pub struct DeployListItem {
     pub id: String,
     pub image: String,
@@ -167,7 +167,6 @@ impl ApiClient {
             req
         }).await?;
 
-        println!("App '{}' started successfully", app_name);
         Ok(())
     }
 
@@ -182,7 +181,6 @@ impl ApiClient {
             req
         }).await?;
 
-        println!("App '{}' stopped successfully", app_name);
         Ok(())
     }
 
@@ -197,7 +195,6 @@ impl ApiClient {
             req
         }).await?;
 
-        println!("App '{}' deleted successfully", app_name);
         Ok(())
     }
 
@@ -275,7 +272,6 @@ impl ApiClient {
             req
         }).await?;
 
-        println!("Environment variable set for app '{}'", app_name);
         Ok(())
     }
 
@@ -324,22 +320,21 @@ impl ApiClient {
         }).await
     }
 
-    pub async fn get_status(&self, app_name: Option<&str>) -> Result<()> {
+    /// Fetch the status JSON for one app (`Some(name)`) or all apps
+    /// (`None`). Returns the server's raw response body.
+    pub async fn get_status_json(&self, app_name: Option<&str>) -> Result<String> {
         let url = match app_name {
             Some(name) => format!("{}/apps/{}", self.config.base_url, name),
             None => format!("{}/apps", self.config.base_url),
         };
 
-        let status = self.execute_request_text(|client, auth_header| {
+        self.execute_request_text(|client, auth_header| {
             let mut req = client.get(&url);
             if let Some(header) = auth_header {
                 req = req.header("Authorization", header);
             }
             req
-        }).await?;
-
-        println!("Status: {}", status);
-        Ok(())
+        }).await
     }
 
     pub async fn get_logs(&self, app_name: &str, lines: usize, follow: bool) -> Result<LogStream> {
