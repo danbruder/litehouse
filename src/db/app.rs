@@ -8,8 +8,9 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         r#"
             INSERT INTO app (
                 id, name, port, organization_id, created_at, updated_at, state,
-                repo, image, exposed_port, deploy_token_hash, custom_domains
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                repo, image, exposed_port, deploy_token_hash, custom_domains,
+                health_check_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 port = excluded.port,
@@ -20,7 +21,8 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
                 image = excluded.image,
                 exposed_port = excluded.exposed_port,
                 deploy_token_hash = excluded.deploy_token_hash,
-                custom_domains = excluded.custom_domains
+                custom_domains = excluded.custom_domains,
+                health_check_path = excluded.health_check_path
             "#,
         app.id,
         app.name,
@@ -35,6 +37,7 @@ pub async fn save(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         app.exposed_port,
         app.deploy_token_hash,
         app.custom_domains,
+        app.health_check_path,
     )
     .execute(pool)
     .await?;
@@ -59,8 +62,9 @@ pub async fn insert_or_ignore(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         r#"
             INSERT OR IGNORE INTO app (
                 id, name, port, organization_id, created_at, updated_at, state,
-                repo, image, exposed_port, deploy_token_hash, custom_domains
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                repo, image, exposed_port, deploy_token_hash, custom_domains,
+                health_check_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         app.id,
         app.name,
@@ -74,6 +78,7 @@ pub async fn insert_or_ignore(pool: &Pool<Sqlite>, app: &App) -> Result<()> {
         app.exposed_port,
         app.deploy_token_hash,
         app.custom_domains,
+        app.health_check_path,
     )
     .execute(pool)
     .await?;

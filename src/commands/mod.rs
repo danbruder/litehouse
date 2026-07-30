@@ -4,6 +4,7 @@ pub mod create;
 pub mod delete;
 pub mod domain;
 pub mod github_login;
+pub mod health_check;
 pub mod install;
 pub mod logs;
 pub mod server;
