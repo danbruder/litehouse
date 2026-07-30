@@ -219,7 +219,6 @@ struct AppsTemplate {
     backup_line: String,
     backup_failures: Vec<(String, String)>,
     flash: Option<String>,
-    any_in_progress: bool,
     server_cpu_chart: String,
     server_mem_chart: String,
     server_mem_total: String,
@@ -228,11 +227,26 @@ struct AppsTemplate {
 }
 
 struct DeployRow {
+    id: String,
     status: String,
     image: String,
     sha: String,
     created_at: String,
     error: Option<String>,
+}
+
+#[derive(Template)]
+#[template(path = "deploy_detail.html")]
+struct DeployDetailTemplate {
+    app_name: String,
+    deploy_id: String,
+    short_id: String,
+    status: String,
+    image: String,
+    git_sha: Option<String>,
+    created_at: String,
+    error: Option<String>,
+    is_latest: bool,
 }
 
 #[derive(Template)]
@@ -276,6 +290,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
     let protected = Router::new()
         .route("/", get(apps_index))
         .route("/apps/:name", get(app_detail))
+        .route("/apps/:name/deploys/:deploy_id", get(deploy_detail))
         .route("/apps/:name/start", post(start_app_ui))
         .route("/apps/:name/stop", post(stop_app_ui))
         .route("/apps/:name/restart", post(restart_app_ui))
@@ -462,14 +477,10 @@ async fn apps_index(
         }
     };
 
-    let mut any_in_progress = false;
     let mut rows = Vec::with_capacity(apps.len());
     for app in apps {
         let (deploy_status, last_deploy) = match db::deploy::latest_for_app(&pool, &app.id).await {
             Ok(Some(d)) => {
-                if d.status == "in_progress" {
-                    any_in_progress = true;
-                }
                 let short_sha = d
                     .git_sha
                     .as_deref()
@@ -528,7 +539,6 @@ async fn apps_index(
             .as_deref()
             .and_then(flash_message)
             .map(str::to_string),
-        any_in_progress,
         server_cpu_chart,
         server_mem_chart,
         server_mem_total,
@@ -760,11 +770,12 @@ async fn app_detail(
         .map(|e| e.key)
         .collect();
 
-    let deploys = db::deploy::list_for_app(&pool, &app.id, 20)
+    let deploys = db::deploy::list_for_app(&pool, &app.id, 8)
         .await
         .unwrap_or_default()
         .into_iter()
         .map(|d| DeployRow {
+            id: d.id,
             status: d.status,
             image: d.image,
             sha: d
@@ -802,6 +813,57 @@ async fn app_detail(
         cpu_chart,
         mem_chart,
         disk_chart,
+    })
+    .into_response()
+}
+
+async fn deploy_detail(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path((name, deploy_id)): Path<(String, String)>,
+) -> Response {
+    let pool = state.read().await.db_pool.clone();
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return (StatusCode::NOT_FOUND, "app not found").into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load app: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    let deploy = match db::deploy::get_by_id(&pool, &deploy_id).await {
+        Ok(Some(d)) if d.app_id == app.id => d,
+        Ok(_) => return (StatusCode::NOT_FOUND, "deploy not found").into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to load deploy: {e}"),
+            )
+                .into_response();
+        }
+    };
+
+    // Only the app's most recent deploy corresponds to the currently running
+    // container — earlier ones were replaced and their logs are gone.
+    let is_latest = matches!(
+        db::deploy::latest_for_app(&pool, &app.id).await,
+        Ok(Some(latest)) if latest.id == deploy.id
+    );
+
+    HtmlTemplate(DeployDetailTemplate {
+        app_name: app.name,
+        deploy_id: deploy.id.clone(),
+        short_id: deploy.id.chars().take(8).collect(),
+        status: deploy.status,
+        image: deploy.image,
+        git_sha: deploy.git_sha,
+        created_at: relative_time(&deploy.created_at),
+        error: deploy.error,
+        is_latest,
     })
     .into_response()
 }
@@ -1222,6 +1284,126 @@ mod tests {
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("SECRET_KEY"));
         assert!(!body.contains("super-secret-value"));
+    }
+
+    #[tokio::test]
+    async fn deploy_detail_shows_metadata_and_logs_for_latest_deploy() {
+        let state = test_state().await;
+        let deploy_id;
+        {
+            let s = state.read().await;
+            let app = App::new("deploy-detail-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            let deploy = crate::models::Deploy::new(&app.id, "ghcr.io/x/deploy-detail-app:sha", Some("abc1234def"));
+            deploy_id = deploy.id.clone();
+            db::deploy::insert(&s.db_pool, &deploy).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/apps/deploy-detail-app/deploys/{deploy_id}"))
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("ghcr.io/x/deploy-detail-app:sha"));
+        assert!(body.contains("abc1234def"));
+        assert!(body.contains("badge-deploy-in_progress"));
+        // Latest deploy for the app -> logs are shown, not the "gone" hint.
+        assert!(body.contains("live tail"));
+        assert!(!body.contains("its container is gone"));
+    }
+
+    #[tokio::test]
+    async fn deploy_detail_older_deploy_shows_no_logs_hint() {
+        let state = test_state().await;
+        let old_id;
+        {
+            let s = state.read().await;
+            let app = App::new("deploy-detail-old-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            let old = crate::models::Deploy::new(&app.id, "ghcr.io/x/app:old", Some("aaaaaaaaaa"));
+            old_id = old.id.clone();
+            db::deploy::insert(&s.db_pool, &old).await.unwrap();
+            db::deploy::set_status(&s.db_pool, &old.id, "succeeded", None).await.unwrap();
+            let new = crate::models::Deploy::new(&app.id, "ghcr.io/x/app:new", Some("bbbbbbbbbb"));
+            db::deploy::insert(&s.db_pool, &new).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/apps/deploy-detail-old-app/deploys/{old_id}"))
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains("its container is gone"));
+        assert!(!body.contains("live tail"));
+    }
+
+    #[tokio::test]
+    async fn deploy_detail_unknown_id_returns_404() {
+        let state = state_with_app("deploy-detail-404-app").await;
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/deploy-detail-404-app/deploys/does-not-exist")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn app_detail_deploy_row_links_to_deploy_detail() {
+        let state = test_state().await;
+        let deploy_id;
+        {
+            let s = state.read().await;
+            let app = App::new("deploy-link-app").unwrap();
+            db::app::save(&s.db_pool, &app).await.unwrap();
+            let deploy = crate::models::Deploy::new(&app.id, "ghcr.io/x/deploy-link-app:sha", Some("abc1234def"));
+            deploy_id = deploy.id.clone();
+            db::deploy::insert(&s.db_pool, &deploy).await.unwrap();
+        }
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/apps/deploy-link-app")
+                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
+        assert!(body.contains(&format!("/apps/deploy-link-app/deploys/{deploy_id}")));
+        // Both list and detail pages poll now, not just while a deploy is in progress.
+        assert!(body.contains(r#"id="deploys-table""#));
+        assert!(body.contains(r#"id="app-state""#));
     }
 
     #[tokio::test]

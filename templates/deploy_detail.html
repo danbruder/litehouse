@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}deploy {{ short_id }} - {{ app_name }} - litehouse{% endblock %}
+
+{% block content %}
+<p><a href="/apps/{{ app_name }}">&larr; {{ app_name }}</a></p>
+
+<div id="deploy-detail"{% if status == "in_progress" %} hx-get="/apps/{{ app_name }}/deploys/{{ deploy_id }}" hx-select="#deploy-detail" hx-swap="outerHTML" hx-trigger="every 3s"{% endif %}>
+  <h2>deploy <span class="muted">{{ short_id }}</span> <span class="badge badge-deploy-{{ status }}">{{ status }}</span></h2>
+
+  <div class="card">
+    <span class="panel-label">deploy</span>
+    <p><strong>Image:</strong> <code>{{ image }}</code></p>
+    {% if let Some(sha) = git_sha %}
+    <p><strong>Commit:</strong> <code>{{ sha }}</code></p>
+    {% endif %}
+    <p><strong>Started:</strong> {{ created_at }}</p>
+    {% if let Some(err) = error %}
+    <p><strong>Error:</strong></p>
+    <div class="deploy-error-body">{{ err }}</div>
+    {% endif %}
+  </div>
+
+  {% if is_latest %}
+  <h3>Logs</h3>
+  <div class="terminal">
+    <div class="terminal-bar">
+      <span class="terminal-dot"></span>
+      {{ app_name }} — live tail
+    </div>
+    <pre class="log" hx-get="/apps/{{ app_name }}/log-tail" hx-trigger="load, every 5s" hx-swap="innerHTML">loading...</pre>
+  </div>
+  <script>
+    document.body.addEventListener("htmx:afterSwap", function (e) {
+      if (e.target.classList && e.target.classList.contains("log")) {
+        e.target.scrollTop = e.target.scrollHeight;
+      }
+    });
+  </script>
+  {% else %}
+  <p class="hint">This app has deployed again since this one, so its container is gone and its logs aren't available anymore — only the current deploy's logs can be tailed.</p>
+  {% endif %}
+</div>
+{% endblock %}

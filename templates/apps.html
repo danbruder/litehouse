@@ -25,7 +25,7 @@
   {% endif %}
 </div>
 
-<div class="card">
+<div class="card" id="server-resources-card" hx-get="/" hx-select="#server-resources-card" hx-swap="outerHTML" hx-trigger="every 30s">
   <span class="panel-label">server resources</span>
   <div class="metrics-grid">
     <div>
@@ -50,7 +50,7 @@
   <p class="muted">Run <code>lh create &lt;app&gt; --repo owner/name</code>, then <code>git push</code> to deploy.</p>
 </div>
 {% else %}
-<table {% if any_in_progress %}hx-get="/" hx-select="table" hx-swap="outerHTML" hx-trigger="every 5s"{% endif %}>
+<table hx-get="/" hx-select="table" hx-swap="outerHTML" hx-trigger="every 5s">
   <thead>
     <tr>
       <th>Name</th>
