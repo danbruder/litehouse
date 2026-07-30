@@ -73,6 +73,24 @@ pub async fn latest_for_app(pool: &Pool<Sqlite>, app_id: &str) -> Result<Option<
     Ok(deploy)
 }
 
+/// Get a single deploy by id
+#[instrument(skip(pool))]
+pub async fn get_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Option<Deploy>> {
+    let deploy = sqlx::query_as!(
+        Deploy,
+        r#"
+            SELECT *
+            FROM deploy
+            WHERE id = ?
+            "#,
+        id
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(deploy)
+}
+
 /// List the most recent deploys for an app, newest first
 #[instrument(skip(pool))]
 pub async fn list_for_app(pool: &Pool<Sqlite>, app_id: &str, limit: i64) -> Result<Vec<Deploy>> {
@@ -163,6 +181,20 @@ mod tests {
         let latest = latest_for_app(&pool, &app.id).await.unwrap().unwrap();
         assert_eq!(latest.status, "failed");
         assert_eq!(latest.error, Some("boom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_by_id() {
+        let pool = get_test_pool().await;
+        let app = seed_app(&pool, "deployapp4").await;
+
+        let deploy = new_deploy(&app.id, "deployapp4:1");
+        insert(&pool, &deploy).await.unwrap();
+
+        let found = get_by_id(&pool, &deploy.id).await.unwrap().unwrap();
+        assert_eq!(found.image, "deployapp4:1");
+
+        assert!(get_by_id(&pool, "does-not-exist").await.unwrap().is_none());
     }
 
     #[tokio::test]
