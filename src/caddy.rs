@@ -69,11 +69,34 @@ struct HostMatcher {
 struct Handler {
     handler: String,
     upstreams: Vec<Upstream>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    load_balancing: Option<LoadBalancing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health_checks: Option<HealthChecks>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Upstream {
     dial: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LoadBalancing {
+    try_duration: String,
+    try_interval: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HealthChecks {
+    active: ActiveHealthCheck,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ActiveHealthCheck {
+    uri: String,
+    interval: String,
+    timeout: String,
+    expect_status: u16,
 }
 
 #[instrument]
@@ -665,6 +688,8 @@ async fn build_caddy_config(
                 upstreams: vec![Upstream {
                     dial: "litehouse-server:3030".to_string(),
                 }],
+                load_balancing: None,
+                health_checks: None,
             }],
         };
 
@@ -717,11 +742,31 @@ async fn build_caddy_config(
         // Apps run in containers named {app-name}-container on the same Docker network
         let upstream = format!("{}-container:{}", app.name, port);
 
+        let (load_balancing, health_checks) = match &app.health_check_path {
+            Some(path) => (
+                Some(LoadBalancing {
+                    try_duration: "10s".to_string(),
+                    try_interval: "250ms".to_string(),
+                }),
+                Some(HealthChecks {
+                    active: ActiveHealthCheck {
+                        uri: path.clone(),
+                        interval: "10s".to_string(),
+                        timeout: "5s".to_string(),
+                        expect_status: 200,
+                    },
+                }),
+            ),
+            None => (None, None),
+        };
+
         let route = Route {
             match_rules: vec![HostMatcher { host: hosts }],
             handle: vec![Handler {
                 handler: "reverse_proxy".to_string(),
                 upstreams: vec![Upstream { dial: upstream }],
+                load_balancing,
+                health_checks,
             }],
         };
 
@@ -972,6 +1017,45 @@ mod tests {
         assert!(
             !json.contains("\"admin.s.danbruder.com\""),
             "default admin host should not be present when a custom label is used: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_with_health_check_path_get_load_balancing_and_health_checks() {
+        let mut app = deployed_app("myapp", Some("8080"));
+        app.health_check_path = Some("/healthz".to_string());
+
+        let config = build_caddy_config(vec![app], false, Some("s.danbruder.com"), "admin")
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(
+            json.contains("\"try_duration\":\"10s\""),
+            "expected try_duration in config: {json}"
+        );
+        assert!(
+            json.contains("\"try_interval\":\"250ms\""),
+            "expected try_interval in config: {json}"
+        );
+        assert!(
+            json.contains("\"uri\":\"/healthz\""),
+            "expected health check uri in config: {json}"
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_without_health_check_path_omit_load_balancing() {
+        let app = deployed_app("myapp", Some("8080"));
+
+        let config = build_caddy_config(vec![app], false, Some("s.danbruder.com"), "admin")
+            .await
+            .expect("config should build");
+
+        let json = serde_json::to_string(&config).expect("serialize config");
+        assert!(
+            !json.contains("load_balancing") && !json.contains("health_checks"),
+            "app without health_check_path should omit load_balancing/health_checks: {json}"
         );
     }
 }

@@ -320,6 +320,50 @@ impl ApiClient {
         }).await
     }
 
+    /// Set (or replace) an app's HTTP health check path.
+    pub async fn set_health_check(&self, app_name: &str, path: &str) -> Result<()> {
+        let url = format!("{}/apps/{}/health-check", self.config.base_url, app_name);
+        let payload = serde_json::json!({ "path": path });
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        Ok(())
+    }
+
+    /// Clear an app's HTTP health check path.
+    pub async fn unset_health_check(&self, app_name: &str) -> Result<()> {
+        let url = format!("{}/apps/{}/health-check", self.config.base_url, app_name);
+
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+
+        Ok(())
+    }
+
+    /// Get an app's configured HTTP health check path, if any.
+    pub async fn get_health_check(&self, app_name: &str) -> Result<Option<String>> {
+        let url = format!("{}/apps/{}/health-check", self.config.base_url, app_name);
+
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
+    }
+
     /// Fetch the status JSON for one app (`Some(name)`) or all apps
     /// (`None`). Returns the server's raw response body.
     pub async fn get_status_json(&self, app_name: Option<&str>) -> Result<String> {

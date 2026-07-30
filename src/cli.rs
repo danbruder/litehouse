@@ -244,6 +244,13 @@ enum Commands {
         command: DomainCmd,
     },
 
+    /// Manage an app's HTTP health check path, used by Caddy for active
+    /// health checks and passive retry during a deploy's stop/start gap
+    HealthCheck {
+        #[command(subcommand)]
+        command: HealthCheckCmd,
+    },
+
     /// Run an MCP (Model Context Protocol) server over stdio so AI agents can
     /// manage litehouse apps. Reuses the client config + admin token.
     Mcp {
@@ -276,6 +283,27 @@ enum DomainCmd {
     },
     /// List the custom domains configured for an app
     List {
+        /// Name of the app
+        app_name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum HealthCheckCmd {
+    /// Set (or replace) an app's health check path
+    Set {
+        /// Name of the app
+        app_name: String,
+        /// Path Caddy should poll, e.g. /healthz
+        path: String,
+    },
+    /// Clear an app's health check path (reverts to today's plain proxy)
+    Unset {
+        /// Name of the app
+        app_name: String,
+    },
+    /// Show an app's configured health check path
+    Show {
         /// Name of the app
         app_name: String,
     },
@@ -654,6 +682,32 @@ pub async fn run() -> Result<()> {
                             for d in domains {
                                 println!("{}", d);
                             }
+                        }
+                        Ok(())
+                    }
+                },
+                Commands::HealthCheck { command } => match command {
+                    HealthCheckCmd::Set { app_name, path } => {
+                        if !crate::models::is_valid_health_check_path(&path) {
+                            return Err(anyhow!(
+                                "Invalid health check path '{}': paths must start with '/' and \
+                                 have no scheme, host, or spaces.",
+                                path
+                            ));
+                        }
+                        api_client.set_health_check(&app_name, &path).await?;
+                        println!("Health check path '{}' set on app '{}'.", path, app_name);
+                        Ok(())
+                    }
+                    HealthCheckCmd::Unset { app_name } => {
+                        api_client.unset_health_check(&app_name).await?;
+                        println!("Health check path cleared on app '{}'.", app_name);
+                        Ok(())
+                    }
+                    HealthCheckCmd::Show { app_name } => {
+                        match api_client.get_health_check(&app_name).await? {
+                            Some(path) => println!("{}", path),
+                            None => println!("No health check configured for app '{}'.", app_name),
                         }
                         Ok(())
                     }
