@@ -5,21 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}litehouse{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Archivo:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/htmx.min.js"></script>
+  <script>
+    (function () {
+      var t = localStorage.theme ||
+        (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
 </head>
 <body>
   {% block body %}
-  <div class="scanlines" aria-hidden="true"></div>
   <header>
     <a class="brand" href="/"><h1>🏠 litehouse</h1><span class="cursor">_</span></a>
-    <form method="post" action="/logout">
-      <button type="submit">sign out</button>
-    </form>
+    <div class="header-actions">
+      <button id="theme-toggle" type="button" class="btn-outline btn-small"></button>
+      <form class="inline" method="post" action="/logout">
+        <button type="submit" class="btn-outline btn-small">sign out</button>
+      </form>
+    </div>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      var sync = function () {
+        btn.textContent = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      };
+      sync();
+      btn.addEventListener("click", function () {
+        var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        localStorage.theme = next;
+        sync();
+      });
+    })();
+  </script>
   {% endblock %}
 </body>
 </html>

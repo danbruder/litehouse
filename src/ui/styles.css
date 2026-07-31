@@ -1,134 +1,110 @@
-/* litehouse admin — "terminal control room"
-   Monospace-everywhere dashboard styled like a CRT ops console in dark mode
-   and a teletype ledger in light mode. No external fonts or assets — the
-   font stack below leans on monospace fonts developers already have. */
+/* litehouse admin — "Ink & Lime"
+   Ported from danbruder/blog's design system (docs/design-system in that
+   repo). Paper, not chrome: no radius, no shadows for elevation, structure
+   drawn with hairlines, one accent (lime) spent only on hover/selection. */
 
 :root {
   color-scheme: light dark;
 
-  --font-mono: "JetBrains Mono", "Berkeley Mono", "IBM Plex Mono", ui-monospace,
-    "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-sans: "Archivo", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* paper / teletype (light) */
-  --bg: #f1ece0;
-  --bg-alt: #e8e1d0;
-  --fg: #211d15;
-  --muted: #7d7562;
-  --border: #cdc2a4;
-  --accent: #9a5b06;
-  --accent-fg: #f1ece0;
-  --ok: #1f7a4d;
-  --danger: #a8291f;
-  --warn: #8a5a00;
-  --glow: none;
-  --texture:
-    repeating-linear-gradient(
-      to bottom,
-      rgba(33, 29, 21, 0.035) 0,
-      rgba(33, 29, 21, 0.035) 1px,
-      transparent 1px,
-      transparent 28px
-    );
-  --scan: none;
+  --color-paper: oklch(0.978 0.003 250);
+  --color-paper-2: oklch(0.956 0.004 250);
+  --color-paper-3: oklch(0.925 0.005 250);
+
+  --color-ink: oklch(0.185 0.015 255);
+  --color-ink-2: oklch(0.415 0.013 255);
+  --color-ink-3: oklch(0.595 0.011 255);
+  --color-rule: oklch(0.855 0.006 250);
+
+  --color-lime: oklch(0.885 0.185 118);
+  --on-lime: oklch(0.185 0.015 255);
+  --color-signal: oklch(0.520 0.190 258);
+
+  /* Status colors: an ops dashboard needs to distinguish real states, unlike
+     the source blog. Kept in the same hue families as the hljs mapping below
+     (green/amber/red) so they read as data, not as a second decorative
+     accent — never used outside badges/status dots. */
+  --color-good: oklch(0.52 0.13 150);
+  --color-warn: oklch(0.52 0.14 45);
+  --color-bad: oklch(0.5 0.19 25);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* CRT / phosphor (dark) */
-    --bg: #0a0f0c;
-    --bg-alt: #10160f;
-    --fg: #d8e6da;
-    --muted: #6f8a76;
-    --border: #263029;
-    --accent: #ffb000;
-    --accent-fg: #0a0f0c;
-    --ok: #3ddc84;
-    --danger: #ff5c5c;
-    --warn: #ffd23f;
-    --glow: 0 0 6px currentColor;
-    --texture: radial-gradient(rgba(255, 176, 0, 0.05) 1px, transparent 1px);
-    --scan: repeating-linear-gradient(
-      to bottom,
-      rgba(216, 230, 218, 0.035) 0,
-      rgba(216, 230, 218, 0.035) 1px,
-      transparent 1px,
-      transparent 3px
-    );
-  }
+[data-theme="dark"] {
+  --color-paper: oklch(0.175 0.012 255);
+  --color-paper-2: oklch(0.215 0.013 255);
+  --color-paper-3: oklch(0.262 0.014 255);
+  --color-ink: oklch(0.955 0.005 250);
+  --color-ink-2: oklch(0.775 0.008 250);
+  --color-ink-3: oklch(0.600 0.010 250);
+  --color-rule: oklch(0.315 0.014 255);
+  --color-lime: oklch(0.855 0.190 118);
+  --color-signal: oklch(0.750 0.140 250);
+  --color-good: oklch(0.72 0.15 150);
+  --color-warn: oklch(0.75 0.16 45);
+  --color-bad: oklch(0.72 0.17 25);
 }
 
 * {
   box-sizing: border-box;
-}
-
-::selection {
-  background: var(--accent);
-  color: var(--accent-fg);
+  border-radius: 0 !important; /* no rounded corners, anywhere */
 }
 
 html {
-  scrollbar-color: var(--border) var(--bg);
+  background: var(--color-paper);
+  scrollbar-color: var(--color-rule) var(--color-paper);
 }
 
 body {
   margin: 0;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  background-color: var(--bg);
-  background-image: var(--texture);
-  background-size: 24px 24px;
-  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  background: var(--color-paper);
+  color: var(--color-ink);
   line-height: 1.6;
-  position: relative;
-  animation: boot-in 260ms ease-out;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  transition: background 200ms ease, color 200ms ease;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  body {
-    animation: none;
-  }
+::selection {
+  background: var(--color-lime);
+  color: var(--on-lime);
 }
 
-@keyframes boot-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* fixed scanline overlay, dark mode only (--scan is `none` in light) */
-.scanlines {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1000;
-  background-image: var(--scan);
-  mix-blend-mode: overlay;
-}
-
+/* Every link in this dashboard is chrome (table rows, cards, nav) rather
+   than long-form prose, so links opt out of the hairline-underline variant
+   everywhere and use the bespoke nav-style hover instead: lime fill,
+   ink-on-lime text. See README "The link & hover model" for the full rule. */
 a {
-  color: var(--accent);
-  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--color-ink);
+  text-decoration: none;
+  box-shadow: none;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 a:hover {
-  text-decoration-style: solid;
+  background: var(--color-lime);
+  color: var(--on-lime);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-lime);
   outline-offset: 2px;
 }
 
 h1, h2, h3 {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  margin: 0;
+  color: var(--color-ink);
+}
+
+main h2, main h3 {
+  margin: 2.5rem 0 1rem;
 }
 
 /* ---------------------------------------------------------------------
@@ -139,42 +115,48 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.85rem 1.75rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-alt);
-  position: relative;
-  z-index: 2;
+  padding: 1rem 1.75rem;
+  border-bottom: 1px solid var(--color-ink);
+  background: var(--color-paper);
 }
 
 .brand {
   display: inline-flex;
   align-items: baseline;
-  gap: 2px;
+  gap: 4px;
   text-decoration: none;
   color: inherit;
 }
 
 .brand h1 {
-  font-size: 1rem;
+  font-size: 1.05rem;
   margin: 0;
-  letter-spacing: 0.04em;
 }
 
 .brand .cursor {
-  color: var(--accent);
-  text-shadow: var(--glow);
-  animation: blink 1.1s steps(1) infinite;
+  color: var(--color-lime);
+  font-weight: 700;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .brand .cursor {
-    animation: none;
-  }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
-@keyframes blink {
-  0%, 49% { opacity: 1; }
-  50%, 100% { opacity: 0; }
+.btn-outline {
+  background: transparent;
+  color: var(--color-ink);
+}
+
+.btn-outline:hover {
+  background: var(--color-lime);
+  color: var(--on-lime);
+}
+
+.btn-small {
+  font-size: 0.65rem;
+  padding: 0.35rem 0.6rem;
 }
 
 /* ---------------------------------------------------------------------
@@ -184,15 +166,15 @@ header {
 main {
   max-width: 1080px;
   margin: 0 auto;
-  padding: 2rem 1.75rem 4rem;
-  position: relative;
-  z-index: 2;
+  padding: 2.5rem 1.75rem 4rem;
 }
 
 main > p:first-child a {
-  font-size: 0.85rem;
+  font-size: 0.75rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
+  color: var(--color-ink-3);
 }
 
 /* ---------------------------------------------------------------------
@@ -200,10 +182,9 @@ main > p:first-child a {
    --------------------------------------------------------------------- */
 
 .card {
-  position: relative;
-  background: var(--bg-alt);
-  border: 1px solid var(--border);
-  padding: 1.25rem 1.5rem 1.5rem;
+  background: var(--color-paper);
+  border: 1px solid var(--color-ink);
+  padding: 1.5rem 1.75rem;
   margin: 1.75rem 0 1.5rem;
 }
 
@@ -225,45 +206,25 @@ main > p:first-child a {
   }
 }
 
-.card::before,
-.card::after {
-  content: "";
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 2px solid var(--accent);
-  opacity: 0.7;
-}
-
-.card::before {
-  top: -1px;
-  left: -1px;
-  border-right: none;
-  border-bottom: none;
-}
-
-.card::after {
-  bottom: -1px;
-  right: -1px;
-  border-left: none;
-  border-top: none;
-}
-
-.panel-label {
-  position: absolute;
-  top: -0.6em;
-  left: 0.85rem;
-  background: var(--bg);
-  color: var(--accent);
-  padding: 0 0.5em;
-  font-size: 0.7rem;
-  font-weight: 700;
+.panel-label,
+.label {
+  display: block;
+  margin-bottom: 1rem;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
+  color: var(--color-ink-3);
 }
 
 .card p {
   margin: 0.4rem 0;
+  color: var(--color-ink-2);
+}
+
+.card p strong {
+  color: var(--color-ink);
+  font-weight: 600;
 }
 
 .card ul {
@@ -274,10 +235,11 @@ main > p:first-child a {
 .card li {
   margin: 0.25rem 0;
   font-size: 0.85rem;
+  color: var(--color-ink-2);
 }
 
 /* ---------------------------------------------------------------------
-   Tables
+   Tables — bounded by hairlines, not padding + shadow + radius
    --------------------------------------------------------------------- */
 
 table {
@@ -289,45 +251,31 @@ table {
 
 th, td {
   text-align: left;
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid var(--color-rule);
   vertical-align: middle;
 }
 
 th {
-  color: var(--muted);
-  font-weight: 700;
+  color: var(--color-ink-3);
+  font-weight: 600;
   text-transform: uppercase;
   font-size: 0.7rem;
   letter-spacing: 0.08em;
-  border-bottom: 1px solid var(--accent);
-}
-
-tbody tr {
-  transition: background-color 100ms ease;
+  border-bottom: 1px solid var(--color-ink);
 }
 
 tbody tr:hover {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
-td:first-child::before {
-  content: "› ";
-  color: transparent;
-  transition: color 100ms ease;
-}
-
-tbody tr:hover td:first-child::before {
-  color: var(--accent);
+  background: var(--color-paper-2);
 }
 
 /* ---------------------------------------------------------------------
-   Status badges — a glowing dot (::before, colored via currentColor)
-   in front of whatever status text/class the template already renders.
+   Status badges — a solid square mark (currentColor) in front of
+   whatever status text/class the template already renders.
    --------------------------------------------------------------------- */
 
 .muted {
-  color: var(--muted);
+  color: var(--color-ink-3);
 }
 
 .badge {
@@ -338,49 +286,41 @@ tbody tr:hover td:first-child::before {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg);
+  color: var(--color-ink-2);
 }
 
 .badge::before {
   content: "";
   width: 6px;
   height: 6px;
-  border-radius: 50%;
   background: currentColor;
-  box-shadow: var(--glow);
   flex: none;
 }
 
-.badge-running { color: var(--ok); }
-.badge-failed, .badge-crashed { color: var(--danger); }
-
-.badge-running::before,
-.badge-deploy-in_progress::before {
-  animation: pulse 1.4s ease-in-out infinite;
+.badge-running,
+.badge-deploy-succeeded {
+  color: var(--color-good);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .badge-running::before,
-  .badge-deploy-in_progress::before {
-    animation: none;
-  }
+.badge-failed,
+.badge-crashed,
+.badge-deploy-failed {
+  color: var(--color-bad);
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(1.4); }
+.badge-starting,
+.badge-stopping,
+.badge-building,
+.badge-deploy-in_progress {
+  color: var(--color-warn);
 }
-
-.badge-deploy-succeeded { color: var(--ok); }
-.badge-deploy-failed { color: var(--danger); }
-.badge-deploy-in_progress { color: var(--warn); }
 
 .tag {
   display: inline-block;
   font-size: 0.75rem;
-  padding: 0.1em 0.5em;
-  border: 1px solid var(--border);
-  color: var(--muted);
+  padding: 0.1em 0.55em;
+  border: 1px solid var(--color-rule);
+  color: var(--color-ink-2);
 }
 
 .env-list {
@@ -399,7 +339,7 @@ tbody tr:hover td:first-child::before {
 }
 
 .env-list button {
-  padding: 0.1em 0.4em;
+  padding: 0.1em 0.5em;
   font-size: 0.7rem;
 }
 
@@ -421,7 +361,7 @@ tbody tr:hover td:first-child::before {
 }
 
 .hint {
-  color: var(--muted);
+  color: var(--color-ink-3);
   font-size: 0.75rem;
   margin: 0.75rem 0 0;
 }
@@ -447,7 +387,7 @@ td.deploy-image {
 }
 
 td.deploy-error {
-  color: var(--danger);
+  color: var(--color-bad);
   font-size: 0.8rem;
 }
 
@@ -459,14 +399,15 @@ td.deploy-error {
 
 code {
   font-family: var(--font-mono);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  background: var(--color-paper-2);
+  color: var(--color-ink);
+  border: 1px solid var(--color-rule);
   padding: 0.1em 0.4em;
   font-size: 0.85em;
 }
 
 /* ---------------------------------------------------------------------
-   Buttons & forms — bracket-style controls: `[ start ]`
+   Buttons & forms
    --------------------------------------------------------------------- */
 
 form.inline {
@@ -474,57 +415,49 @@ form.inline {
 }
 
 button, input[type="submit"] {
-  font: inherit;
-  font-size: 0.75rem;
-  font-weight: 700;
+  display: inline-block;
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg);
+  letter-spacing: 0.05em;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-paper);
   cursor: pointer;
-  transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
-
-button::before, button::after {
-  color: var(--muted);
-}
-
-button::before { content: "["; margin-right: 0.4em; }
-button::after { content: "]"; margin-left: 0.4em; }
 
 button:hover, input[type="submit"]:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
-}
-
-button:hover::before, button:hover::after {
-  color: var(--accent-fg);
+  background: var(--color-lime);
+  border-color: var(--color-lime);
+  color: var(--on-lime);
 }
 
 input[type="text"], input[type="password"] {
-  font: inherit;
-  font-size: 0.9rem;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-rule);
+  background: var(--color-paper);
+  color: var(--color-ink);
   width: 100%;
   max-width: 320px;
 }
 
 input[type="text"]:focus, input[type="password"]:focus {
-  border-color: var(--accent);
+  border-color: var(--color-ink);
+  outline: none;
 }
 
 .field-label {
   display: block;
-  font-size: 0.7rem;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--muted);
+  color: var(--color-ink-3);
   margin-bottom: 0.4rem;
 }
 
@@ -536,8 +469,7 @@ input[type="text"]:focus, input[type="password"]:focus {
 }
 
 .prompt-marker {
-  color: var(--accent);
-  text-shadow: var(--glow);
+  color: var(--color-ink-3);
   font-weight: 700;
 }
 
@@ -546,7 +478,7 @@ input[type="text"]:focus, input[type="password"]:focus {
    --------------------------------------------------------------------- */
 
 .error {
-  color: var(--danger);
+  color: var(--color-bad);
   margin-bottom: 1rem;
 }
 
@@ -556,10 +488,10 @@ input[type="text"]:focus, input[type="password"]:focus {
 
 .flash {
   position: relative;
-  background: var(--bg-alt);
-  border: 1px solid var(--danger);
-  border-left: 3px solid var(--danger);
-  color: var(--danger);
+  background: var(--color-paper-2);
+  border: 1px solid var(--color-ink);
+  border-left: 3px solid var(--color-ink);
+  color: var(--color-ink);
   padding: 0.65rem 1rem;
   margin-bottom: 1.5rem;
   font-size: 0.85rem;
@@ -577,7 +509,7 @@ input[type="text"]:focus, input[type="password"]:focus {
 .terminal-shell {
   display: flex;
   justify-content: center;
-  padding-top: 3rem;
+  padding-top: 4rem;
 }
 
 .login-box {
@@ -590,19 +522,21 @@ input[type="text"]:focus, input[type="password"]:focus {
 }
 
 .lede {
-  color: var(--muted);
-  font-size: 0.8rem;
+  color: var(--color-ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
   margin: 0;
-  letter-spacing: 0.02em;
 }
 
 /* ---------------------------------------------------------------------
-   Logs — terminal window chrome around the polling <pre>
+   Logs — bordered well around the polling <pre>, like a prose code block
    --------------------------------------------------------------------- */
 
 .terminal {
-  border: 1px solid var(--border);
-  background: var(--bg-alt);
+  border: 1px solid var(--color-rule);
+  background: var(--color-paper-2);
   margin: 0.75rem 0 1.5rem;
 }
 
@@ -611,38 +545,34 @@ input[type="text"]:focus, input[type="password"]:focus {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.85rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.7rem;
+  border-bottom: 1px solid var(--color-rule);
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  color: var(--color-ink-3);
 }
 
 .terminal-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: var(--glow);
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .terminal-dot {
-    animation: none;
-  }
+  background: var(--color-good);
+  flex: none;
 }
 
 pre.log {
   margin: 0;
-  padding: 1rem;
+  padding: 1rem 1.25rem;
   overflow-x: auto;
   max-height: 480px;
   overflow-y: auto;
-  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--fg);
+  color: var(--color-ink-2);
+  background: transparent;
 }
 
 pre.log::-webkit-scrollbar {
@@ -650,7 +580,7 @@ pre.log::-webkit-scrollbar {
 }
 
 pre.log::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--color-rule);
 }
 
 pre.log::-webkit-scrollbar-track {
@@ -670,25 +600,26 @@ pre.log::-webkit-scrollbar-track {
 
 .metrics-grid h4 {
   margin: 0 0 0.35rem;
-  font-size: 0.8rem;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--fg);
+  color: var(--color-ink-3);
 }
 
 .inline-links a {
-  margin-right: 0.25rem;
+  padding: 0.15em 0.5em;
+  color: var(--color-ink-3);
 }
 
 .inline-links a.active {
-  color: var(--fg);
-  text-decoration: none;
+  background: var(--color-paper-3);
+  color: var(--color-ink);
   font-weight: 700;
 }
 
 .chart {
-  color: var(--accent);
+  color: var(--color-ink);
 }
 
 .chart-svg {
@@ -699,9 +630,9 @@ pre.log::-webkit-scrollbar-track {
 
 .chart-label {
   display: block;
-  margin-top: 0.25rem;
+  margin-top: 0.35rem;
   font-size: 0.8rem;
-  color: var(--muted);
+  color: var(--color-ink-3);
 }
 
 .chart-empty {
