@@ -1,4 +1,5 @@
 use futures_util::StreamExt;
+use sqlx::{Pool, Sqlite};
 use std::pin::Pin;
 use tracing::instrument;
 
@@ -20,17 +21,15 @@ pub enum LogsError {
 }
 
 /// View app logs
-#[instrument]
+#[instrument(skip(pool))]
 pub async fn execute(
+    pool: &Pool<Sqlite>,
     app_name: &str,
     lines: usize,
     follow: bool,
 ) -> Result<Pin<Box<dyn futures_util::Stream<Item = Result<String>> + Send>>> {
-    // Connect to database
-    let pool = db::init_pool().await?;
-
     // Check if app exists
-    let _ = db::app::get_by_name(&pool, app_name)
+    let _ = db::app::get_by_name(pool, app_name)
         .await?
         .ok_or_else(|| LogsError::AppNotFound(app_name.to_string()))?;
 

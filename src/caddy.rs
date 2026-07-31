@@ -745,7 +745,7 @@ async fn build_caddy_config(
         let (load_balancing, health_checks) = match &app.health_check_path {
             Some(path) => (
                 Some(LoadBalancing {
-                    try_duration: "10s".to_string(),
+                    try_duration: "30s".to_string(),
                     try_interval: "250ms".to_string(),
                 }),
                 Some(HealthChecks {
@@ -1031,7 +1031,7 @@ mod tests {
 
         let json = serde_json::to_string(&config).expect("serialize config");
         assert!(
-            json.contains("\"try_duration\":\"10s\""),
+            json.contains("\"try_duration\":\"30s\""),
             "expected try_duration in config: {json}"
         );
         assert!(

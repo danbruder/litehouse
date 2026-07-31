@@ -174,10 +174,13 @@ async fn stop_app(
     State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let locks = state.read().await.app_locks.clone();
+    let (pool, docker_conn, locks) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
+    };
     let _guard = crate::commands::server::lock_app(&locks, &name).await;
 
-    match stop::execute(&name).await {
+    match stop::execute(&pool, &docker_conn, &name).await {
         Ok(_) => (
             axum::http::StatusCode::OK,
             format!("App '{}' stopped", name),
@@ -194,11 +197,13 @@ async fn stop_app(
     }
 }
 
-#[instrument(skip(name))]
+#[instrument(skip(state, name))]
 async fn get_logs(
+    State(state): State<Arc<RwLock<AppState>>>,
     Path(name): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
     let lines = params
         .get("lines")
         .and_then(|l| l.parse::<usize>().ok())
@@ -210,7 +215,7 @@ async fn get_logs(
 
     if follow {
         // Stream logs directly from Docker to the HTTP response body
-        match logs::execute(&name, lines, true).await {
+        match logs::execute(&pool, &name, lines, true).await {
             Ok(stream) => {
                 let app_name = name.clone();
                 let body_stream = stream.map(move |item| match item {
@@ -232,7 +237,7 @@ async fn get_logs(
         }
     } else {
         // Get logs as a single response
-        match logs::execute(&name, lines, false).await {
+        match logs::execute(&pool, &name, lines, false).await {
             Ok(stream) => {
                 let mut logs = String::new();
                 let mut stream = stream;

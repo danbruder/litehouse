@@ -605,9 +605,12 @@ async fn stop_app_ui(
     form: Option<Form<ActionForm>>,
 ) -> impl IntoResponse {
     let next = form.as_ref().and_then(|f| f.next.as_deref()).map(str::to_string);
-    let locks = state.read().await.app_locks.clone();
+    let (pool, docker, locks) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
+    };
     let _guard = crate::commands::server::lock_app(&locks, &name).await;
-    let error = match crate::commands::stop::execute(&name).await {
+    let error = match crate::commands::stop::execute(&pool, &docker, &name).await {
         Ok(()) => None,
         Err(e) => {
             tracing::error!("ui: failed to stop app '{}': {}", name, e);
@@ -628,7 +631,7 @@ async fn restart_app_ui(
         (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
     };
     let _guard = crate::commands::server::lock_app(&locks, &name).await;
-    let error = if let Err(e) = crate::commands::stop::execute(&name).await {
+    let error = if let Err(e) = crate::commands::stop::execute(&pool, &docker, &name).await {
         tracing::error!("ui: failed to restart app '{}' (stop step): {}", name, e);
         Some("restart-failed")
     } else if let Err(e) = crate::commands::start::execute(&pool, &docker, &name).await {
@@ -868,8 +871,12 @@ async fn deploy_detail(
     .into_response()
 }
 
-async fn log_tail(Path(name): Path<String>) -> impl IntoResponse {
-    match crate::commands::logs::execute(&name, 300, false).await {
+async fn log_tail(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    match crate::commands::logs::execute(&pool, &name, 300, false).await {
         Ok(mut stream) => {
             let mut logs = String::new();
             while let Some(chunk) = stream.next().await {
