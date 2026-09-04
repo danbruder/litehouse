@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Play, Square, RotateCw, ExternalLink } from "lucide-react";
 import type { AppSummary } from "../lib/api";
@@ -33,12 +34,12 @@ export function AppCard({ app }: { app: AppSummary }) {
     <div className="site-card card !my-0 flex flex-col justify-between">
       <div>
         <div className="flex items-start justify-between gap-3">
-          <a
-            href={`/apps/${encodeURIComponent(app.name)}`}
+          <Link
+            to={`/apps/${encodeURIComponent(app.name)}`}
             className="font-display text-base font-semibold text-ink hover:text-lime"
           >
             {app.name}
-          </a>
+          </Link>
           <StatusBadge state={app.state} />
         </div>
         <a
