@@ -1,11 +1,14 @@
 # litehouse admin dashboard (React)
 
-The admin dashboard at `/` is a small React SPA that talks to litehouse's
-existing JSON API (`src/api.rs` — the same one the `lh` CLI and MCP server
-use). Everything else in the admin UI (`/apps/:name`, `/backups`, deploy
-detail) is still server-rendered Askama + HTMX; only the dashboard has been
-migrated so far. See `src/ui.rs`'s `spa_shell` handler for how this is
-wired in.
+The whole admin UI — the dashboard at `/`, an app's detail page
+(`/apps/:name`), its deploy detail (`/apps/:name/deploys/:id`), and
+`/backups` — is a React SPA that talks to litehouse's existing JSON API
+(`src/api.rs` — the same one the `lh` CLI and MCP server use), routed
+client-side with `react-router-dom`. Only `/login` is still server-rendered
+Askama HTML (see `src/ui.rs`). Every one of the SPA routes above is served
+by the exact same HTML shell — see `src/ui.rs`'s `spa_shell` handler —
+which mounts the React app and lets react-router decide what to render from
+`location.pathname`.
 
 ## Why there's a build step here but "the server never builds anything"
 
@@ -61,6 +64,9 @@ change just to update the include path.
   (the "Ink & Lime" design system) — the SPA links that stylesheet before
   its own, and reuses its `.card`/`.badge`/`.btn-outline` classes directly
   rather than re-implementing them.
+- `react-router-dom` for client-side routing between the four pages (a
+  `BrowserRouter` + `Routes` in `src/App.tsx`) — the server just serves the
+  same shell for every SPA path (see `spa_shell` in `src/ui.rs`).
 - `@tanstack/react-query` for data fetching/caching/polling (replaces the
   HTMX pages' `hx-trigger="every Ns"` polling with real invalidation +
   optimistic UI on start/stop/restart).
@@ -71,7 +77,7 @@ change just to update the include path.
 ## Auth
 
 The SPA never touches the admin token directly. It authenticates with the
-same HttpOnly `litehouse_token` cookie the HTMX pages use (`credentials:
+same HttpOnly `litehouse_token` cookie set by `/login` (`credentials:
 "include"` on every fetch — see `src/lib/api.ts`); `admin_auth_middleware`
 (`src/auth.rs`) already accepts that cookie on `/api/*`, so no backend auth
 changes were needed to reuse the JSON API from the browser.
@@ -79,24 +85,46 @@ changes were needed to reuse the JSON API from the browser.
 ## What's SPA-only vs. shared with the CLI
 
 Most of `src/lib/api.ts` calls the same `/api/*` routes the CLI/MCP use.
-Three endpoints exist only for this dashboard (see `src/api.rs`), kept
+A handful of endpoints exist only for this SPA (see `src/api.rs`), kept
 separate rather than folded into the CLI-facing ones so their JSON
 contract can evolve independently:
 
 - `GET /api/apps/summary` — apps with **live** container state (not the
-  cached DB column), best-effort URL, and latest deploy info in one call.
+  cached DB column), best-effort URL, and latest deploy info in one call,
+  for the dashboard's site-list view.
+- `GET /api/apps/:name/summary` — the same live-state/URL treatment for one
+  app's detail page, plus its image, repo, port, and custom domains.
+- `GET /api/apps/:name/metrics?hours=24` — raw CPU/mem/disk samples scoped
+  to one app, for its Resources sparklines. Same shape and `hours` clamp as
+  `/api/metrics/server` below.
 - `POST /api/apps/:name/restart` — stop+start under the app's lock, same as
-  the HTMX dashboard's restart button.
+  the dashboard's and app detail page's restart button.
+- `GET /api/backups/catalog` — every catalogued backup artifact (app,
+  object key, size, age), for the `/backups` page. Distinct from
+  `/api/backups/status`'s today-only pass/fail summary.
 - `GET /api/metrics/server?hours=24` — raw CPU/mem/disk samples for the
-  sparkline cards.
+  dashboard's server resource sparklines.
+
+Everything else on the app detail and deploy detail pages — start/stop,
+redeploy (`POST /api/apps/:name/deploy`), the deploy list
+(`GET /api/apps/:name/deploys`), env vars (`GET`/`POST
+/api/apps/:name/env`), and the log tail (`GET /api/apps/:name/logs`) — reuse
+the existing CLI/MCP-facing endpoints as-is. The env card only ever renders
+the `key` of what `GET .../env` returns, matching the old HTMX page's
+guarantee that a saved value is never shown again. Deploy detail has no
+dedicated `GET .../deploys/:id` endpoint — the app's deploy list already
+carries everything that page needs (including, at index 0, which deploy is
+current), so it just looks the id up client-side.
 
 ## Migrating the rest of the admin UI
 
-Not done in this pass. The remaining Askama+HTMX pages (`/apps/:name`,
-`/backups`, deploy detail) are linked from the dashboard as plain
-`<a href>`s — full page navigations, not client-side routes — so clicking
-into an app currently drops back into the old page style. Migrating a page
-means: add whatever JSON endpoint it needs (most already exist), build the
-React page under `src/pages/`, wire it into a client router (none exists
-yet — a single-page dashboard didn't need one), and only then delete the
-corresponding Askama template + `src/ui.rs` handler.
+Done — every admin page is now React (`src/pages/Dashboard.tsx`,
+`AppDetail.tsx`, `DeployDetail.tsx`, `Backups.tsx`), routed with
+`react-router-dom` (`src/App.tsx`). Only `/login` is still server-rendered
+Askama HTML. The pattern for any *new* admin page going forward: add
+whatever JSON endpoint it needs (check `/api/*` first — most things already
+exist), build the page under `src/pages/`, add a `<Route>` in `src/App.tsx`,
+link to it with `<Link>`/`useParams` rather than `<a href>`, and — if it's
+replacing a server-rendered page — delete that page's Askama template and
+`src/ui.rs` handler once the React version works end-to-end, pointing its
+route at `spa_shell` instead.

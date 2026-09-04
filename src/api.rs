@@ -37,6 +37,8 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
         .route("/apps/summary", get(apps_summary))
+        .route("/apps/:name/summary", get(app_summary))
+        .route("/apps/:name/metrics", get(get_app_metrics))
         .route("/apps/:name", get(get_app))
         .route("/apps/:name", delete(delete_app))
         .route("/apps/:name/start", post(start_app))
@@ -62,6 +64,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/ghcr", delete(delete_ghcr_config))
         .route("/backups/run", post(run_backup_now))
         .route("/backups/status", get(get_backup_status))
+        .route("/backups/catalog", get(get_backup_catalog))
         .route("/restore", post(run_restore))
         .route("/metrics/server", get(get_server_metrics))
         .layer(axum::middleware::from_fn_with_state(
@@ -201,6 +204,96 @@ async fn get_app(
                 format!("Failed to get app: {}", e),
             )
                 .into_response()
+        }
+    }
+}
+
+/// `GET /api/apps/:name/summary` — everything the admin dashboard's app
+/// detail page needs about the app itself (its deploys and env vars have
+/// their own endpoints): live container state, best-effort public URL, and
+/// custom domains, alongside the same static fields `get_app` returns. Kept
+/// separate from `get_app` (CLI/MCP-facing) so this SPA-only contract can
+/// evolve independently — same split as `apps_summary` vs `list_apps`.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AppDetailSummary {
+    id: String,
+    name: String,
+    state: String,
+    url: String,
+    image: Option<String>,
+    repo: Option<String>,
+    port: Option<i64>,
+    custom_domains: Vec<String>,
+}
+
+#[instrument(skip(state))]
+async fn app_summary(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let (pool, config) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone())
+    };
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
+        }
+        Err(e) => return internal(e).into_response(),
+    };
+
+    // Read-through: reflect the live Docker container state rather than the
+    // (possibly stale) cached DB column, same as `apps_summary`.
+    let live = crate::docker::live_state(&app.name)
+        .await
+        .unwrap_or(app.state);
+
+    Json(AppDetailSummary {
+        url: app_url(&app.name, &config),
+        state: live.to_string(),
+        custom_domains: app.custom_domains_list(),
+        id: app.id,
+        name: app.name.clone(),
+        image: app.image,
+        repo: app.repo,
+        port: app.port,
+    })
+    .into_response()
+}
+
+/// `GET /api/apps/:name/metrics?hours=24` — raw resource samples scoped to
+/// one app (`scope = app.id`), for the app detail page's sparkline charts.
+/// Same shape and `hours` clamp as `/api/metrics/server`.
+#[instrument(skip(state))]
+async fn get_app_metrics(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+
+    let app = match db::app::get_by_name(&pool, &name).await {
+        Ok(Some(app)) => app,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, format!("App '{}' not found", name)).into_response();
+        }
+        Err(e) => return internal(e).into_response(),
+    };
+
+    let hours = params
+        .get("hours")
+        .and_then(|h| h.parse::<i64>().ok())
+        .unwrap_or(24)
+        .clamp(1, 720);
+    let since = (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+
+    match db::metrics::list_samples_since(&pool, &app.id, &since).await {
+        Ok(samples) => Json(samples).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list metrics for app '{}': {e:#}", name);
+            internal(e).into_response()
         }
     }
 }
@@ -1390,6 +1483,22 @@ async fn get_backup_status(State(state): State<Arc<RwLock<AppState>>>) -> impl I
         last_backup_report,
     })
     .into_response()
+}
+
+/// `GET /api/backups/catalog` — every catalogued backup artifact (app,
+/// object key, size, age), for the admin dashboard's backups page. Distinct
+/// from `/api/backups/status` (today's pass/fail summary): this is the full
+/// historical listing, SPA-only since neither the CLI nor MCP expose it yet.
+#[instrument(skip(state))]
+async fn get_backup_catalog(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    match db::backup::list_all(&pool).await {
+        Ok(records) => Json(records).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list backup catalog: {e:#}");
+            internal(e).into_response()
+        }
+    }
 }
 
 /// `POST /api/restore` — run a full disaster-recovery restore from S3 and

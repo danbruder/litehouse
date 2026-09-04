@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../lib/api";
 import { relativeTime, formatBytes } from "../lib/format";
@@ -28,7 +29,7 @@ function BackupsCard() {
       <span className="panel-label">backups</span>
       <p className="flex flex-wrap items-center gap-3">
         <span className="muted">{line}</span>
-        <a href="/backups">view all</a>
+        <Link to="/backups">view all</Link>
         <Button variant="outline" disabled={runBackup.isPending} onClick={() => runBackup.mutate()}>
           {runBackup.isPending ? "running…" : "run now"}
         </Button>
