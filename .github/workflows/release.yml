@@ -110,3 +110,17 @@ jobs:
           tags: |
             ghcr.io/danbruder/litehouse:${{ steps.version.outputs.version }}
             ghcr.io/danbruder/litehouse:latest
+
+  deploy:
+    needs: publish-image
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: SSH and upgrade litehouse on the server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.LITEHOUSE_SERVER_HOST }}
+          username: ${{ secrets.LITEHOUSE_SERVER_USER }}
+          key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
+          script: sudo /usr/local/bin/lh upgrade
