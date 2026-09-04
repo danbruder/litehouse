@@ -111,6 +111,20 @@ DOCKER_API_VERSION=1.42 cargo test test_backup_roundtrip_minio -- --ignored --no
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 ```
 
+### Releasing litehouse itself
+
+`./release.sh <version>` bumps `Cargo.toml`, commits, tags `v<version>`, and pushes. `.github/workflows/release.yml` then builds the `lh` binary, attaches it to a GitHub Release, and pushes `ghcr.io/danbruder/litehouse:<version>`/`:latest` to GHCR. Its final `deploy` job SSHes into the production server and runs `lh upgrade`, which pulls the new image, restarts the `litehouse-server` container, and updates the host `lh` binary — so pushing a tag is enough to ship a new litehouse release end-to-end.
+
+That job needs these repo secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+| --- | --- |
+| `LITEHOUSE_SERVER_HOST` | Server hostname/IP (e.g. `lh.danbruder.com`) |
+| `LITEHOUSE_SERVER_USER` | SSH user (e.g. `root`) |
+| `LITEHOUSE_SERVER_SSH_KEY` | Private key for a keypair authorized on the server, dedicated to CI |
+
+`dev-deploy.sh` remains for local iteration: it builds the binary on your machine and runs `lh upgrade --from-path` over SSH, without waiting on a tagged release.
+
 ### SQLx offline mode
 
 Queries are checked at compile time against `.sqlx/` (checked into the repo). After any migration or query change, regenerate it against a live dev database and commit the result:
