@@ -116,11 +116,6 @@ fn redirect_after_action(next: Option<&str>, error_code: Option<&str>) -> Redire
 }
 
 #[derive(Debug, Deserialize)]
-struct FlashQuery {
-    flash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct AppDetailQuery {
     flash: Option<String>,
     range: Option<String>,
@@ -203,29 +198,6 @@ struct LoginTemplate {
     error: Option<String>,
 }
 
-struct AppRow {
-    name: String,
-    state: String,
-    state_class: String,
-    url: String,
-    deploy_status: Option<String>,
-    last_deploy: String,
-}
-
-#[derive(Template)]
-#[template(path = "apps.html")]
-struct AppsTemplate {
-    apps: Vec<AppRow>,
-    backup_line: String,
-    backup_failures: Vec<(String, String)>,
-    flash: Option<String>,
-    server_cpu_chart: String,
-    server_mem_chart: String,
-    server_mem_total: String,
-    server_disk_chart: String,
-    server_disk_total: String,
-}
-
 struct DeployRow {
     id: String,
     status: String,
@@ -288,7 +260,7 @@ struct BackupsTemplate {
 
 pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
     let protected = Router::new()
-        .route("/", get(apps_index))
+        .route("/", get(spa_shell))
         .route("/apps/:name", get(app_detail))
         .route("/apps/:name/deploys/:deploy_id", get(deploy_detail))
         .route("/apps/:name/start", post(start_app_ui))
@@ -311,6 +283,8 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/login", get(login_page).post(login_submit))
         .route("/assets/htmx.min.js", get(serve_htmx))
         .route("/assets/styles.css", get(serve_styles))
+        .route("/assets/spa.js", get(serve_spa_js))
+        .route("/assets/spa.css", get(serve_spa_css))
         .with_state(state.clone());
 
     Router::new().merge(protected).merge(public)
@@ -327,6 +301,86 @@ async fn serve_styles() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css")],
         include_str!("ui/styles.css"),
+    )
+}
+
+async fn serve_spa_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        include_str!("ui/spa/spa.js"),
+    )
+}
+
+async fn serve_spa_css() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "text/css")], include_str!("ui/spa/spa.css"))
+}
+
+/// `GET /` — the React admin dashboard. Everything else in this module is
+/// server-rendered Askama+HTMX; the dashboard is the one page that's been
+/// migrated to a SPA (see `frontend/`, built once — never on the server —
+/// and its output committed into `src/ui/spa/` like `htmx.min.js` and
+/// `styles.css` above). It talks to the same JSON API the CLI uses
+/// (`src/api.rs`), authenticated with the same `litehouse_token` cookie
+/// this handler is already gated behind, plus a few SPA-only endpoints
+/// (`/api/apps/summary`, `/api/apps/:name/restart`, `/api/metrics/server`).
+///
+/// Links off the dashboard (an app's detail page, backups) still go to the
+/// existing Askama+HTMX pages below — full page navigations, not a client
+/// router — until those are migrated too.
+async fn spa_shell() -> impl IntoResponse {
+    Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>litehouse</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Archivo:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/spa.css">
+  <script>
+    (function () {
+      var t = localStorage.theme ||
+        (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/"><h1>🏠 litehouse</h1><span class="cursor">_</span></a>
+    <div class="header-actions">
+      <button id="theme-toggle" type="button" class="btn-outline btn-small"></button>
+      <form class="inline" method="post" action="/logout">
+        <button type="submit" class="btn-outline btn-small">sign out</button>
+      </form>
+    </div>
+  </header>
+  <main>
+    <div id="root"></div>
+  </main>
+  <script>
+    (function () {
+      var btn = document.getElementById("theme-toggle");
+      if (!btn) return;
+      var sync = function () {
+        btn.textContent = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+      };
+      sync();
+      btn.addEventListener("click", function () {
+        var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+        localStorage.theme = next;
+        sync();
+      });
+    })();
+  </script>
+  <script type="module" src="/assets/spa.js"></script>
+</body>
+</html>"#,
     )
 }
 
@@ -400,31 +454,6 @@ async fn run_backup_ui(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoR
     Redirect::to("/?flash=backup-started")
 }
 
-async fn build_server_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>) -> (String, String, String, String, String) {
-    let since = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
-    let rows = db::metrics::list_samples_since(pool, "server", &since).await.unwrap_or_default();
-    let cpu: Vec<Option<f64>> = rows.iter().map(|r| r.cpu_pct).collect();
-    let mem: Vec<Option<f64>> = rows.iter().map(|r| r.mem_bytes.map(|v| v as f64)).collect();
-    let disk: Vec<Option<f64>> = rows.iter().map(|r| r.disk_bytes.map(|v| v as f64)).collect();
-
-    let mem_total = match crate::metrics::mem_usage().await {
-        Ok((_, total)) => chart::format_bytes(total),
-        Err(_) => "unknown".to_string(),
-    };
-    let disk_total = match crate::metrics::disk_usage().await {
-        Ok((_, total)) => chart::format_bytes(total),
-        Err(_) => "unknown".to_string(),
-    };
-
-    (
-        chart::line_chart(&cpu, chart::ChartUnit::Percent),
-        chart::line_chart(&mem, chart::ChartUnit::Bytes),
-        mem_total,
-        chart::line_chart(&disk, chart::ChartUnit::Bytes),
-        disk_total,
-    )
-}
-
 async fn build_app_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>, scope: &str, range: &str) -> (String, String, String) {
     if range == "30d" {
         let since = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
@@ -455,97 +484,6 @@ async fn build_app_metrics_charts(pool: &sqlx::Pool<sqlx::Sqlite>, scope: &str, 
             chart::line_chart(&disk, chart::ChartUnit::Bytes),
         )
     }
-}
-
-async fn apps_index(
-    State(state): State<Arc<RwLock<AppState>>>,
-    Query(q): Query<FlashQuery>,
-) -> Response {
-    let (pool, config) = {
-        let s = state.read().await;
-        (s.db_pool.clone(), s.server_config.clone())
-    };
-
-    let apps = match db::app::get_all(&pool).await {
-        Ok(apps) => apps,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to list apps: {e}"),
-            )
-                .into_response();
-        }
-    };
-
-    let mut rows = Vec::with_capacity(apps.len());
-    for app in apps {
-        let (deploy_status, last_deploy) = match db::deploy::latest_for_app(&pool, &app.id).await {
-            Ok(Some(d)) => {
-                let short_sha = d
-                    .git_sha
-                    .as_deref()
-                    .map(|s| s.chars().take(7).collect::<String>())
-                    .unwrap_or_else(|| "-".to_string());
-                (
-                    Some(d.status),
-                    format!("{} · {}", short_sha, relative_time(&d.created_at)),
-                )
-            }
-            Ok(None) => (None, "no deploys".to_string()),
-            Err(_) => (None, "unknown".to_string()),
-        };
-
-        // Read-through: reflect the live Docker container state rather than
-        // the (possibly stale) cached DB column. Fall back to the cached
-        // desired state if Docker can't be reached.
-        let live = crate::docker::live_state(&app.name)
-            .await
-            .unwrap_or(app.state);
-        let state_str = live.to_string();
-        let state_class = state_str.clone();
-        rows.push(AppRow {
-            name: app.name.clone(),
-            state: state_str,
-            state_class,
-            url: app_url(&app.name, &config),
-            deploy_status,
-            last_deploy,
-        });
-    }
-
-    let (backup_line, backup_failures) =
-        match db::system_config::get_last_backup_report(&pool).await {
-            Ok(Some(report)) => (
-                format!(
-                    "{} succeeded, {} failed (last run {})",
-                    report.succeeded.len(),
-                    report.failed.len(),
-                    relative_time(&report.ran_at)
-                ),
-                report.failed,
-            ),
-            _ => ("no backup has run yet".to_string(), Vec::new()),
-        };
-
-    let (server_cpu_chart, server_mem_chart, server_mem_total, server_disk_chart, server_disk_total) =
-        build_server_metrics_charts(&pool).await;
-
-    HtmlTemplate(AppsTemplate {
-        apps: rows,
-        backup_line,
-        backup_failures,
-        flash: q
-            .flash
-            .as_deref()
-            .and_then(flash_message)
-            .map(str::to_string),
-        server_cpu_chart,
-        server_mem_chart,
-        server_mem_total,
-        server_disk_chart,
-        server_disk_total,
-    })
-    .into_response()
 }
 
 async fn backups_page(State(state): State<Arc<RwLock<AppState>>>) -> Response {
@@ -1034,13 +972,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_root_with_valid_cookie_renders_apps_table() {
+    async fn get_root_with_valid_cookie_renders_spa_shell() {
+        // `/` no longer renders an apps table server-side — it serves the
+        // React dashboard's shell (see `spa_shell`), which fetches
+        // /api/apps/summary itself. Assert on the mount point and script
+        // tag rather than app data, which this handler no longer touches.
         let state = test_state().await;
-        {
-            let s = state.read().await;
-            let app = App::new("demo-app").unwrap();
-            db::app::save(&s.db_pool, &app).await.unwrap();
-        }
         let app = router(state);
 
         let response = app
@@ -1056,42 +993,19 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("<table"));
-        assert!(body.contains("demo-app"));
+        assert!(body.contains(r#"id="root""#));
+        assert!(body.contains("/assets/spa.js"));
     }
 
-    #[tokio::test]
-    async fn index_backups_card_lists_failed_apps() {
-        let state = test_state().await;
-        {
-            let s = state.read().await;
-            let report = crate::backup::BackupReport {
-                succeeded: vec!["good-app".to_string()],
-                failed: vec![("bad-app".to_string(), "S3 upload timed out".to_string())],
-                ran_at: "2026-07-10T02:00:00Z".to_string(),
-            };
-            db::system_config::set_last_backup_report(&s.db_pool, &report)
-                .await
-                .unwrap();
-        }
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("bad-app"));
-        assert!(body.contains("S3 upload timed out"));
-    }
-
+    // The dashboard's data (backups summary, deploy status badges, server
+    // resource charts, the empty-state hint) used to be asserted on here as
+    // rendered HTML from `apps_index`. That handler is gone — `/` now
+    // serves the React SPA (`spa_shell`) — so those assertions moved with
+    // the data to `frontend/`, a plain fetch of already-tested JSON
+    // (`apps_summary`, `get_backup_status`, `get_server_metrics` in
+    // src/api.rs) rather than server-rendered markup this module can
+    // exercise. `/backup/run` itself (below) still redirects the same way
+    // for anyone hitting it directly.
     #[tokio::test]
     async fn run_backup_now_redirects_with_started_flash() {
         let state = test_state().await;
@@ -1116,57 +1030,6 @@ mod tests {
             response.headers().get(header::LOCATION).unwrap(),
             "/?flash=backup-started"
         );
-    }
-
-    #[tokio::test]
-    async fn index_shows_deploy_status_badge_and_polls_while_in_progress() {
-        let state = test_state().await;
-        {
-            let s = state.read().await;
-            let app = App::new("deploying-app").unwrap();
-            db::app::save(&s.db_pool, &app).await.unwrap();
-            // Deploy::new inserts with status "in_progress".
-            let deploy = crate::models::Deploy::new(&app.id, "ghcr.io/x/deploying-app:sha", Some("abc1234def"));
-            db::deploy::insert(&s.db_pool, &deploy).await.unwrap();
-        }
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("badge-deploy-in_progress"));
-        assert!(body.contains("hx-trigger=\"every 5s\""));
-    }
-
-    #[tokio::test]
-    async fn index_without_apps_shows_create_hint() {
-        let state = test_state().await;
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("lh create"));
-        // No polling attribute when nothing is deploying.
-        assert!(!body.contains("hx-trigger=\"every 5s\""));
     }
 
     #[tokio::test]
@@ -1725,46 +1588,20 @@ mod tests {
         assert!(vars.is_empty());
     }
 
-    #[tokio::test]
-    async fn index_renders_flash_message_for_known_code() {
-        let state = test_state().await;
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/?flash=stop-failed")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("Failed to stop the app"));
-    }
-
-    #[tokio::test]
-    async fn unknown_flash_code_renders_nothing() {
-        let state = test_state().await;
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/?flash=%3Cscript%3Ealert(1)%3C%2Fscript%3E")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(!body.contains("alert(1)"));
-        assert!(!body.contains("class=\"flash\""));
+    // `/` no longer renders `?flash=` (it's the SPA shell — see `spa_shell`
+    // and `get_root_with_valid_cookie_renders_spa_shell`); `flash_message`
+    // itself is still exercised on the pages that do render it
+    // (`/apps/:name`, via `AppDetailQuery`), and its injection-safety
+    // property — an arbitrary `?flash=` code never becomes rendered HTML —
+    // is a property of the pure function, tested directly here rather than
+    // through a page that happens to call it.
+    #[test]
+    fn flash_message_maps_known_codes_and_rejects_unknown_ones() {
+        assert_eq!(
+            flash_message("stop-failed"),
+            Some("Failed to stop the app — check the server logs.")
+        );
+        assert_eq!(flash_message("<script>alert(1)</script>"), None);
     }
 
     #[tokio::test]
@@ -1853,64 +1690,6 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
         assert!(body.contains("No backups recorded yet"));
-    }
-
-    #[tokio::test]
-    async fn index_shows_server_resources_card_with_no_samples() {
-        let state = test_state().await;
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("server resources"));
-        assert!(body.contains("no data yet"));
-    }
-
-    #[tokio::test]
-    async fn index_server_resources_card_renders_chart_from_samples() {
-        let state = test_state().await;
-        {
-            let s = state.read().await;
-            // Timestamps relative to "now" (rather than a fixed date) so this
-            // test stays valid regardless of when the suite actually runs —
-            // `build_server_metrics_charts` only queries the last 24h.
-            let now = chrono::Utc::now();
-            let ts1 = (now - chrono::Duration::minutes(2)).to_rfc3339();
-            let ts2 = (now - chrono::Duration::minutes(1)).to_rfc3339();
-            db::metrics::insert_sample(&s.db_pool, &ts1, "server", Some(12.0), Some(1_000_000), Some(2_000_000))
-                .await
-                .unwrap();
-            db::metrics::insert_sample(&s.db_pool, &ts2, "server", Some(18.0), Some(1_100_000), Some(2_000_000))
-                .await
-                .unwrap();
-        }
-        let app = router(state);
-
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/")
-                    .header(header::COOKIE, format!("litehouse_token={TEST_TOKEN}"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());
-        assert!(body.contains("<polyline"));
-        assert!(body.contains("18.0%"));
     }
 
     #[tokio::test]
