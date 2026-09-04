@@ -36,10 +36,12 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
     let protected_routes = Router::new()
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
+        .route("/apps/summary", get(apps_summary))
         .route("/apps/:name", get(get_app))
         .route("/apps/:name", delete(delete_app))
         .route("/apps/:name/start", post(start_app))
         .route("/apps/:name/stop", post(stop_app))
+        .route("/apps/:name/restart", post(restart_app))
         .route("/apps/:name/logs", get(get_logs))
         .route("/apps/:name/deploy", post(deploy_app))
         .route("/apps/:name/deploys", get(list_deploys))
@@ -61,6 +63,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/backups/run", post(run_backup_now))
         .route("/backups/status", get(get_backup_status))
         .route("/restore", post(run_restore))
+        .route("/metrics/server", get(get_server_metrics))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::admin_auth_middleware,
@@ -101,6 +104,67 @@ async fn list_apps(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoRespo
                 .into_response()
         }
     }
+}
+
+/// `GET /api/apps/summary` — one call for everything the admin dashboard's
+/// site-list view needs: live (not cached) container state, the best-effort
+/// public URL, and the latest deploy's status/sha/time. Dedicated to the SPA
+/// rather than folded into `list_apps`/`AppInfo` so the CLI/MCP JSON contract
+/// those already serve stays untouched.
+#[derive(Debug, Clone, serde::Serialize)]
+struct AppSummary {
+    id: String,
+    name: String,
+    state: String,
+    url: String,
+    last_deploy_status: Option<String>,
+    last_deploy_sha: Option<String>,
+    last_deploy_at: Option<String>,
+}
+
+#[instrument(skip(state))]
+async fn apps_summary(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let (pool, config) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone())
+    };
+
+    let apps = match db::app::get_all(&pool).await {
+        Ok(apps) => apps,
+        Err(e) => return internal(e).into_response(),
+    };
+
+    let mut summaries = Vec::with_capacity(apps.len());
+    for app in apps {
+        let (last_deploy_status, last_deploy_sha, last_deploy_at) =
+            match db::deploy::latest_for_app(&pool, &app.id).await {
+                Ok(Some(d)) => (
+                    Some(d.status),
+                    d.git_sha.as_deref().map(|s| s.chars().take(7).collect()),
+                    Some(d.created_at),
+                ),
+                Ok(None) => (None, None, None),
+                Err(_) => (None, None, None),
+            };
+
+        // Read-through: reflect the live Docker container state rather than
+        // the (possibly stale) cached DB column, same as the HTMX dashboard.
+        let live = crate::docker::live_state(&app.name)
+            .await
+            .unwrap_or(app.state);
+
+        summaries.push(AppSummary {
+            id: app.id,
+            name: app.name.clone(),
+            state: live.to_string(),
+            url: app_url(&app.name, &config),
+            last_deploy_status,
+            last_deploy_sha,
+            last_deploy_at,
+        });
+    }
+
+    Json(summaries).into_response()
 }
 
 #[instrument(skip(state))]
@@ -191,6 +255,46 @@ async fn stop_app(
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to stop app: {}", e),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `POST /api/apps/:name/restart` — stop then start under the same app
+/// lock, mirroring the admin UI's restart button (`ui::restart_app_ui`) but
+/// as a JSON endpoint for the SPA. Not a redeploy: same image, fresh
+/// container.
+#[instrument(skip(state))]
+async fn restart_app(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    let (pool, docker_conn, locks) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.docker.clone(), s.app_locks.clone())
+    };
+    let _guard = crate::commands::server::lock_app(&locks, &name).await;
+
+    if let Err(e) = stop::execute(&pool, &docker_conn, &name).await {
+        tracing::error!("Failed to restart app '{}' (stop step): {}", name, e);
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to restart app: {}", e),
+        )
+            .into_response();
+    }
+    match start::execute(&pool, &docker_conn, &name).await {
+        Ok(_) => (
+            axum::http::StatusCode::OK,
+            format!("App '{}' restarted", name),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!("Failed to restart app '{}' (start step): {}", name, e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to restart app: {}", e),
             )
                 .into_response()
         }
@@ -1302,6 +1406,36 @@ async fn run_restore(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoRes
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Restore failed: {e:#}"),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// `GET /api/metrics/server?hours=24` — raw server resource samples
+/// (`scope = "server"`), oldest first, for the admin dashboard's sparkline
+/// cards. `hours` defaults to 24 and is clamped to [1, 720] (30 days) so a
+/// bad query param can't trigger an unbounded scan.
+#[instrument(skip(state))]
+async fn get_server_metrics(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let hours = params
+        .get("hours")
+        .and_then(|h| h.parse::<i64>().ok())
+        .unwrap_or(24)
+        .clamp(1, 720);
+    let since = (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+
+    match db::metrics::list_samples_since(&pool, "server", &since).await {
+        Ok(samples) => Json(samples).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list server metrics: {e:#}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list server metrics: {e:#}"),
             )
                 .into_response()
         }

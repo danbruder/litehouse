@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* A handful of small additions the existing styles.css doesn't have yet,
+   because nothing server-rendered needed them: a hover-lift for the app
+   cards and the two extra badge tones the dashboard's live state can be in
+   that the HTMX dashboard's `badge-{state}` classes don't cover. Kept tiny
+   and additive — everything else reuses styles.css as-is. */
+.site-card {
+  transition: border-color 150ms ease, background 150ms ease;
+}
+.site-card:hover {
+  border-color: var(--color-ink);
+  background: var(--color-paper-2);
+}
+
+.badge-stopped {
+  color: var(--color-ink-3);
+}
