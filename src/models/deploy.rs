@@ -10,6 +10,11 @@ pub struct Deploy {
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Step-by-step narrative of what the deploy engine did (pulling the
+    /// image, replacing the container, syncing Caddy, ...) -- one
+    /// timestamped line per step, appended to as the deploy progresses. This
+    /// is distinct from the app's own container logs.
+    pub log: String,
 }
 
 impl Deploy {
@@ -25,6 +30,7 @@ impl Deploy {
             error: None,
             created_at: now.clone(),
             updated_at: now,
+            log: String::new(),
         }
     }
 }

@@ -67,20 +67,27 @@ pub async fn deploy_app(
 
     let mut record = Deploy::new(&app.id, image, git_sha);
     db::deploy::insert(pool, &record).await?;
+    db::deploy::append_log(pool, &record.id, &format!("Starting deploy of {image}")).await?;
 
-    let result = do_deploy(pool, docker_conn, &app, image).await;
+    let result = do_deploy(pool, docker_conn, &app, image, &record.id).await;
     match &result {
         Ok(()) => {
+            db::deploy::append_log(pool, &record.id, "Deploy succeeded").await?;
             db::deploy::set_status(pool, &record.id, "succeeded", None).await?;
             record.status = "succeeded".into();
         }
         Err(e) => {
             let message = format!("{e:#}");
+            db::deploy::append_log(pool, &record.id, &format!("Deploy failed: {message}")).await?;
             db::deploy::set_status(pool, &record.id, "failed", Some(&message)).await?;
             record.status = "failed".into();
             record.error = Some(message);
         }
     }
+    record.log = db::deploy::get_by_id(pool, &record.id)
+        .await?
+        .map(|d| d.log)
+        .unwrap_or(record.log);
 
     Ok(record)
 }
@@ -90,11 +97,14 @@ async fn do_deploy(
     docker_conn: &Docker,
     app: &App,
     image: &str,
+    deploy_id: &str,
 ) -> Result<()> {
+    db::deploy::append_log(pool, deploy_id, &format!("Pulling image {image}")).await?;
     let ghcr_token = db::system_config::get_ghcr_token(pool).await?;
     docker::pull(docker_conn, image, ghcr_token.as_deref())
         .await
         .context("failed to pull image")?;
+    db::deploy::append_log(pool, deploy_id, "Image pulled").await?;
 
     let exposed_port = docker::get_exposed_port(image)
         .await
@@ -105,10 +115,12 @@ async fn do_deploy(
     // relying on `docker::run`'s "already running" shortcut) because that
     // shortcut matches on container *name*, not image — it would otherwise
     // silently keep the old image running under a new image tag.
+    db::deploy::append_log(pool, deploy_id, "Stopping existing container").await?;
     docker::stop_and_remove_container(docker_conn, &app.name)
         .await
         .context("failed to remove existing container")?;
 
+    db::deploy::append_log(pool, deploy_id, "Starting new container").await?;
     start_container(pool, docker_conn, app, image)
         .await
         .context("failed to start new container")?;
@@ -119,11 +131,12 @@ async fn do_deploy(
     // serving on the litehouse network either way, and an operator can
     // re-sync Caddy independently. Failing the deploy here would make a
     // perfectly good container replacement look like a broken deploy.
+    db::deploy::append_log(pool, deploy_id, "Syncing Caddy configuration").await?;
     if let Err(e) = caddy::sync_configuration(docker_conn, pool).await {
-        tracing::warn!(
-            "Caddy sync failed after deploying '{}' (container is up, routing may be stale): {e:#}",
-            app.name
-        );
+        let message =
+            format!("Caddy sync failed (container is up, routing may be stale): {e:#}");
+        db::deploy::append_log(pool, deploy_id, &message).await?;
+        tracing::warn!("{} (app '{}')", message, app.name);
     }
 
     Ok(())

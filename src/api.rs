@@ -534,6 +534,7 @@ struct DeployListItem {
     error: Option<String>,
     created_at: String,
     updated_at: String,
+    log: String,
 }
 
 impl From<crate::models::Deploy> for DeployListItem {
@@ -546,6 +547,7 @@ impl From<crate::models::Deploy> for DeployListItem {
             error: d.error,
             created_at: d.created_at,
             updated_at: d.updated_at,
+            log: d.log,
         }
     }
 }

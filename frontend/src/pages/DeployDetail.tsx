@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { DeployBadge } from "../components/StatusBadge";
@@ -25,6 +26,12 @@ export function DeployDetail() {
 
   const deploy = deploys?.find((d) => d.id === deployId);
   const isLatest = !!deploys && deploys.length > 0 && deploys[0].id === deployId;
+
+  const logRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [deploy?.log]);
 
   return (
     <>
@@ -65,16 +72,24 @@ export function DeployDetail() {
             )}
           </div>
 
-          {isLatest ? (
+          <h3>Deploy log</h3>
+          <div className="terminal">
+            <div className="terminal-bar">
+              <span className="terminal-dot" />
+              deploy {deploy.id.slice(0, 8)}
+              {deploy.status === "in_progress" ? " — in progress" : ""}
+            </div>
+            <pre className="log" ref={logRef}>
+              {deploy.log || "(no log recorded for this deploy)"}
+            </pre>
+          </div>
+
+          {isLatest && (
             <>
-              <h3>Logs</h3>
+              <h3>App logs</h3>
+              <p className="hint">Live output from the app's running container, not specific to this deploy.</p>
               <LogTerminal appName={name} />
             </>
-          ) : (
-            <p className="hint">
-              This app has deployed again since this one, so its container is gone and its logs aren't available
-              anymore — only the current deploy's logs can be tailed.
-            </p>
           )}
         </>
       )}

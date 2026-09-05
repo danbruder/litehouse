@@ -59,6 +59,10 @@ export interface Deploy {
   error: string | null;
   created_at: string;
   updated_at: string;
+  // Step-by-step narrative of what the deploy engine did (pulling the image,
+  // replacing the container, syncing Caddy, ...) — distinct from the app's
+  // own container logs.
+  log: string;
 }
 
 // Values are never rendered once saved (see AppDetail's env card) even
