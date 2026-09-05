@@ -7,8 +7,8 @@ pub async fn insert(pool: &Pool<Sqlite>, deploy: &Deploy) -> Result<()> {
     sqlx::query!(
         r#"
             INSERT INTO deploy (
-                id, app_id, image, git_sha, status, error, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, app_id, image, git_sha, status, error, created_at, updated_at, log
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         deploy.id,
         deploy.app_id,
@@ -18,6 +18,7 @@ pub async fn insert(pool: &Pool<Sqlite>, deploy: &Deploy) -> Result<()> {
         deploy.error,
         deploy.created_at,
         deploy.updated_at,
+        deploy.log,
     )
     .execute(pool)
     .await?;
@@ -44,6 +45,30 @@ pub async fn set_status(
             "#,
         status,
         error,
+        updated_at,
+        id,
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Append one timestamped line to a deploy's log. Used to narrate the deploy
+/// engine's progress (pulling the image, replacing the container, syncing
+/// Caddy, ...) as it happens, so an in-progress deploy's log grows visibly
+/// across polls rather than only appearing once the deploy finishes.
+#[instrument(skip(pool))]
+pub async fn append_log(pool: &Pool<Sqlite>, id: &str, line: &str) -> Result<()> {
+    let stamped = format!("[{}] {line}\n", chrono::Utc::now().to_rfc3339());
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query!(
+        r#"
+            UPDATE deploy
+            SET log = log || ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        stamped,
         updated_at,
         id,
     )
@@ -140,6 +165,7 @@ mod tests {
             error: None,
             created_at: now.clone(),
             updated_at: now,
+            log: String::new(),
         }
     }
 
@@ -181,6 +207,25 @@ mod tests {
         let latest = latest_for_app(&pool, &app.id).await.unwrap().unwrap();
         assert_eq!(latest.status, "failed");
         assert_eq!(latest.error, Some("boom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_append_log() {
+        let pool = get_test_pool().await;
+        let app = seed_app(&pool, "deployapp5").await;
+
+        let deploy = new_deploy(&app.id, "deployapp5:1");
+        insert(&pool, &deploy).await.unwrap();
+        assert_eq!(deploy.log, "");
+
+        append_log(&pool, &deploy.id, "Pulling image").await.unwrap();
+        append_log(&pool, &deploy.id, "Image pulled").await.unwrap();
+
+        let found = get_by_id(&pool, &deploy.id).await.unwrap().unwrap();
+        assert!(found.log.contains("Pulling image"));
+        assert!(found.log.contains("Image pulled"));
+        // Appended in order.
+        assert!(found.log.find("Pulling image").unwrap() < found.log.find("Image pulled").unwrap());
     }
 
     #[tokio::test]

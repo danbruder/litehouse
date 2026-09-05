@@ -42,6 +42,11 @@
         "name": "updated_at",
         "ordinal": 7,
         "type_info": "Text"
+      },
+      {
+        "name": "log",
+        "ordinal": 8,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -54,6 +59,7 @@
       true,
       false,
       true,
+      false,
       false,
       false
     ]
