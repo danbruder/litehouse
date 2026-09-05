@@ -128,6 +128,12 @@ header {
   color: inherit;
 }
 
+.brand-icon {
+  width: 0.85em;
+  height: 0.85em;
+  vertical-align: -0.05em;
+}
+
 .brand h1 {
   font-size: 1.05rem;
   margin: 0;
@@ -215,6 +221,18 @@ main > p:first-child a {
   text-transform: uppercase;
   letter-spacing: 0.14em;
   color: var(--color-ink-3);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.panel-header .panel-label {
+  margin-bottom: 0;
 }
 
 .card p {
