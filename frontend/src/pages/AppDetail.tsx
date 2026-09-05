@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Play, Square, RotateCw, UploadCloud } from "lucide-react";
+import { Play, Square, RotateCw, UploadCloud, Pencil } from "lucide-react";
 import { api } from "../lib/api";
 import { relativeTime, formatBytes } from "../lib/format";
 import { StatusBadge, DeployBadge } from "../components/StatusBadge";
@@ -80,6 +80,10 @@ export function AppDetail() {
     onError: (err: Error) => toast.error("Redeploy failed", { description: err.message }),
   });
 
+  // The environment card opens read-only (just the saved keys, no controls)
+  // — editing is an explicit step so the page at rest never shows a delete
+  // button or an open form.
+  const [editingEnv, setEditingEnv] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const setEnv = useMutation({
@@ -180,7 +184,12 @@ export function AppDetail() {
             </div>
 
             <div className="card">
-              <span className="panel-label">environment</span>
+              <div className="panel-header">
+                <span className="panel-label">environment</span>
+                <Button variant="ghost" size="sm" onClick={() => setEditingEnv((v) => !v)}>
+                  <Pencil size={12} /> {editingEnv ? "done" : "edit"}
+                </Button>
+              </div>
               {!envVars || envVars.length === 0 ? (
                 <p className="muted">no environment variables set</p>
               ) : (
@@ -188,50 +197,56 @@ export function AppDetail() {
                   {envVars.map((e) => (
                     <li key={e.key}>
                       <span className="tag">{e.key}</span>
-                      <button
-                        type="button"
-                        title={`delete ${e.key}`}
-                        disabled={deleteEnv.isPending}
-                        onClick={() => deleteEnv.mutate(e.key)}
-                      >
-                        &times;
-                      </button>
+                      {editingEnv && (
+                        <button
+                          type="button"
+                          title={`delete ${e.key}`}
+                          disabled={deleteEnv.isPending}
+                          onClick={() => deleteEnv.mutate(e.key)}
+                        >
+                          &times;
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
               )}
-              <form
-                className="env-form"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (newKey.trim()) setEnv.mutate();
-                }}
-              >
-                <input
-                  type="text"
-                  name="key"
-                  placeholder="KEY"
-                  required
-                  autoComplete="off"
-                  value={newKey}
-                  onChange={(e) => setNewKey(e.target.value)}
-                />
-                <input
-                  type="password"
-                  name="value"
-                  placeholder="value"
-                  required
-                  autoComplete="off"
-                  value={newValue}
-                  onChange={(e) => setNewValue(e.target.value)}
-                />
-                <button type="submit" disabled={setEnv.isPending}>
-                  set
-                </button>
-              </form>
-              <p className="hint">
-                values are never shown once saved — changes apply on next start, restart, or redeploy
-              </p>
+              {editingEnv && (
+                <>
+                  <form
+                    className="env-form"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (newKey.trim()) setEnv.mutate();
+                    }}
+                  >
+                    <input
+                      type="text"
+                      name="key"
+                      placeholder="KEY"
+                      required
+                      autoComplete="off"
+                      value={newKey}
+                      onChange={(e) => setNewKey(e.target.value)}
+                    />
+                    <input
+                      type="password"
+                      name="value"
+                      placeholder="value"
+                      required
+                      autoComplete="off"
+                      value={newValue}
+                      onChange={(e) => setNewValue(e.target.value)}
+                    />
+                    <button type="submit" disabled={setEnv.isPending}>
+                      set
+                    </button>
+                  </form>
+                  <p className="hint">
+                    values are never shown once saved — changes apply on next start, restart, or redeploy
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
