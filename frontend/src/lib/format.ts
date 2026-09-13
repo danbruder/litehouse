@@ -12,6 +12,16 @@ export function relativeTime(rfc3339: string | null | undefined): string {
   return `${Math.floor(secs / 86_400)}d ago`;
 }
 
+/** Full local timestamp, for the `title` tooltip next to a relative time —
+ *  "3d ago" is the right density on screen, but an operator correlating an
+ *  incident needs the exact wall-clock moment without leaving the page. */
+export function absoluteTime(rfc3339: string | null | undefined): string | undefined {
+  if (!rfc3339) return undefined;
+  const ts = Date.parse(rfc3339);
+  if (Number.isNaN(ts)) return undefined;
+  return new Date(ts).toLocaleString();
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return "unknown";
   const units = ["B", "KB", "MB", "GB", "TB"];

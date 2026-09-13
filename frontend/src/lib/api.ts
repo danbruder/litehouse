@@ -79,6 +79,43 @@ export interface DeployResult {
   error?: string;
 }
 
+// `GET /api/server/info` — SPA-only; what the settings page shows about
+// the server itself. Nothing secret: the S3/GHCR endpoints stay redacted.
+export interface ServerInfo {
+  version: string;
+  domain: string | null;
+  admin_host: string | null;
+  docker_version: string | null;
+  apps_total: number;
+  apps_running: number;
+  local_dev: boolean;
+}
+
+// `GET /api/config/s3` — already redacted server-side (`S3ConfigRedacted`):
+// the secret access key never crosses the API.
+export interface S3ConfigRedacted {
+  access_key_id: string;
+  bucket: string;
+  region: string;
+  endpoint: string | null;
+  path_prefix: string | null;
+}
+
+export interface S3ConfigInput {
+  access_key_id: string;
+  secret_access_key: string;
+  bucket: string;
+  region: string;
+  endpoint?: string | null;
+  path_prefix?: string | null;
+}
+
+// `token` is redacted to its type prefix (e.g. "github_pat_****").
+export interface GhcrConfig {
+  configured: boolean;
+  token: string | null;
+}
+
 export interface BackupCatalogEntry {
   id: string;
   app_name: string;
@@ -162,6 +199,43 @@ export const api = {
   backupStatus: () => request<BackupStatus>("/backups/status"),
   runBackup: () => request<BackupReport>("/backups/run", { method: "POST" }),
   serverMetrics: (hours = 24) => request<MetricSample[]>(`/metrics/server?hours=${hours}`),
+  domains: (name: string) => request<string[]>(`/apps/${encodeURIComponent(name)}/domains`),
+  addDomain: (name: string, domain: string) =>
+    request<string>(`/apps/${encodeURIComponent(name)}/domains`, {
+      method: "POST",
+      body: JSON.stringify({ domain }),
+    }),
+  removeDomain: (name: string, domain: string) =>
+    request<string>(`/apps/${encodeURIComponent(name)}/domains`, {
+      method: "DELETE",
+      body: JSON.stringify({ domain }),
+    }),
+  // Returns the configured path, or null when the app has none — Caddy
+  // then health-checks nothing and routes to the container unconditionally.
+  healthCheck: (name: string) => request<string | null>(`/apps/${encodeURIComponent(name)}/health-check`),
+  setHealthCheck: (name: string, path: string) =>
+    request<string>(`/apps/${encodeURIComponent(name)}/health-check`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
+  unsetHealthCheck: (name: string) =>
+    request<string>(`/apps/${encodeURIComponent(name)}/health-check`, { method: "DELETE" }),
+  deleteApp: (name: string) => request<string>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  serverInfo: () => request<ServerInfo>("/server/info"),
+  // 404 here means "not configured yet", which is a normal state for a
+  // fresh install rather than an error worth surfacing as one.
+  s3Config: () =>
+    request<S3ConfigRedacted>("/config/s3").catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 404) return null;
+      throw err;
+    }),
+  setS3Config: (config: S3ConfigInput) =>
+    request<string>("/config/s3", { method: "POST", body: JSON.stringify(config) }),
+  deleteS3Config: () => request<string>("/config/s3", { method: "DELETE" }),
+  ghcrConfig: () => request<GhcrConfig>("/config/ghcr"),
+  setGhcrConfig: (token: string) =>
+    request<string>("/config/ghcr", { method: "POST", body: JSON.stringify({ token }) }),
+  deleteGhcrConfig: () => request<string>("/config/ghcr", { method: "DELETE" }),
   startApp: (name: string) => request<string>(`/apps/${encodeURIComponent(name)}/start`, { method: "POST" }),
   stopApp: (name: string) => request<string>(`/apps/${encodeURIComponent(name)}/stop`, { method: "POST" }),
   restartApp: (name: string) =>

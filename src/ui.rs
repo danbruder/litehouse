@@ -1,7 +1,7 @@
 //! Server-rendered admin UI, mounted at the root of the server's router.
 //! Only login is still classic Askama+HTML — the admin dashboard itself
 //! (`/`) and the rest of the admin pages (`/apps/:name`, deploy detail,
-//! `/backups`) are a React SPA (see `frontend/`), built once — never on the
+//! `/backups`, `/settings`) are a React SPA (see `frontend/`), built once — never on the
 //! server — and its output embedded here with `include_str!`, the same way
 //! `htmx.min.js` and `styles.css` already are. Every one of those routes
 //! serves the exact same HTML shell (`spa_shell`); react-router owns which
@@ -123,6 +123,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name", get(spa_shell))
         .route("/apps/:name/deploys/:deploy_id", get(spa_shell))
         .route("/backups", get(spa_shell))
+        .route("/settings", get(spa_shell))
         .route("/logout", post(logout))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -166,7 +167,8 @@ async fn serve_spa_css() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css")], include_str!("ui/spa/spa.css"))
 }
 
-/// `GET /`, `/apps/:name`, `/apps/:name/deploys/:deploy_id`, `/backups` —
+/// `GET /`, `/apps/:name`, `/apps/:name/deploys/:deploy_id`, `/backups`,
+/// `/settings` —
 /// the React admin SPA's shell (see `frontend/`, built once — never on the
 /// server — and its output committed into `src/ui/spa/` like `htmx.min.js`
 /// and `styles.css` above). Every one of these routes returns the exact
@@ -177,7 +179,7 @@ async fn serve_spa_css() -> impl IntoResponse {
 /// handful of SPA-only endpoints (`/api/apps/summary`,
 /// `/api/apps/:name/summary`, `/api/apps/:name/metrics`,
 /// `/api/apps/:name/restart`, `/api/backups/catalog`,
-/// `/api/metrics/server`).
+/// `/api/metrics/server`, `/api/server/info`).
 async fn spa_shell() -> impl IntoResponse {
     Html(
         r##"<!doctype html>
@@ -351,7 +353,13 @@ mod tests {
         let state = test_state().await;
         let app = router(state);
 
-        for uri in ["/", "/apps/whatever", "/apps/whatever/deploys/abc", "/backups"] {
+        for uri in [
+            "/",
+            "/apps/whatever",
+            "/apps/whatever/deploys/abc",
+            "/backups",
+            "/settings",
+        ] {
             let response = get(app.clone(), uri, None).await;
             assert_eq!(response.status(), StatusCode::SEE_OTHER, "uri: {uri}");
             assert_eq!(
@@ -368,7 +376,13 @@ mod tests {
         let app = router(state);
         let cookie = format!("litehouse_token={TEST_TOKEN}");
 
-        for uri in ["/", "/apps/whatever", "/apps/whatever/deploys/abc", "/backups"] {
+        for uri in [
+            "/",
+            "/apps/whatever",
+            "/apps/whatever/deploys/abc",
+            "/backups",
+            "/settings",
+        ] {
             let response = get(app.clone(), uri, Some(&cookie)).await;
             assert_eq!(response.status(), StatusCode::OK, "uri: {uri}");
             let body = body_string(hyper::body::to_bytes(response.into_body()).await.unwrap());

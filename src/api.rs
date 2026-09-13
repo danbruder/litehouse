@@ -56,6 +56,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/health-check", post(set_health_check))
         .route("/apps/:name/health-check", delete(unset_health_check))
         .route("/docker/version", get(get_docker_version))
+        .route("/server/info", get(get_server_info))
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
@@ -1240,9 +1241,70 @@ async fn unset_health_check(
     }
 }
 
-async fn get_docker_version() -> impl IntoResponse {
-    // TODO: Implement proper Docker version check
-    "docker"
+async fn get_docker_version(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let docker = state.read().await.docker.clone();
+    match docker.version().await {
+        Ok(v) => v.version.unwrap_or_else(|| "unknown".to_string()),
+        Err(e) => {
+            tracing::warn!("Failed to read Docker version: {e}");
+            "unknown".to_string()
+        }
+    }
+}
+
+/// `GET /api/server/info` — SPA-only. What the admin UI's settings page
+/// shows about the server it is talking to: which litehouse build is
+/// running, the wildcard domain apps are published under, the Docker
+/// version underneath, and a one-line app census. Cheap enough to poll;
+/// nothing here is secret (the S3/GHCR endpoints stay redacted).
+#[derive(Debug, serde::Serialize)]
+struct ServerInfoResponse {
+    version: String,
+    /// Wildcard domain apps are published under (`None` until `lh install
+    /// --domain ...` has run), e.g. "lh.danbruder.com".
+    domain: Option<String>,
+    /// Host the admin UI itself is served from, when a domain is configured.
+    admin_host: Option<String>,
+    docker_version: Option<String>,
+    apps_total: usize,
+    apps_running: usize,
+    local_dev: bool,
+}
+
+#[instrument(skip(state))]
+async fn get_server_info(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let (pool, config, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone(), s.docker.clone())
+    };
+
+    let apps = db::app::get_all(&pool).await.unwrap_or_default();
+    let apps_total = apps.len();
+    let mut apps_running = 0;
+    for app in &apps {
+        let live = crate::docker::live_state(&app.name)
+            .await
+            .unwrap_or(app.state);
+        if matches!(live, crate::models::AppState::Running) {
+            apps_running += 1;
+        }
+    }
+
+    let docker_version = docker.version().await.ok().and_then(|v| v.version);
+
+    Json(ServerInfoResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        admin_host: config
+            .domain
+            .as_ref()
+            .map(|d| format!("{}.{}", config.admin_label(), d)),
+        domain: config.domain.clone(),
+        docker_version,
+        apps_total,
+        apps_running,
+        local_dev: std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions),
+    })
+    .into_response()
 }
 
 #[derive(Debug, serde::Deserialize)]
