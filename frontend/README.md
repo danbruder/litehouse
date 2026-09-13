@@ -1,8 +1,8 @@
 # litehouse admin dashboard (React)
 
 The whole admin UI — the dashboard at `/`, an app's detail page
-(`/apps/:name`), its deploy detail (`/apps/:name/deploys/:id`), and
-`/backups` — is a React SPA that talks to litehouse's existing JSON API
+(`/apps/:name`), its deploy detail (`/apps/:name/deploys/:id`),
+`/backups`, and `/settings` — is a React SPA that talks to litehouse's existing JSON API
 (`src/api.rs` — the same one the `lh` CLI and MCP server use), routed
 client-side with `react-router-dom`. Only `/login` is still server-rendered
 Askama HTML (see `src/ui.rs`). Every one of the SPA routes above is served
@@ -104,6 +104,17 @@ contract can evolve independently:
   `/api/backups/status`'s today-only pass/fail summary.
 - `GET /api/metrics/server?hours=24` — raw CPU/mem/disk samples for the
   dashboard's server resource sparklines.
+- `GET /api/server/info` — litehouse version, configured wildcard domain,
+  admin host, Docker version and a running/total app census, for
+  `/settings`'s server card. Nothing secret; the S3/GHCR endpoints below
+  stay redacted.
+
+The `/settings` page and the app detail page's domain, health-check and
+delete controls reuse the CLI-facing endpoints as-is: `GET`/`POST`/`DELETE
+/api/config/s3` and `/api/config/ghcr` (both already redact their secrets
+server-side — the S3 secret key and the GHCR token are never returned),
+`/api/apps/:name/domains`, `/api/apps/:name/health-check`, and `DELETE
+/api/apps/:name`.
 
 Everything else on the app detail and deploy detail pages — start/stop,
 redeploy (`POST /api/apps/:name/deploy`), the deploy list

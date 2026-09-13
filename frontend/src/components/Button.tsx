@@ -13,7 +13,11 @@ const buttonVariants = cva(
     variants: {
       variant: {
         outline: "btn-outline border-ink text-[0.65rem] px-3 py-1.5",
-        ghost: "border-transparent text-ink-2 hover:text-ink text-[0.65rem] px-2 py-1",
+        // styles.css gives every bare <button> a solid ink fill, so a ghost
+        // button has to opt out of it explicitly or it renders as a second
+        // solid block next to the outline ones.
+        ghost:
+          "border-transparent bg-transparent text-ink-2 hover:bg-transparent hover:text-ink text-[0.65rem] px-2 py-1",
         solid: "bg-lime border-lime text-on-lime hover:opacity-90 text-[0.65rem] px-3 py-1.5",
       },
       size: {

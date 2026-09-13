@@ -1,10 +1,14 @@
 import { useEffect, useRef } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Copy } from "lucide-react";
 import { DeployBadge } from "../components/StatusBadge";
 import { LogTerminal } from "../components/LogTerminal";
+import { Button } from "../components/Button";
+import { ErrorNote } from "../components/ErrorNote";
 import { api } from "../lib/api";
-import { relativeTime } from "../lib/format";
+import { relativeTime, absoluteTime } from "../lib/format";
 
 // There's no `GET /api/apps/:name/deploys/:id` endpoint — the app's deploy
 // list already carries everything this page needs (and, at position 0,
@@ -13,7 +17,7 @@ import { relativeTime } from "../lib/format";
 export function DeployDetail() {
   const { name = "", deployId = "" } = useParams<{ name: string; deployId: string }>();
 
-  const { data: deploys, isLoading } = useQuery({
+  const { data: deploys, isLoading, error, refetch } = useQuery({
     queryKey: ["app-deploys", name, "all"],
     queryFn: () => api.deploys(name, 50),
     enabled: !!name,
@@ -39,7 +43,9 @@ export function DeployDetail() {
         <Link to={`/apps/${encodeURIComponent(name)}`}>&larr; {name}</Link>
       </p>
 
-      {isLoading ? (
+      {error ? (
+        <ErrorNote error={error} what="this deploy" onRetry={() => refetch()} />
+      ) : isLoading ? (
         <p className="muted">loading…</p>
       ) : !deploy ? (
         <p className="muted">deploy not found</p>
@@ -59,8 +65,19 @@ export function DeployDetail() {
                 <strong>Commit:</strong> <code>{deploy.git_sha}</code>
               </p>
             )}
-            <p>
+            <p title={absoluteTime(deploy.created_at)}>
               <strong>Started:</strong> {relativeTime(deploy.created_at)}
+              {deploy.status !== "in_progress" && deploy.updated_at && (
+                <span className="muted">
+                  {" "}
+                  · took{" "}
+                  {Math.max(
+                    0,
+                    Math.round((Date.parse(deploy.updated_at) - Date.parse(deploy.created_at)) / 1000),
+                  )}
+                  s
+                </span>
+              )}
             </p>
             {deploy.error && (
               <>
@@ -72,7 +89,22 @@ export function DeployDetail() {
             )}
           </div>
 
-          <h3>Deploy log</h3>
+          <div className="flex items-center justify-between gap-3">
+            <h3>Deploy log</h3>
+            <Button
+              variant="ghost"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(deploy.log || "");
+                  toast.success("Deploy log copied");
+                } catch {
+                  toast.error("Couldn't copy to clipboard");
+                }
+              }}
+            >
+              <Copy size={12} /> copy
+            </Button>
+          </div>
           <div className="terminal">
             <div className="terminal-bar">
               <span className="terminal-dot" />

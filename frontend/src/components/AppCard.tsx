@@ -4,8 +4,9 @@ import { toast } from "sonner";
 import { Play, Square, RotateCw, ExternalLink } from "lucide-react";
 import type { AppSummary } from "../lib/api";
 import { api } from "../lib/api";
-import { relativeTime } from "../lib/format";
+import { relativeTime, absoluteTime } from "../lib/format";
 import { Button } from "./Button";
+import { ConfirmButton } from "./ConfirmButton";
 import { StatusBadge, DeployBadge } from "./StatusBadge";
 
 function useAppAction(action: "start" | "stop" | "restart") {
@@ -62,16 +63,24 @@ export function AppCard({ app }: { app: AppSummary }) {
             <span className="font-mono text-ink-3">{app.last_deploy_sha}</span>
           )}
           {app.last_deploy_at && (
-            <span className="text-ink-3">· {relativeTime(app.last_deploy_at)}</span>
+            <span className="text-ink-3" title={absoluteTime(app.last_deploy_at)}>
+              · {relativeTime(app.last_deploy_at)}
+            </span>
           )}
         </div>
       </div>
 
       <div className="mt-4 flex gap-2 border-t border-rule pt-3">
         {isRunning ? (
-          <Button variant="outline" disabled={busy} onClick={() => stop.mutate(app.name)}>
+          // Stopping takes the site offline — one deliberate extra click.
+          <ConfirmButton
+            variant="outline"
+            confirmLabel={`stop ${app.name}`}
+            disabled={busy}
+            onConfirm={() => stop.mutate(app.name)}
+          >
             <Square size={12} /> Stop
-          </Button>
+          </ConfirmButton>
         ) : (
           <Button variant="outline" disabled={busy} onClick={() => start.mutate(app.name)}>
             <Play size={12} /> Start
