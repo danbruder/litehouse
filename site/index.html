@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>litehouse — git push deploys for SQLite apps</title>
+<meta name="description" content="A self-hosted deploy platform for SQLite apps. One server you own, git push to deploy, nightly S3 backups, one-command restore.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23161412'/%3E%3Cpath d='M13 11h6l1.5 15h-9z' fill='%23f2a93b'/%3E%3Crect x='12' y='7' width='8' height='4' rx='1' fill='%23f2a93b'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #faf8f5;
+  --bg-2: #f1ede6;
+  --fg: #1b1916;
+  --fg-2: #5d574e;
+  --fg-3: #8a8378;
+  --line: #e2dcd2;
+  --accent: #b86a00;
+  --accent-bg: #fbeed8;
+  --term-bg: #1b1916;
+  --term-fg: #ece6db;
+  --term-dim: #8f877a;
+  --term-accent: #f2a93b;
+  --term-ok: #9ccf7c;
+  --no: #a2412c;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121110;
+    --bg-2: #1a1917;
+    --fg: #ece6db;
+    --fg-2: #aaa296;
+    --fg-3: #7a7368;
+    --line: #2b2926;
+    --accent: #f2a93b;
+    --accent-bg: #2a2114;
+    --term-bg: #0b0a09;
+    --no: #e08a73;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-underline-offset: 3px; text-decoration-color: var(--fg-3); }
+a:hover { text-decoration-color: var(--accent); }
+code, pre, kbd { font-family: var(--mono); font-size: 0.9em; }
+:not(pre) > code {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+  overflow-wrap: anywhere;
+}
+
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+
+/* nav */
+nav { border-bottom: 1px solid var(--line); }
+nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+.logo { display: flex; align-items: center; gap: 10px; font: 600 17px var(--mono); text-decoration: none; letter-spacing: -0.02em; }
+.logo svg { width: 22px; height: 22px; }
+nav ul { list-style: none; display: flex; gap: 24px; margin: 0; padding: 0; font-size: 14px; color: var(--fg-2); }
+nav ul a { text-decoration: none; }
+nav ul a:hover { color: var(--fg); }
+@media (max-width: 640px) { nav ul li:not(:last-child) { display: none; } }
+
+/* sections */
+section { padding: 88px 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: 0; }
+.eyebrow { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin: 0 0 14px; }
+h1, h2, h3 { letter-spacing: -0.025em; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(36px, 6vw, 60px); font-weight: 700; max-width: 14ch; }
+h1 code, h2 code { font-size: 0.86em; background: none; border: 0; padding: 0; color: var(--accent); white-space: nowrap; }
+h2 { font-size: clamp(26px, 3.6vw, 36px); font-weight: 650; max-width: 22ch; }
+h3 { font-size: 17px; font-weight: 600; }
+.lede { font-size: 19px; color: var(--fg-2); max-width: 60ch; margin: 22px 0 0; }
+.sub { color: var(--fg-2); max-width: 62ch; margin: 16px 0 0; }
+
+/* hero */
+.hero { padding: 80px 0 88px; }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 48px; }
+.hero-grid > *, .split > *, .steps li > * { min-width: 0; }
+@media (min-width: 920px) { .hero-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; } }
+.cta { margin-top: 32px; }
+.cta-label { font-size: 13px; color: var(--fg-3); margin: 0 0 8px; }
+.links { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 18px; font-size: 15px; }
+.links a { font-weight: 500; }
+
+/* copyable command */
+.cmd {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border-radius: 8px;
+  padding: 14px 76px 14px 16px;
+  font: 13.5px/1.55 var(--mono);
+  overflow-x: auto;
+}
+.cmd::before { content: "$"; color: var(--term-dim); user-select: none; }
+.cmd code { white-space: pre; font-size: inherit; background: none; border: 0; padding: 0; color: inherit; overflow-wrap: normal; }
+.cmd code[data-copy] { white-space: pre-wrap; overflow-wrap: anywhere; }
+.copy {
+  position: absolute; top: 8px; right: 8px;
+  font: 500 12px var(--sans);
+  color: var(--term-dim);
+  background: transparent;
+  border: 1px solid #3a3631;
+  border-radius: 5px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.copy:hover { color: var(--term-fg); border-color: #57514a; }
+.no-js .copy { display: none; }
+
+/* terminal */
+.term {
+  background: var(--term-bg);
+  color: var(--term-fg);
+  border-radius: 10px;
+  font: 13.5px/1.7 var(--mono);
+  overflow: hidden;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04), 0 12px 40px -12px rgba(0,0,0,.25);
+}
+.term-bar { display: flex; gap: 6px; padding: 12px 14px; border-bottom: 1px solid #26231f; }
+.term-bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a3631; }
+.term pre { margin: 0; padding: 16px 18px 20px; overflow-x: auto; }
+.p { color: var(--term-dim); user-select: none; }
+.c { color: var(--term-dim); }
+.a { color: var(--term-accent); }
+.ok { color: var(--term-ok); }
+
+/* steps */
+.steps { list-style: none; padding: 0; margin: 48px 0 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.steps li { background: var(--bg); display: grid; grid-template-columns: 56px 1fr; gap: 0 4px; padding: 22px 22px 22px 0; }
+@media (min-width: 760px) { .steps li { grid-template-columns: 64px minmax(0, 1.05fr) minmax(0, 1fr); align-items: start; gap: 0 28px; } }
+.steps .n { font: 500 13px var(--mono); color: var(--fg-3); text-align: right; padding-top: 12px; }
+.steps .cmd { margin: 0; }
+.steps p { margin: 10px 0 0; color: var(--fg-2); font-size: 15px; grid-column: 2; }
+@media (min-width: 760px) { .steps p { margin: 8px 0 0; grid-column: 3; } }
+.note { margin: 20px 0 0; font-size: 14px; color: var(--fg-3); }
+
+/* features */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-top: 48px; }
+.grid > div { padding: 26px 24px 28px; box-shadow: 1px 1px 0 0 var(--line); }
+.grid p { margin: 8px 0 0; color: var(--fg-2); font-size: 15px; }
+
+/* two-col */
+.split { display: grid; gap: 48px; margin-top: 48px; }
+@media (min-width: 900px) { .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; }
+.checks li { padding-left: 28px; position: relative; color: var(--fg-2); }
+.checks li strong { color: var(--fg); font-weight: 600; }
+.checks li::before { content: "→"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
+
+/* cost */
+.cost { margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; max-width: 720px; }
+.cost div { display: grid; grid-template-columns: 1fr auto; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+.cost div:last-child { border-bottom: 0; background: var(--bg-2); font-weight: 600; }
+.cost span:first-child { color: var(--fg-2); }
+.cost div:last-child span:first-child { color: var(--fg); }
+.cost span:last-child { font-family: var(--mono); font-size: 14px; text-align: right; }
+
+/* not for */
+.nope { list-style: none; margin: 40px 0 0; padding: 0; display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+@media (min-width: 760px) { .nope { grid-template-columns: 1fr 1fr; } }
+.nope li { background: var(--bg); padding: 20px 22px 22px 52px; position: relative; }
+.nope li::before { content: "×"; position: absolute; left: 22px; top: 17px; font: 600 18px var(--mono); color: var(--no); }
+.nope strong { display: block; font-weight: 600; }
+.nope span { display: block; color: var(--fg-2); font-size: 15px; margin-top: 4px; }
+
+/* architecture */
+.arch { margin-top: 48px; overflow-x: auto; }
+.arch svg { display: block; width: 100%; min-width: 640px; height: auto; }
+.arch .box { fill: var(--bg); stroke: var(--line); stroke-width: 1.5; }
+.arch .box-hi { fill: var(--accent-bg); stroke: var(--accent); stroke-width: 1.5; }
+.arch .zone { fill: none; stroke: var(--fg-3); stroke-dasharray: 4 4; stroke-width: 1; }
+.arch text { fill: var(--fg); font: 500 13px var(--mono); }
+.arch .t2 { fill: var(--fg-2); font: 12px var(--sans); }
+.arch .t3 { fill: var(--fg-3); font: 11px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.arch .ln { stroke: var(--fg-3); stroke-width: 1.5; fill: none; }
+.arch .ln-hi { stroke: var(--accent); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+.arch .ah { fill: var(--fg-3); }
+.arch .ah-hi { fill: var(--accent); }
+
+/* table */
+.tbl-wrap { overflow-x: auto; margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 15px; }
+th, td { text-align: left; padding: 14px 18px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+thead th { font: 500 12px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-3); background: var(--bg-2); }
+tbody th { font-weight: 500; color: var(--fg-2); width: 22%; }
+td.us { background: var(--accent-bg); color: var(--fg); }
+thead th.us { color: var(--accent); background: var(--accent-bg); }
+
+/* faq */
+.faq { margin-top: 40px; border-top: 1px solid var(--line); }
+details { border-bottom: 1px solid var(--line); }
+summary { cursor: pointer; list-style: none; padding: 20px 36px 20px 0; font-weight: 600; position: relative; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; position: absolute; right: 4px; top: 18px; font: 400 20px var(--mono); color: var(--fg-3); }
+details[open] summary::after { content: "−"; }
+details p { margin: 0 0 22px; color: var(--fg-2); max-width: 70ch; }
+
+/* final */
+.final { text-align: left; padding: 104px 0; }
+.final .cmd { max-width: 720px; }
+
+footer { border-top: 1px solid var(--line); padding: 28px 0 40px; font-size: 14px; color: var(--fg-3); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; justify-content: space-between; }
+footer ul { list-style: none; display: flex; flex-wrap: wrap; gap: 20px; margin: 0; padding: 0; }
+footer a { text-decoration: none; }
+footer a:hover { color: var(--fg); }
+</style>
+</head>
+<body class="no-js">
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M13 11h6l1.5 15h-9z" fill="#f2a93b"/><rect x="12" y="7" width="8" height="4" rx="1" fill="#f2a93b"/></svg>
+      litehouse
+    </a>
+    <ul>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#backups">Backups</a></li>
+      <li><a href="#cost">Cost</a></li>
+      <li><a href="#not-for">When not to use it</a></li>
+      <li><a href="https://github.com/danbruder/litehouse">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+
+<!-- 1. hero -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <h1><code>git push</code> deploys for SQLite apps, on your own server.</h1>
+      <p class="lede">litehouse turns a $5 VPS into a push-to-deploy host: HTTPS subdomains, nightly S3 backups, and a one-command restore onto a fresh machine. GitHub Actions does the builds. Your server just runs things.</p>
+      <div class="cta">
+        <p class="cta-label">Install on a Linux host with wildcard DNS pointed at it:</p>
+        <div class="cmd"><code data-copy>curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh \
+  | sudo sh -s -- --domain lh.example.com</code><button class="copy" type="button">Copy</button></div>
+      </div>
+      <div class="links">
+        <a href="https://github.com/danbruder/litehouse">Source on GitHub →</a>
+        <a href="https://github.com/danbruder/litehouse/tree/main/examples/hello">Example app →</a>
+      </div>
+    </div>
+    <div class="term" role="img" aria-label="Terminal: lh create, git push, lh deploys --wait">
+      <div class="term-bar"><i></i><i></i><i></i></div>
+<pre><span class="p">$ </span>lh create myapp --repo you/myapp
+App 'myapp' created
+  URL:  https://myapp.lh.example.com
+  Repo: you/myapp
+git push to deploy.
+
+<span class="p">$ </span>git push
+<span class="c">  … GitHub Actions builds the image,
+    pushes to ghcr.io, calls your server</span>
+
+<span class="p">$ </span>lh deploys myapp --wait
+<span class="ok">Deploy 1 succeeded</span>
+
+<span class="p">$ </span>curl -sI https://myapp.lh.example.com | head -1
+HTTP/2 200</pre>
+    </div>
+  </div>
+</section>
+
+<!-- 2. workflow -->
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">The whole workflow</p>
+    <h2>Four commands, then just <code>git push</code>.</h2>
+    <ol class="steps">
+      <li>
+        <span class="n">01</span>
+        <div class="cmd"><code>install.sh --domain lh.example.com</code></div>
+        <p>Sets up Caddy and the litehouse server container on your VPS. Prints an admin token once.</p>
+      </li>
+      <li>
+        <span class="n">02</span>
+        <div class="cmd"><code>lh connect https://admin.lh.example.com --token …</code></div>
+        <p>Points the CLI on your laptop at the server. That's all the auth setup there is.</p>
+      </li>
+      <li>
+        <span class="n">03</span>
+        <div class="cmd"><code>lh create myapp --repo you/myapp</code></div>
+        <p>Registers the app, commits a GitHub Actions workflow to your repo, and sets the deploy secret. You don't write any CI YAML.</p>
+      </li>
+      <li>
+        <span class="n">04</span>
+        <div class="cmd"><code>git push</code></div>
+        <p>Actions builds the image and pushes it to GHCR. The server pulls it, swaps the container, and your app is live at <code>myapp.lh.example.com</code>.</p>
+      </li>
+    </ol>
+    <p class="note">Your repo needs a Dockerfile that listens on a port. That's the only requirement for the app itself.</p>
+  </div>
+</section>
+
+<!-- 3. features -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">What you get</p>
+    <h2>The parts of a PaaS you actually use.</h2>
+    <div class="grid">
+      <div>
+        <h3>Push to deploy</h3>
+        <p>GitHub Actions builds; the server pulls from GHCR and replaces the container. The server never runs <code>docker build</code>, so a 1&nbsp;GB box is enough.</p>
+      </div>
+      <div>
+        <h3>HTTPS subdomains</h3>
+        <p>Caddy with Let's Encrypt. Every app gets <code>{app}.{your-domain}</code>. Add your own domains with <code>lh domain add</code>.</p>
+      </div>
+      <div>
+        <h3>Nightly backups to S3</h3>
+        <p>Consistent SQLite snapshots via <code>VACUUM INTO</code>, plus the server's own state. 14 days retained. Any S3-compatible bucket.</p>
+      </div>
+      <div>
+        <h3>Incremental file backups</h3>
+        <p>Write uploads to <code>$LITEHOUSE_BLOB_PATH</code>. Each file goes to S3 once and is never re-sent.</p>
+      </div>
+      <div>
+        <h3>Restore onto a fresh box</h3>
+        <p>Install, connect, <code>lh restore --yes</code>. Apps, env vars, deploy tokens, and data come back from S3 and GHCR.</p>
+      </div>
+      <div>
+        <h3>Env, logs, lifecycle</h3>
+        <p><code>lh env</code>, <code>lh logs -f</code>, <code>start</code> / <code>stop</code> / <code>restart</code>. Health checks per app.</p>
+      </div>
+      <div>
+        <h3>A small admin UI</h3>
+        <p>Apps, deploy history, logs, metrics, backups. Served from the same binary, behind the same admin token.</p>
+      </div>
+      <div>
+        <h3>An MCP server</h3>
+        <p><code>lh mcp serve</code> exposes deploys, logs, env, domains, and backups as tools for Claude Code or any MCP client.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. backups -->
+<section id="backups">
+  <div class="wrap">
+    <p class="eyebrow">Backups &amp; recovery</p>
+    <h2>Assume the server dies.</h2>
+    <p class="sub">Nothing on the box is precious. Every night litehouse snapshots each app's SQLite data and its own state database to your S3 bucket. If the machine is gone, start a new one and run three commands.</p>
+    <div class="split">
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># on a brand-new server</span>
+<span class="p">$ </span>lh install --domain lh.example.com \
+    --s3-bucket … --ghcr-token …
+
+<span class="c"># from your laptop</span>
+<span class="p">$ </span>lh connect https://admin.lh.example.com --token …
+<span class="p">$ </span>lh restore --yes
+
+<span class="c"># state DB, images, volumes, blobs: back.</span></pre>
+      </div>
+      <ul class="checks">
+        <li><strong>A backup only counts if every app backed up.</strong> One failure and the day isn't marked good. <code>lh backup status --json</code> tells you the last good date.</li>
+        <li><strong>The full cycle is tested.</strong> Wipe, reinstall, and restore is an automated script (<code>e2e/dr-drill.sh</code>) that runs against a real droplet.</li>
+        <li><strong>Plain files in your bucket.</strong> Backups are <code>tar.gz</code> archives of SQLite files. You can get your data back without litehouse.</li>
+        <li><strong>A failed deploy doesn't take you down.</strong> If the new image can't be pulled, the old container keeps running.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 5. scripting -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Scriptable</p>
+    <h2>Every command works without a human.</h2>
+    <p class="sub">Non-interactive flags everywhere, <code>--json</code> on read commands, and exit codes that mean something. An agent (or a CI job) can deploy <em>and</em> check that it worked.</p>
+    <div class="split">
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+<pre><span class="p">$ </span>lh deploys myapp --wait --timeout 300
+<span class="p">$ </span>echo $?
+0   <span class="c"># succeeded</span>
+<span class="c">    # 1 = deploy failed</span>
+<span class="c">    # 2 = timed out</span>
+
+<span class="p">$ </span>lh backup status --json
+<span class="p">$ </span>lh deploys myapp --json</pre>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i></div>
+<pre><span class="c"># add litehouse to Claude Code</span>
+<span class="p">$ </span>claude mcp add litehouse -- lh mcp serve
+
+<span class="c"># tools exposed:</span>
+<span class="a">deploy</span>  <span class="a">list_deploys</span>  <span class="a">app_status</span>  <span class="a">logs</span>
+<span class="a">env_set</span>  <span class="a">start_app</span>  <span class="a">stop_app</span>  <span class="a">create_app</span>
+<span class="a">add_domain</span>  <span class="a">backup_status</span>  <span class="a">run_backup</span>  …</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 6. cost -->
+<section id="cost">
+  <div class="wrap">
+    <p class="eyebrow">Cost</p>
+    <h2>The price of a VPS.</h2>
+    <p class="sub">No per-app, per-seat, or per-request pricing, because there's nobody to pay. The tenth app costs the same as the first.</p>
+    <div class="cost">
+      <div><span>litehouse</span><span>free, open source</span></div>
+      <div><span>A VPS (handles a handful of small apps)</span><span>~$5–6 / mo</span></div>
+      <div><span>Builds: GitHub Actions minutes</span><span>free tier</span></div>
+      <div><span>Images: GHCR</span><span>free tier</span></div>
+      <div><span>Backups: S3-compatible storage</span><span>cents / mo</span></div>
+      <div><span>Typical total</span><span>~$5–10 / mo</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. not for -->
+<section id="not-for">
+  <div class="wrap">
+    <p class="eyebrow">Fit</p>
+    <h2>When not to use litehouse.</h2>
+    <p class="sub">It's narrow on purpose. If any of these are true, pick something else.</p>
+    <ul class="nope">
+      <li><strong>You need Postgres or MySQL.</strong><span>It's built around SQLite on local disk. A managed PaaS will serve you better.</span></li>
+      <li><strong>You need more than one server.</strong><span>Single host by design. No clustering, no horizontal scaling.</span></li>
+      <li><strong>You want scale-to-zero.</strong><span>Apps are always on. That means no cold starts, but also no savings when idle.</span></li>
+      <li><strong>You don't want to own a server.</strong><span>You'll need a VPS, a domain with wildcard DNS, an S3 bucket, and a GitHub repo.</span></li>
+      <li><strong>Deploys can't have a gap.</strong><span>A deploy replaces the container. Caddy retries during the swap, but it isn't blue/green.</span></li>
+      <li><strong>You don't have a Dockerfile.</strong><span>Framework auto-detection isn't supported yet.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 8. architecture -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Architecture</p>
+    <h2>What's running, and where.</h2>
+    <p class="sub">Builds happen on GitHub. Your server pulls images and runs them. Server state is itself a SQLite database, and it's backed up too. Written in Rust, shipped as one binary.</p>
+    <div class="arch">
+      <svg viewBox="0 0 960 330" role="img" aria-label="git push goes to GitHub Actions, which pushes an image to GHCR and calls the deploy hook on litehouse-server. litehouse-server pulls the image and runs app containers behind Caddy, and backs up to S3 nightly.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah"/></marker>
+          <marker id="arh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="ah-hi"/></marker>
+        </defs>
+
+        <text class="t3" x="20" y="24">GitHub</text>
+        <rect class="box" x="20" y="40" width="150" height="56" rx="8"/>
+        <text x="40" y="66">git push</text>
+        <text class="t2" x="40" y="84">your repo</text>
+
+        <rect class="box" x="220" y="40" width="190" height="56" rx="8"/>
+        <text x="240" y="66">GitHub Actions</text>
+        <text class="t2" x="240" y="84">docker build</text>
+
+        <rect class="box" x="460" y="40" width="150" height="56" rx="8"/>
+        <text x="480" y="66">GHCR</text>
+        <text class="t2" x="480" y="84">image registry</text>
+
+        <path class="ln" d="M170 68H218" marker-end="url(#ar)"/>
+        <path class="ln" d="M410 68H458" marker-end="url(#ar)"/>
+
+        <rect class="zone" x="200" y="146" width="740" height="170" rx="12"/>
+        <text class="t3" x="220" y="170">Your VPS</text>
+
+        <rect class="box-hi" x="220" y="184" width="210" height="96" rx="8"/>
+        <text x="240" y="212">litehouse-server</text>
+        <text class="t2" x="240" y="232">API · deploy hook · admin UI</text>
+        <text class="t2" x="240" y="250">backups · state (SQLite)</text>
+
+        <rect class="box" x="490" y="184" width="170" height="96" rx="8"/>
+        <text x="510" y="212">app containers</text>
+        <text class="t2" x="510" y="232">one per app</text>
+        <text class="t2" x="510" y="250">SQLite in /data</text>
+
+        <rect class="box" x="720" y="184" width="200" height="96" rx="8"/>
+        <text x="740" y="212">Caddy</text>
+        <text class="t2" x="740" y="232">TLS · routing</text>
+        <text class="t2" x="740" y="250">{app}.your-domain</text>
+
+        <!-- hook -->
+        <path class="ln" d="M315 96V182" marker-end="url(#ar)"/>
+        <text class="t2" x="305" y="124" text-anchor="end">deploy hook</text>
+        <!-- pull -->
+        <path class="ln" d="M535 96V116H400V182" marker-end="url(#ar)"/>
+        <text class="t2" x="544" y="112">pull image</text>
+        <!-- run -->
+        <path class="ln" d="M430 232H488" marker-end="url(#ar)"/>
+        <!-- caddy -> apps -->
+        <path class="ln" d="M718 232H662" marker-end="url(#ar)"/>
+        <!-- users -->
+        <rect class="box" x="760" y="40" width="160" height="56" rx="8"/>
+        <text x="780" y="66">users</text>
+        <text class="t2" x="780" y="84">HTTPS</text>
+        <path class="ln" d="M840 96V182" marker-end="url(#ar)"/>
+
+        <!-- s3 -->
+        <rect class="box" x="20" y="208" width="130" height="56" rx="8"/>
+        <text x="40" y="234">S3</text>
+        <text class="t2" x="40" y="252">your bucket</text>
+        <path class="ln-hi" d="M218 236H152" marker-end="url(#arh)"/>
+        <text class="t2" x="175" y="226" text-anchor="middle">nightly</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- 9. comparison -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Compared</p>
+    <h2>Where it sits.</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th></th><th class="us">litehouse</th><th>Hosted PaaS</th><th>Self-hosted PaaS</th></tr>
+        </thead>
+        <tbody>
+          <tr><th>Examples</th><td class="us">—</td><td>Vercel, Render, Railway</td><td>Coolify, Dokku, Kamal</td></tr>
+          <tr><th>Runs on</th><td class="us">Your VPS</td><td>Their cloud</td><td>Your VPS</td></tr>
+          <tr><th>Pricing</th><td class="us">Flat VPS cost</td><td>Metered usage</td><td>Flat VPS cost</td></tr>
+          <tr><th>Database</th><td class="us">SQLite on local disk</td><td>Managed Postgres, billed separately</td><td>Bring your own</td></tr>
+          <tr><th>Backups + restore</th><td class="us">Built in, restore tested end to end</td><td>Varies; usually database only</td><td>Plugins or DIY</td></tr>
+          <tr><th>Builds run on</th><td class="us">GitHub Actions</td><td>Their builders</td><td>Usually your server</td></tr>
+          <tr><th>Scope</th><td class="us">SQLite apps, one box</td><td>Almost anything</td><td>Almost anything</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">If you need Postgres or several servers, Coolify and Kamal are good tools. litehouse does less, deliberately.</p>
+  </div>
+</section>
+
+<!-- 10. faq -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">FAQ</p>
+    <h2>Questions.</h2>
+    <div class="faq">
+      <details>
+        <summary>Does it work with any language?</summary>
+        <p>Anything with a Dockerfile that listens on a port. Rails, Django, Go, Node, Rust, Phoenix, a static site.</p>
+      </details>
+      <details>
+        <summary>Where does my SQLite file live?</summary>
+        <p>In a Docker volume on the host, mounted at <code>/data</code> inside your container. Put your database there and it gets backed up. Put large uploads in <code>$LITEHOUSE_BLOB_PATH</code> for incremental backup.</p>
+      </details>
+      <details>
+        <summary>What happens during a deploy?</summary>
+        <p>The server pulls the new image, replaces the container, and updates Caddy. If the pull fails, the old container keeps running. Caddy retries requests during the swap, so the gap is short, but it's not a blue/green system.</p>
+      </details>
+      <details>
+        <summary>Can I deploy without GitHub Actions?</summary>
+        <p>Yes. <code>lh deploy myapp --image &lt;ref&gt;</code> deploys any image directly, using the same code path as the deploy hook. The generated workflow is the default, not the only way.</p>
+      </details>
+      <details>
+        <summary>Private repos and images?</summary>
+        <p>Yes. Give the server a GHCR read token with <code>lh config ghcr set --token …</code> (or pass <code>--ghcr-token</code> at install).</p>
+      </details>
+      <details>
+        <summary>Why do my apps restart at night?</summary>
+        <p>Every running app gets a fresh container once a night at 3am US Eastern: same image, clean process. Opt out per app with <code>lh env &lt;app&gt; LITEHOUSE_SKIP_NIGHTLY_RESTART true</code>.</p>
+      </details>
+      <details>
+        <summary>How do I upgrade litehouse?</summary>
+        <p><code>lh upgrade</code>. It pulls the new binary and server image and restarts the server container. Your apps keep running.</p>
+      </details>
+      <details>
+        <summary>Is it production-ready?</summary>
+        <p>It runs real apps for its author, and the install and disaster-recovery flows are tested end to end against real servers. It's also young and maintained by one person. The backups are there so that mistakes (yours or ours) are recoverable.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- 11. final -->
+<section class="final">
+  <div class="wrap">
+    <h2>One box. <code>git push</code>. Backed up every night.</h2>
+    <div class="cta">
+      <div class="cmd"><code data-copy>curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh \
+  | sudo sh -s -- --domain lh.example.com</code><button class="copy" type="button">Copy</button></div>
+    </div>
+    <div class="links">
+      <a href="https://github.com/danbruder/litehouse">Source on GitHub →</a>
+      <a href="https://github.com/danbruder/litehouse/tree/main/examples/hello">Example app →</a>
+      <a href="https://github.com/danbruder/litehouse#readme">README →</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>litehouse — self-hosted deploys for SQLite apps</span>
+    <ul>
+      <li><a href="https://github.com/danbruder/litehouse">GitHub</a></li>
+      <li><a href="https://github.com/danbruder/litehouse/blob/main/VISION.md">Roadmap</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+document.body.classList.remove("no-js");
+document.querySelectorAll(".copy").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    var text = btn.parentElement.querySelector("[data-copy]").textContent;
+    navigator.clipboard.writeText(text).then(function () {
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = "Copy"; }, 1500);
+    });
+  });
+});
+</script>
+</body>
+</html>
