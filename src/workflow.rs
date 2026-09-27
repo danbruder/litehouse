@@ -2,7 +2,13 @@
 //! repo on `lh create`. The workflow builds and pushes a container image to
 //! GHCR, then calls the litehouse deploy hook with the freshly built image.
 //!
-//! Placeholders (`__OWNER__`, `__REPO__`, `__APP__`, `__HOOK_URL__`) are substituted via
+//! The image is built for the litehouse server's platform (`linux/amd64` or
+//! `linux/arm64`, as reported by `GET /api/server/info`). GitHub's standard
+//! runners are amd64, so an arm64 image is built under QEMU emulation — slower,
+//! but it works on every repo (public or private) with no runner setup.
+//!
+//! Placeholders (`__OWNER__`, `__REPO__`, `__APP__`, `__HOOK_URL__`,
+//! `__PLATFORM__`, `__EMULATION_STEPS__`) are substituted via
 //! plain string replacement rather than `format!`, since the template is
 //! full of literal `${{ ... }}` GitHub Actions expression syntax that would
 //! otherwise have to be escaped as `{{{{ ... }}}}`.
@@ -24,9 +30,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+__EMULATION_STEPS__      - uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: __PLATFORM__
           push: true
           tags: |
             ghcr.io/__OWNER__/__REPO__:latest
@@ -39,6 +46,15 @@ jobs:
             -d "{\"app\":\"__APP__\",\"image\":\"ghcr.io/__OWNER__/__REPO__:${{ github.sha }}\",\"sha\":\"${{ github.sha }}\"}"
 "#;
 
+/// Extra steps for building a non-amd64 image on GitHub's amd64 runners.
+const EMULATION_STEPS: &str = r#"      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+"#;
+
+/// Platform used when the server doesn't report one (servers that predate
+/// `platform` in `/api/server/info` were only ever released for amd64).
+pub const DEFAULT_PLATFORM: &str = "linux/amd64";
+
 /// Render the litehouse deploy workflow for `owner/app`, pointed at
 /// `hook_url`. GHCR image paths must be lowercase (GitHub requires it), so
 /// `owner` and `app` are lowercased wherever they appear in an image
@@ -46,11 +62,21 @@ jobs:
 /// `owner`/`repo` name the GHCR image (GHCR paths follow the repo and must be
 /// lowercase); `app` is the litehouse app name used in the deploy-hook payload
 /// — they are NOT the same thing (repo "litehouse-hello" may back app "hello").
-pub fn render_deploy_workflow(owner: &str, repo: &str, app: &str, hook_url: &str) -> String {
+/// `platform` is the server's Docker platform, e.g. "linux/arm64".
+pub fn render_deploy_workflow(
+    owner: &str,
+    repo: &str,
+    app: &str,
+    hook_url: &str,
+    platform: &str,
+) -> String {
     let owner = owner.to_lowercase();
     let repo = repo.to_lowercase();
+    let emulation = if platform == DEFAULT_PLATFORM { "" } else { EMULATION_STEPS };
 
     TEMPLATE
+        .replace("__EMULATION_STEPS__", emulation)
+        .replace("__PLATFORM__", platform)
         .replace("__OWNER__", &owner)
         .replace("__REPO__", &repo)
         .replace("__APP__", app)
@@ -68,6 +94,7 @@ mod tests {
             "litehouse-hello",
             "hello",
             "https://admin.s.danbruder.com/api/hooks/deploy",
+            DEFAULT_PLATFORM,
         );
         assert!(yml.contains("ghcr.io/danbruder/litehouse-hello:${{ github.sha }}"));
         // The hook payload names the litehouse APP, not the repo.
@@ -85,6 +112,7 @@ mod tests {
             "Hello",
             "myapp",
             "https://example.com/hooks/deploy",
+            DEFAULT_PLATFORM,
         );
         assert!(yml.contains("ghcr.io/danbruder/hello:latest"));
         assert!(yml.contains("ghcr.io/danbruder/hello:${{ github.sha }}"));
@@ -95,9 +123,30 @@ mod tests {
     #[test]
     fn workflow_contains_no_tabs_and_is_valid_yaml() {
         let yml =
-            render_deploy_workflow("owner", "repo", "app", "https://example.com/hooks/deploy");
+            render_deploy_workflow("owner", "repo", "app", "https://example.com/hooks/deploy", DEFAULT_PLATFORM);
         assert!(!yml.contains('\t'));
         let parsed: serde_yaml::Value = serde_yaml::from_str(&yml).expect("valid yaml");
         assert!(parsed.get("jobs").is_some());
+    }
+
+    #[test]
+    fn amd64_workflow_builds_natively_without_emulation() {
+        let yml = render_deploy_workflow("o", "r", "a", "https://example.com/hooks/deploy", "linux/amd64");
+        assert!(yml.contains("platforms: linux/amd64"));
+        assert!(!yml.contains("setup-qemu-action"));
+    }
+
+    #[test]
+    fn arm64_workflow_sets_up_emulation_and_is_valid_yaml() {
+        let yml = render_deploy_workflow("o", "r", "a", "https://example.com/hooks/deploy", "linux/arm64");
+        assert!(yml.contains("platforms: linux/arm64"));
+        assert!(yml.contains("docker/setup-qemu-action@v3"));
+        assert!(yml.contains("docker/setup-buildx-action@v3"));
+        assert!(!yml.contains("__"));
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yml).expect("valid yaml");
+        let steps = parsed["jobs"]["deploy"]["steps"].as_sequence().expect("steps");
+        let qemu = steps.iter().position(|s| s["uses"].as_str() == Some("docker/setup-qemu-action@v3"));
+        let build = steps.iter().position(|s| s["uses"].as_str() == Some("docker/build-push-action@v6"));
+        assert!(qemu.unwrap() < build.unwrap());
     }
 }

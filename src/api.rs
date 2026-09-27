@@ -1266,6 +1266,9 @@ struct ServerInfoResponse {
     /// Host the admin UI itself is served from, when a domain is configured.
     admin_host: Option<String>,
     docker_version: Option<String>,
+    /// Docker host platform as `os/arch` (e.g. "linux/arm64"). `lh create`
+    /// renders the app's deploy workflow to build images for this platform.
+    platform: Option<String>,
     apps_total: usize,
     apps_running: usize,
     local_dev: bool,
@@ -1291,6 +1294,7 @@ async fn get_server_info(State(state): State<Arc<RwLock<AppState>>>) -> impl Int
     }
 
     let docker_version = docker.version().await.ok().and_then(|v| v.version);
+    let platform = crate::docker::host_platform(&docker).await;
 
     Json(ServerInfoResponse {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1300,6 +1304,7 @@ async fn get_server_info(State(state): State<Arc<RwLock<AppState>>>) -> impl Int
             .map(|d| format!("{}.{}", config.admin_label(), d)),
         domain: config.domain.clone(),
         docker_version,
+        platform,
         apps_total,
         apps_running,
         local_dev: std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions),

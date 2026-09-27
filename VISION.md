@@ -89,7 +89,7 @@ Caddy runs as a container alongside app containers, providing:
 
 - Cloudflare API integration for automatic wildcard DNS record creation during install
 - Custom domain support (per-app domains beyond the shared wildcard)
-- Multi-arch (`arm64` + `amd64`) `litehouse-server` image on GHCR
+- ~~Multi-arch (`arm64` + `amd64`) `litehouse-server` image on GHCR~~ — SHIPPED: aarch64 release binaries, multi-arch server image, app workflows built for the server's platform
 - CSRF token hardening for the admin UI (currently an origin-header guard on state-changing routes — move to a proper per-session token)
 
 ### Phase 4: Polish

@@ -434,6 +434,24 @@ impl ApiClient {
         }).await
     }
 
+    /// The server's Docker host platform (e.g. "linux/arm64") from
+    /// `GET /api/server/info`. `None` for servers too old to report it.
+    pub async fn get_server_platform(&self) -> Result<Option<String>> {
+        #[derive(serde::Deserialize)]
+        struct Info {
+            platform: Option<String>,
+        }
+        let url = format!("{}/server/info", self.config.base_url);
+        let info: Info = self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await?;
+        Ok(info.platform)
+    }
+
     pub async fn get_docker_version(&self) -> Result<()> {
         let url = format!("{}/docker/version", self.config.base_url);
         let version = self.execute_request_text(|client, auth_header| {

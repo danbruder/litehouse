@@ -59,6 +59,15 @@ pub async fn provision_app(
     // /api/hooks/deploy alongside the rest of the admin API.
     let hook_url = format!("{}/hooks/deploy", config.base_url.trim_end_matches('/'));
 
+    // Build the app's image for the server's CPU architecture. Servers that
+    // don't report a platform predate arm64 support and are amd64.
+    let platform = api_client
+        .get_server_platform()
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| crate::workflow::DEFAULT_PLATFORM.to_string());
+
     let setup = async {
         let token =
             crate::commands::github_login::resolve_github_token(allow_interactive).await?;
@@ -73,7 +82,9 @@ pub async fn provision_app(
         .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
 
         let workflow =
-            crate::workflow::render_deploy_workflow(owner, repo_name, app_name, &hook_url);
+            crate::workflow::render_deploy_workflow(
+            owner, repo_name, app_name, &hook_url, &platform,
+        );
         crate::github::actions::put_file(
             &token,
             owner,

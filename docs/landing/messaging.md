@@ -212,10 +212,10 @@ Kamal are good choices. Litehouse is narrower on purpose.
 - **Private repos / images?** Yes; set a GHCR read token.
 - **Why the nightly restart?** Every app gets a fresh container at 3am
   Eastern. Opt out per app with
-  `lh env set <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`.
-- **ARM?** The install script and CLI support x86_64 and aarch64 hosts.
-  (Confirm server image arch before publishing — multi-arch is on the
-  Phase 3 list.)
+  `lh env <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`.
+- **ARM?** Yes — x86_64 and aarch64 servers (e.g. Hetzner CAX, Graviton,
+  Ampere). Apps are built for whatever your server runs; `lh create` sets
+  that up. Only true once a release containing multi-arch builds is cut.
 - **How do I upgrade?** `lh upgrade`.
 - **Is it production-ready?** Honest answer: it runs real apps for its
   author; it's young; backups mean you can recover from mistakes.
@@ -239,4 +239,4 @@ Closing line: One box. `git push`. Backed up every night.
 - Keep the page fast and static; no JS required to read it. Dark/light.
 - Don't add testimonials, logos, or user counts until they're real.
 - Before launch, check these claims against the code: custom domain TLS,
-  metrics in the UI, arm64 server image, deploy-gap behavior.
+  metrics in the UI, deploy-gap behavior.
