@@ -337,7 +337,9 @@ pub async fn execute(
     );
     println!("{}", "=".repeat(60));
     println!("\nNext steps:");
-    println!("  1. Connect the CLI (see command above)");
+    println!("  1. On your laptop, install the CLI and connect it (command above):");
+    println!("     curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh");
+    println!("     (Deploying with an AI agent? Connect it yourself, then have the agent run `lh agent-guide`.)");
     println!("  2. Create an app from a GitHub repo:");
     println!("     lh create myapp --repo you/repo");
     println!("\n  3. Push to deploy:");

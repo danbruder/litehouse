@@ -19,21 +19,29 @@ Install on a fresh Linux host with wildcard DNS already pointed at it (`*.lh.exa
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sudo sh -s -- --domain lh.example.com
 ```
 
-This prints an admin token once — save it. Point the CLI at the server:
+This prints an admin token once — save it. On your laptop, install the CLI (Linux or macOS, no root) and point it at the server:
 
 ```bash
-lh connect https://admin.lh.example.com --token <TOKEN>
+curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh
+lh connect https://admin.lh.example.com --token <TOKEN>   # verifies the URL + token before saving
 ```
+
+(In CI or a cloud agent sandbox, set `LITEHOUSE_URL` and `LITEHOUSE_TOKEN` instead of running `lh connect`.)
 
 Create and deploy an app from a GitHub repo:
 
 ```bash
+lh doctor --app myapp                    # preflight: server, GitHub token scopes, origin, Dockerfile + port
 lh create myapp --repo you/myapp
-git push   # builds on GitHub, deploys automatically
-lh deploys myapp --wait   # blocks until the deploy succeeds or fails
+git push                                 # builds on GitHub, deploys automatically
+lh deploys myapp --wait --sha HEAD       # blocks until *this commit's* deploy succeeds (0) or fails (1)
 ```
 
 Your app is live at `https://myapp.lh.example.com`. See `examples/hello` for a minimal repo that works out of the box.
+
+## Deploying with an AI agent
+
+litehouse is built to be driven by coding agents (Claude Code, Codex, Cursor, …). Connect the CLI yourself (above) so the admin token never enters the agent's transcript, then ask the agent to deploy the repo and follow `lh agent-guide`. The guide ([`docs/agents.md`](docs/agents.md), compiled into the CLI) covers the app contract — Dockerfile at the repo root, `EXPOSE` the port, persistent data under `/data` — and the exact preflight/create/deploy/verify steps. `lh mcp serve` exposes the same operations as MCP tools (`claude mcp add litehouse -- lh mcp serve`), with an `agent_guide` tool and `list_deploys` that waits on a specific commit.
 
 ### Optional: backups and private images at install time
 
@@ -62,11 +70,14 @@ Run `lh --help` or `lh <command> --help` for full details; flags below are the n
 |---|---|
 | `lh install --domain <domain>` | Install litehouse on this server (run as root); accepts `--s3-*` and `--ghcr-token` to configure backups/private images up front |
 | `lh upgrade [--version <v>]` | Upgrade the litehouse binary and container image |
-| `lh connect <url> --token <token>` | Point this CLI at a server |
+| `lh connect <url> [--token <token>]` | Point this CLI at a server; verifies before saving. Token defaults to `$LITEHOUSE_TOKEN` |
+| `lh doctor [--app <name>] [--json]` | Preflight the repo in the current directory for deploying (exit 1 if anything blocks it) |
+| `lh agent-guide` | Print the guide for AI agents deploying with litehouse |
 | `lh create <app> [--repo owner/name] [--rotate-token] [--json]` | Register an app, commit its deploy workflow, set the deploy secret |
 | `lh delete <app>` | Delete an app (stops the container, removes DB records) |
 | `lh deploy <app> --image <ref> [--sha <sha>]` | Deploy an image directly (the local escape hatch — same path the deploy hook uses) |
-| `lh deploys <app> [--limit N] [--json] [--wait] [--timeout secs]` | List deploy history, or wait for the in-flight deploy to finish |
+| `lh deploys <app> [--limit N] [--json] [--wait [--sha <ref>]] [--timeout secs]` | List deploy history, or wait for a deploy to finish — use `--sha HEAD` after a push to wait for that commit (and fail fast if its GitHub build fails) |
+| `lh mcp serve` | MCP server over stdio for AI agents |
 | `lh start` / `lh stop` / `lh restart <app>` | Container lifecycle |
 | `lh status [app]` | Show one app's or all apps' status |
 | `lh logs <app> [-l N] [-f]` | View (optionally follow) container logs |

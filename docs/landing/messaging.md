@@ -108,20 +108,27 @@ re-pulled from GHCR.
 
 ---
 
-## 5. Built to be scripted (and driven by agents)
+## 5. For agents
 
-**Headline:** Every command works without a human.
+**Headline:** Hand the deploy to your agent.
 
-- Non-interactive flags everywhere; `--json` on read commands.
-- `lh deploys myapp --wait` blocks until the deploy finishes. Exit `0`
-  success, `1` failed, `2` timeout. Use it in CI or let an agent check its
-  own work.
-- `lh mcp serve` for MCP clients. Example snippet: adding it to Claude Code
-  config, then a short transcript: "deploy myapp and tell me if it's
-  healthy" → tool calls → answer.
+Three copy-paste steps:
+1. You, once (keeps the admin token out of the agent's transcript):
+   install the CLI with `install-cli.sh` and run `lh connect`.
+2. A prompt to paste into the agent: follow `lh agent-guide`, make the app
+   deployable, `lh doctor` until green, create, push, confirm with
+   `lh deploys <app> --wait --sha HEAD`, report the URL.
+3. Optional: `claude mcp add litehouse -- lh mcp serve`.
+
+Cloud agents and CI set `LITEHOUSE_URL` / `LITEHOUSE_TOKEN` instead of step 1.
+
+Proof points: `lh agent-guide` (the contract, versioned with the CLI; also
+`llms.txt` and the MCP `agent_guide` tool), `lh doctor` (every prerequisite
+with its fix), `--wait --sha HEAD` (confirms *this* commit; fails fast on a
+failed GitHub build), everything non-interactive with exit codes.
 
 Keep this factual. The point isn't "AI deploys for you"; it's that an agent
-can deploy *and confirm the result*.
+can deploy *and confirm the result* without a human in the loop.
 
 ---
 

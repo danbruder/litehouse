@@ -311,7 +311,46 @@ pub fn get_app_log_path(app_name: &str) -> Result<PathBuf, ConfigError> {
     Ok(get_app_dir(app_name)?.join(format!("{}.log", app_name)))
 }
 
+/// Env var that overrides the client config's server URL (the admin URL,
+/// e.g. `https://admin.lh.example.com`). For agents and CI, which can set
+/// env vars more easily than they can run `lh connect`.
+pub const URL_ENV_VAR: &str = "LITEHOUSE_URL";
+/// Env var that overrides the client config's admin token.
+pub const TOKEN_ENV_VAR: &str = "LITEHOUSE_TOKEN";
+
+fn env_nonempty(key: &str) -> Option<String> {
+    let v = std::env::var(key).ok()?;
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// The API base (`.../api`) for a server URL a person typed, with or
+/// without a trailing slash or `/api`.
+pub fn api_base_url(server_url: &str) -> String {
+    let trimmed = server_url.trim().trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix("/api").unwrap_or(trimmed);
+    format!("{}/api", trimmed)
+}
+
 impl ClientConfig {
+    /// The config file with `LITEHOUSE_URL` / `LITEHOUSE_TOKEN` applied on
+    /// top. Use this to talk to the server; never `save()` the result, or
+    /// the env values would be written to disk.
+    pub fn load_effective() -> Result<Self, ConfigError> {
+        let mut config = Self::load()?;
+        config.apply_env_overrides(env_nonempty(URL_ENV_VAR), env_nonempty(TOKEN_ENV_VAR));
+        Ok(config)
+    }
+
+    fn apply_env_overrides(&mut self, url: Option<String>, token: Option<String>) {
+        if let Some(url) = url {
+            self.base_url = api_base_url(&url);
+        }
+        if let Some(token) = token {
+            self.api_token = Some(token);
+        }
+    }
+
     #[tracing::instrument]
     pub fn load() -> Result<Self, ConfigError> {
         let config_path = Self::get_config_path()?;
@@ -330,7 +369,8 @@ impl ClientConfig {
         Ok(config)
     }
 
-    #[tracing::instrument]
+    // skip(self): configs can hold tokens, which must not reach the logs.
+    #[tracing::instrument(skip(self))]
     pub fn save(&self) -> Result<(), ConfigError> {
         let config_path = Self::get_config_path()?;
         let contents =
@@ -341,8 +381,36 @@ impl ClientConfig {
         Ok(())
     }
 
+    /// Where the client config lives:
+    /// - `$LITEHOUSE_DIR/config/` when set (and in tests),
+    /// - the legacy `<base dir>/config/` if a config already exists there
+    ///   (servers, where root's `lh` uses `/opt/litehouse/config/`, and
+    ///   existing macOS installs),
+    /// - otherwise `$XDG_CONFIG_HOME/litehouse/` or `~/.config/litehouse/`,
+    ///   which any user can write — `/opt/litehouse` needs root.
     pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-        Ok(get_config_dir()?.join("client-config.toml"))
+        let has_test_dir = TEST_CONFIG_DIR.with(|dir| dir.borrow().is_some());
+        if has_test_dir || std::env::var("LITEHOUSE_DIR").is_ok() {
+            return Ok(get_config_dir()?.join("client-config.toml"));
+        }
+
+        let legacy = get_base_dir().join("config").join("client-config.toml");
+        let user_dir = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+            .map(|d| d.join("litehouse"));
+
+        match user_dir {
+            Some(dir) if !legacy.exists() => {
+                fs::create_dir_all(&dir).map_err(|_| {
+                    ConfigError::IoError(format!("Failed to create {}", dir.display()))
+                })?;
+                Ok(dir.join("client-config.toml"))
+            }
+            _ => Ok(get_config_dir()?.join("client-config.toml")),
+        }
     }
 }
 
@@ -350,6 +418,30 @@ impl ClientConfig {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn api_base_url_normalizes_what_people_type() {
+        assert_eq!(api_base_url("https://admin.x.com"), "https://admin.x.com/api");
+        assert_eq!(api_base_url("https://admin.x.com/"), "https://admin.x.com/api");
+        assert_eq!(api_base_url("https://admin.x.com/api"), "https://admin.x.com/api");
+        assert_eq!(api_base_url(" https://admin.x.com/api/ "), "https://admin.x.com/api");
+    }
+
+    #[test]
+    fn env_overrides_replace_url_and_token_only_when_set() {
+        let mut c = ClientConfig {
+            base_url: "https://old/api".into(),
+            api_token: Some("old".into()),
+            github_token: Some("gh".into()),
+        };
+        c.apply_env_overrides(None, None);
+        assert_eq!(c.base_url, "https://old/api");
+        assert_eq!(c.api_token.as_deref(), Some("old"));
+        c.apply_env_overrides(Some("https://new".into()), Some("new".into()));
+        assert_eq!(c.base_url, "https://new/api");
+        assert_eq!(c.api_token.as_deref(), Some("new"));
+        assert_eq!(c.github_token.as_deref(), Some("gh"));
+    }
 
     fn setup_test_dirs() -> (TempDir, TempDir) {
         let data_dir = tempfile::tempdir().unwrap();
@@ -436,7 +528,8 @@ impl ServerConfig {
         Ok(config)
     }
 
-    #[tracing::instrument]
+    // skip(self): configs can hold tokens, which must not reach the logs.
+    #[tracing::instrument(skip(self))]
     pub fn save(&self) -> Result<(), ConfigError> {
         let config_path = Self::get_config_path()?;
         let contents =

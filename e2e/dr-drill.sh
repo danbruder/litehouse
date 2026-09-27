@@ -30,7 +30,13 @@ CONNECT_URL=$(echo "$INSTALL_OUT" | grep -oE 'lh connect https://[^ ]+' | awk '{
 [ -n "$CONNECT_URL" ] || { echo "FATAL: no connect URL in install output"; exit 1; }
 
 echo "==> 4/5 connect CLI + restore from newest S3 backup"
-$LH connect "$CONNECT_URL" --token "$TOKEN"
+# `lh connect` verifies the URL + token; the admin host's TLS certificate
+# can take a little while to be issued right after install.
+for i in $(seq 1 30); do
+  $LH connect "$CONNECT_URL" --token "$TOKEN" && break
+  [ "$i" = 30 ] && { echo "FATAL: could not connect to $CONNECT_URL"; exit 1; }
+  sleep 5
+done
 $LH restore --yes
 
 echo "==> 5/5 poll until the restored app is reachable again"

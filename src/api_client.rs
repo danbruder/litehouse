@@ -39,6 +39,16 @@ pub struct DeployListItem {
     pub updated_at: String,
 }
 
+/// What `GET /api/server/info` reports (the fields the CLI uses).
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct ServerInfo {
+    pub version: String,
+    pub domain: Option<String>,
+    pub admin_host: Option<String>,
+    #[serde(default)]
+    pub platform: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AppInfo {
     pub id: String,
@@ -70,10 +80,13 @@ impl ApiClient {
         }
     }
 
-    /// Get the current API token from config (reloads from disk)
+    /// The admin token this client was built with, falling back to the
+    /// config on disk (plus env overrides) when it was built without one.
     fn get_api_token(&self) -> Result<Option<String>> {
-        let config = ClientConfig::load()?;
-        Ok(config.api_token)
+        if let Some(token) = &self.config.api_token {
+            return Ok(Some(token.clone()));
+        }
+        Ok(ClientConfig::load_effective()?.api_token)
     }
 
     /// Get Authorization header value if a token exists
@@ -434,22 +447,40 @@ impl ApiClient {
         }).await
     }
 
-    /// The server's Docker host platform (e.g. "linux/arm64") from
-    /// `GET /api/server/info`. `None` for servers too old to report it.
-    pub async fn get_server_platform(&self) -> Result<Option<String>> {
-        #[derive(serde::Deserialize)]
-        struct Info {
-            platform: Option<String>,
-        }
+    /// `GET /api/server/info`. Needs a valid admin token, so it doubles as
+    /// the "is this URL + token right?" check behind `lh connect`/`lh doctor`.
+    pub async fn get_server_info(&self) -> Result<ServerInfo> {
         let url = format!("{}/server/info", self.config.base_url);
-        let info: Info = self.execute_request(|client, auth_header| {
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        }).await
+    }
+
+    /// The server's Docker host platform (e.g. "linux/arm64"). `None` for
+    /// servers too old to report it.
+    pub async fn get_server_platform(&self) -> Result<Option<String>> {
+        Ok(self.get_server_info().await?.platform)
+    }
+
+    /// The GitHub repo ("owner/name") an app deploys from, if linked.
+    pub async fn get_app_repo(&self, app_name: &str) -> Result<Option<String>> {
+        #[derive(serde::Deserialize)]
+        struct AppRepo {
+            repo: Option<String>,
+        }
+        let url = format!("{}/apps/{}", self.config.base_url, app_name);
+        let app: AppRepo = self.execute_request(|client, auth_header| {
             let mut req = client.get(&url);
             if let Some(header) = auth_header {
                 req = req.header("Authorization", header);
             }
             req
         }).await?;
-        Ok(info.platform)
+        Ok(app.repo)
     }
 
     pub async fn get_docker_version(&self) -> Result<()> {

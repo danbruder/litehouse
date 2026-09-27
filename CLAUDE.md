@@ -167,7 +167,16 @@ Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `
 4. `lh deploys myapp --wait` blocks until that deploy succeeds or fails (exit 0/1/2)
 5. App accessible at `myapp.{domain}` over HTTPS
 
-**AI-agent access (MCP):** `lh mcp serve` runs a Model Context Protocol server on stdio. Point an MCP-capable agent at the command `lh mcp serve` (on a host where `lh connect` has already stored the admin token). Tools mirror the CLI: `deploy`, `list_apps`, `app_status`, `list_deploys` (with `wait`), `logs`, `env_set`, `start_app`/`stop_app`/`delete_app`, `add_domain`/`remove_domain`/`list_domains`, `backup_status`/`run_backup`, and `create_app`. `create_app` needs a GitHub token already available ($GITHUB_TOKEN, `gh`, or a prior `lh github login`) since device-flow login can't run through MCP.
+**AI-agent support:** agents are a first-class user. The pieces:
+- `docs/agents.md` is the canonical agent guide (app contract + exact deploy steps). It's compiled into the binary (`src/agent_guide.rs`) and served by `lh agent-guide`, the MCP `agent_guide` tool, and summarized in the MCP `initialize` instructions. **Keep it accurate when you change CLI flags, the app contract (`/data`, port, env vars), or deploy behavior.** The landing page's "For agents" section (`site/index.html`) and `site/llms.txt` point at it.
+- `lh deploys <app> --wait --sha <ref>` (`src/deploy_wait.rs`, shared with MCP `list_deploys`) waits for the deploy of a specific commit. Without `--sha` it waits on the newest deploy, which right after a push is still the previous one. With `--sha`, it also polls that commit's `litehouse-deploy.yml` GitHub Actions run and fails fast (exit 1) if the build failed.
+- `lh doctor [--app] [--json]` (`src/commands/doctor.rs`) preflights server connection, GitHub token `repo`+`workflow` scopes, GitHub origin, Dockerfile, and EXPOSEd port.
+- `LITEHOUSE_URL` / `LITEHOUSE_TOKEN` override the client config (`ClientConfig::load_effective`; never `save()` its result). `lh connect` verifies URL + token via `/api/server/info` before saving.
+- `install-cli.sh` installs just the CLI (no root) on Linux/macOS; the release workflow builds `litehouse-darwin-{aarch64,x86_64}` for it.
+- Client commands log at `warn` by default (only `serve`/`install`/`upgrade` default to `info`) so stdout/stderr carry just results.
+- New app names must be DNS labels (lowercase letters, digits, hyphens, ≤63, not `admin`/the admin label) — validated in `api::create_app`.
+
+**AI-agent access (MCP):** `lh mcp serve` runs a Model Context Protocol server on stdio. Point an MCP-capable agent at the command `lh mcp serve` (on a host where `lh connect` has already stored the admin token). Tools mirror the CLI: `deploy`, `list_apps`, `app_status`, `list_deploys` (with `wait`), `logs`, `env_set`, `start_app`/`stop_app`/`delete_app`, `add_domain`/`remove_domain`/`list_domains`, `backup_status`/`run_backup`, `create_app`, and `agent_guide`. `list_deploys` takes `sha` (with `wait`) and returns an error result unless that deploy succeeded. `create_app` needs a GitHub token already available ($GITHUB_TOKEN, `gh`, or a prior `lh github login`) since device-flow login can't run through MCP.
 
 **Server startup:**
 1. Server starts → Connects to SQLite and Docker
@@ -205,7 +214,7 @@ Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `
 
 ## Configuration
 
-**Client config:** `~/.config/litehouse/client-config.toml`
+**Client config:** `~/.config/litehouse/client-config.toml` (or `$XDG_CONFIG_HOME/litehouse/`; `$LITEHOUSE_DIR/config/` when set; an existing legacy `/opt/litehouse/config/client-config.toml` — root's `lh` on a server — still wins). `LITEHOUSE_URL` / `LITEHOUSE_TOKEN` override it.
 - `base_url` - Server API endpoint
 
 **Server config:** Loaded via `ServerConfig::load()` (see `src/config.rs`)

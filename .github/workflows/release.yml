@@ -7,20 +7,32 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Each architecture builds natively on its own runner: aws-lc-sys (pulled in
-  # by the S3 SDK) compiles C and is painful to cross-compile to musl.
+  # Each Linux architecture builds natively on its own runner: aws-lc-sys
+  # (pulled in by the S3 SDK) compiles C and is painful to cross-compile to
+  # musl. macOS builds are CLI-only (for `lh` on laptops, via install-cli.sh);
+  # both come from the Apple Silicon runner, whose toolchain targets Intel too.
   build:
     strategy:
       matrix:
         include:
-          - arch: x86_64
+          - os: linux
+            arch: x86_64
             docker_arch: amd64
             target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
-          - arch: aarch64
+          - os: linux
+            arch: aarch64
             docker_arch: arm64
             target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: aarch64
+            target: aarch64-apple-darwin
+            runner: macos-latest
+          - os: darwin
+            arch: x86_64
+            target: x86_64-apple-darwin
+            runner: macos-latest
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -35,6 +47,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
+        if: matrix.os == 'linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools cmake
 
       - name: Cache cargo registry
@@ -44,33 +57,40 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-musl-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-cargo-musl-
+            ${{ matrix.os }}-${{ matrix.arch }}-cargo-
 
       - name: Build release binary
-        env:
-          TARGET_CC: musl-gcc
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.os }}" = linux ]; then export TARGET_CC=musl-gcc; fi
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Package binary
         run: |
-          mkdir -p dist image-context/${{ matrix.docker_arch }}
+          ASSET=litehouse-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          mkdir -p dist
           cp target/${{ matrix.target }}/release/lh dist/
-          cp target/${{ matrix.target }}/release/lh image-context/${{ matrix.docker_arch }}/lh
           cd dist
-          tar -czvf litehouse-linux-${{ matrix.arch }}.tar.gz lh
-          sha256sum litehouse-linux-${{ matrix.arch }}.tar.gz > litehouse-linux-${{ matrix.arch }}.tar.gz.sha256
+          tar -czvf "$ASSET" lh
+          shasum -a 256 "$ASSET" > "$ASSET.sha256"
           rm lh
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.arch }}
+          name: dist-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/
           retention-days: 1
 
+      - name: Stage image build context
+        if: matrix.os == 'linux'
+        run: |
+          mkdir -p image-context/${{ matrix.docker_arch }}
+          cp target/${{ matrix.target }}/release/lh image-context/${{ matrix.docker_arch }}/lh
+
       - name: Upload image build context
+        if: matrix.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: image-context-${{ matrix.docker_arch }}

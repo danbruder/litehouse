@@ -718,6 +718,19 @@ mod tests {
     }
 
     #[test]
+    fn new_app_names_must_be_dns_labels() {
+        for ok in ["myapp", "my-app", "app2", "a", &"a".repeat(63)] {
+            assert!(validate_new_app_name(ok, "admin").is_ok(), "{ok}");
+        }
+        for bad in ["", "MyApp", "my_app", "my.app", "-app", "app-", "my app", &"a".repeat(64)] {
+            assert!(validate_new_app_name(bad, "admin").is_err(), "{bad}");
+        }
+        assert!(validate_new_app_name("admin", "admin").is_err());
+        assert!(validate_new_app_name("admin", "ops").is_ok());
+        assert!(validate_new_app_name("ops", "ops").is_err());
+    }
+
+    #[test]
     fn hook_authorized_correct_token() {
         let app = app_with_token("tok");
         assert!(hook_authorized("tok", Some(&app)));
@@ -800,6 +813,31 @@ struct CreateAppResponse {
     url: String,
 }
 
+/// App names become a DNS label (`{name}.{domain}`, with a Let's Encrypt
+/// certificate) and are interpolated into backup scripts, so new ones must
+/// be lowercase letters, digits and hyphens, 1–63 chars, not starting or
+/// ending with a hyphen. `admin_label` (the admin UI's subdomain) is taken.
+fn validate_new_app_name(name: &str, admin_label: &str) -> Result<(), String> {
+    let valid_chars = name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if name.is_empty()
+        || name.len() > 63
+        || !valid_chars
+        || name.starts_with('-')
+        || name.ends_with('-')
+    {
+        return Err(format!(
+            "Invalid app name '{name}': use 1-63 lowercase letters, digits and hyphens, \
+             not starting or ending with a hyphen (it becomes the app's subdomain)"
+        ));
+    }
+    if name == admin_label {
+        return Err(format!("'{name}' is reserved for the admin UI's hostname"));
+    }
+    Ok(())
+}
+
 /// `POST /api/apps` — create a new app and mint its deploy token.
 ///
 /// If `name` already exists: 409 Conflict, unless `rotate_token: true` is
@@ -819,6 +857,13 @@ async fn create_app(
         Ok(existing) => existing,
         Err(e) => return internal(e).into_response(),
     };
+
+    // Only new names are checked, so apps created before this rule keep working.
+    if existing.is_none()
+        && let Err(msg) = validate_new_app_name(&payload.name, server_config.admin_label())
+    {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
 
     if let Some(existing) = existing {
         if !payload.rotate_token {
