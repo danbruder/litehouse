@@ -1,0 +1,17 @@
+# litehouse
+
+> Self-hosted push-to-deploy for SQLite apps on one server the user owns. GitHub Actions builds each app's Docker image; the server pulls it, serves it at https://<app>.<domain> with HTTPS, and backs up /data to S3 nightly. Driven by the `lh` CLI (non-interactive, --json, meaningful exit codes) or its MCP server (`lh mcp serve`).
+
+If you are an agent deploying an app: read the agent guide first. It is also built into the CLI as `lh agent-guide`.
+
+## Docs
+
+- [Agent guide](https://raw.githubusercontent.com/danbruder/litehouse/main/docs/agents.md): the app contract (Dockerfile, port, /data) and the exact commands to preflight (`lh doctor`), create, deploy, and verify (`lh deploys <app> --wait --sha HEAD`)
+- [README](https://raw.githubusercontent.com/danbruder/litehouse/main/README.md): what litehouse is, server install, commands
+- [Install the CLI](https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh): `curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh` (no root; Linux and macOS)
+
+## Rules
+
+- Never ask the user to paste the admin token into the chat. They run `lh connect` themselves, or the environment sets LITEHOUSE_URL and LITEHOUSE_TOKEN.
+- After every `git push`, confirm with `lh deploys <app> --wait --sha HEAD`. Exit 0 means live, 1 failed, 2 timed out.
+- Ask before `lh delete`, `lh restore`, or rotating tokens.

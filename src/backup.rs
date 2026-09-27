@@ -74,7 +74,7 @@ static BACKUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
-    #[error("S3 backup configuration is not set. Run `lh server s3-config set` first.")]
+    #[error("S3 backup configuration is not set. Run `lh config s3 set` first.")]
     S3ConfigMissing,
     #[error("invalid app name for backup: {0}")]
     InvalidAppName(String),

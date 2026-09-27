@@ -164,6 +164,15 @@ h3 { font-size: 17px; font-weight: 600; }
 .checks li strong { color: var(--fg); font-weight: 600; }
 .checks li::before { content: "→"; position: absolute; left: 0; color: var(--accent); font-family: var(--mono); }
 
+/* agents */
+.agent-steps { list-style: none; padding: 0; margin: 40px 0 0; display: grid; gap: 28px; max-width: 820px; }
+.step-label { margin: 0 0 10px; color: var(--fg-2); font-size: 15px; }
+.step-label .n { font: 500 13px var(--mono); color: var(--accent); margin-right: 8px; }
+.cmd.prompt::before { content: none; }
+.cmd.prompt code[data-copy] { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+.checks li strong code { background: none; border: 0; padding: 0; font-size: 0.95em; }
+.agent-checks li strong { display: block; margin-bottom: 2px; }
+
 /* cost */
 .cost { margin-top: 40px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; max-width: 720px; }
 .cost div { display: grid; grid-template-columns: 1fr auto; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
@@ -235,6 +244,7 @@ footer a:hover { color: var(--fg); }
     <ul>
       <li><a href="#how">How it works</a></li>
       <li><a href="#backups">Backups</a></li>
+      <li><a href="#agents">Agents</a></li>
       <li><a href="#cost">Cost</a></li>
       <li><a href="#not-for">When not to use it</a></li>
       <li><a href="https://github.com/danbruder/litehouse">GitHub</a></li>
@@ -258,6 +268,7 @@ footer a:hover { color: var(--fg); }
       <div class="links">
         <a href="https://github.com/danbruder/litehouse">Source on GitHub →</a>
         <a href="https://github.com/danbruder/litehouse/tree/main/examples/hello">Example app →</a>
+        <a href="#agents">Deploy with an agent →</a>
       </div>
     </div>
     <div class="term" role="img" aria-label="Terminal: lh create, git push, lh deploys --wait">
@@ -383,34 +394,61 @@ HTTP/2 200</pre>
   </div>
 </section>
 
-<!-- 5. scripting -->
-<section>
+<!-- 5. agents -->
+<section id="agents">
   <div class="wrap">
-    <p class="eyebrow">Scriptable</p>
-    <h2>Every command works without a human.</h2>
-    <p class="sub">Non-interactive flags everywhere, <code>--json</code> on read commands, and exit codes that mean something. An agent (or a CI job) can deploy <em>and</em> check that it worked.</p>
+    <p class="eyebrow">For agents</p>
+    <h2>Hand the deploy to your agent.</h2>
+    <p class="sub">Claude Code, Codex, Cursor, anything that can run a shell. You do the one step that involves a secret; the agent does the rest and proves it worked.</p>
+
+    <ol class="agent-steps">
+      <li>
+        <p class="step-label"><span class="n">01</span> You, once. Keeps the admin token out of the agent's transcript.</p>
+        <div class="cmd"><code data-copy>curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh
+lh connect https://admin.lh.example.com --token &lt;ADMIN_TOKEN&gt;</code><button class="copy" type="button">Copy</button></div>
+      </li>
+      <li>
+        <p class="step-label"><span class="n">02</span> Paste into your agent, from the app's repo.</p>
+        <div class="cmd prompt"><code data-copy>Deploy this repo to my litehouse server.
+
+1. Run `lh agent-guide` and follow it exactly.
+2. Pick an app name (lowercase letters, digits, hyphens) and make the app deployable: a Dockerfile at the repo root, listening on 0.0.0.0 with the port EXPOSEd, and the SQLite database and any other persistent files under /data.
+3. Run `lh doctor --app &lt;name&gt;` and fix every FAIL. If the server connection or my GitHub token is the problem, stop and tell me what to run. Don't ask me for tokens.
+4. Create the app, push, and confirm with `lh deploys &lt;name&gt; --wait --sha HEAD`. If it fails, read the build log or `lh logs`, fix it, and push again.
+5. When it's live, give me the URL.</code><button class="copy" type="button">Copy</button></div>
+      </li>
+      <li>
+        <p class="step-label"><span class="n">03</span> Optional: give it the MCP server too.</p>
+        <div class="cmd"><code data-copy>claude mcp add litehouse -- lh mcp serve</code><button class="copy" type="button">Copy</button></div>
+      </li>
+    </ol>
+    <p class="note">Cloud agents and CI: skip step 1 and set <code>LITEHOUSE_URL</code> and <code>LITEHOUSE_TOKEN</code> as secrets instead.</p>
+
     <div class="split">
       <div class="term">
         <div class="term-bar"><i></i><i></i><i></i></div>
-<pre><span class="p">$ </span>lh deploys myapp --wait --timeout 300
+<pre><span class="p">$ </span>lh doctor --app myapp
+<span class="ok">[ok  ]</span> server      litehouse 0.3.0 at https://admin.lh.example.com/api, …
+<span class="a">[FAIL]</span> github      token for you is missing scope(s): workflow
+                   fix: `gh auth refresh -h github.com -s workflow`
+<span class="ok">[ok  ]</span> git_repo    origin is github.com/you/myapp
+<span class="ok">[ok  ]</span> dockerfile  Dockerfile at the repo root
+<span class="ok">[ok  ]</span> port        HTTPS traffic will go to port 8080 (lowest EXPOSEd TCP port)
+
+<span class="p">$ </span>git push
+<span class="p">$ </span>lh deploys myapp --wait --sha HEAD
+<span class="c">…</span>
+GitHub Actions run for 4be91c02d1 failed (failure), so no deploy was registered.
+Build log: https://github.com/you/myapp/actions/runs/…
 <span class="p">$ </span>echo $?
-0   <span class="c"># succeeded</span>
-<span class="c">    # 1 = deploy failed</span>
-<span class="c">    # 2 = timed out</span>
-
-<span class="p">$ </span>lh backup status --json
-<span class="p">$ </span>lh deploys myapp --json</pre>
+1</pre>
       </div>
-      <div class="term">
-        <div class="term-bar"><i></i><i></i><i></i></div>
-<pre><span class="c"># add litehouse to Claude Code</span>
-<span class="p">$ </span>claude mcp add litehouse -- lh mcp serve
-
-<span class="c"># tools exposed:</span>
-<span class="a">deploy</span>  <span class="a">list_deploys</span>  <span class="a">app_status</span>  <span class="a">logs</span>
-<span class="a">env_set</span>  <span class="a">start_app</span>  <span class="a">stop_app</span>  <span class="a">create_app</span>
-<span class="a">add_domain</span>  <span class="a">backup_status</span>  <span class="a">run_backup</span>  …</pre>
-      </div>
+      <ul class="checks agent-checks">
+        <li><strong><code>lh agent-guide</code></strong> The whole contract (Dockerfile, port, <code>/data</code>, deploy steps, what each failure means), built into the CLI so it always matches the version installed. Also served as <a href="llms.txt">llms.txt</a> and the MCP <code>agent_guide</code> tool.</li>
+        <li><strong><code>lh doctor</code></strong> Checks every prerequisite in one go (server, token scopes, GitHub origin, Dockerfile, port), and every failure comes with the command that fixes it.</li>
+        <li><strong><code>--wait --sha HEAD</code></strong> Confirms that <em>this</em> commit is live, not the previous deploy. Exit 0 live, 1 failed, 2 timed out. A failed GitHub build is reported the moment it fails.</li>
+        <li><strong>Everything is non-interactive.</strong> <code>--json</code> on read commands, exit codes that mean something, and nothing that waits for a keypress.</li>
+      </ul>
     </div>
   </div>
 </section>

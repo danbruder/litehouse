@@ -42,13 +42,16 @@ fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
-        "serverInfo": { "name": "litehouse", "version": env!("CARGO_PKG_VERSION") }
+        "serverInfo": { "name": "litehouse", "version": env!("CARGO_PKG_VERSION") },
+        "instructions": crate::agent_guide::MCP_INSTRUCTIONS
     })
 }
 
 /// The tool catalog advertised via `tools/list`.
 fn tool_definitions() -> Value {
     json!([
+        { "name": "agent_guide", "description": "The full guide to deploying with litehouse: app requirements (Dockerfile, port, /data), first-deploy and redeploy steps, how to read failures. Read it before creating or deploying an app.",
+          "inputSchema": { "type": "object", "properties": {} } },
         { "name": "list_apps", "description": "List all litehouse apps and their status.",
           "inputSchema": { "type": "object", "properties": {} } },
         { "name": "app_status", "description": "Get one app's status.",
@@ -60,11 +63,12 @@ fn tool_definitions() -> Value {
               "image": { "type": "string", "description": "e.g. ghcr.io/org/app:sha-abc123" },
               "sha": { "type": "string", "description": "git commit sha (optional)" } },
               "required": ["app_name", "image"] } },
-        { "name": "list_deploys", "description": "List an app's deploy history (newest first). Set wait=true to block until the newest deploy leaves in_progress.",
+        { "name": "list_deploys", "description": "List an app's deploy history (newest first). Set wait=true to block until a deploy settles. After a git push ALWAYS pass sha (the pushed commit, or a ref like HEAD) — without it you wait on the newest deploy, which is still the previous one. With sha, a failed GitHub Actions build is reported immediately. Returns an error result unless the deploy succeeded.",
           "inputSchema": { "type": "object", "properties": {
               "app_name": { "type": "string" },
               "limit": { "type": "integer", "default": 20 },
               "wait": { "type": "boolean", "default": false },
+              "sha": { "type": "string", "description": "with wait: the commit to wait for (sha or git ref such as HEAD, resolved in the MCP server's working directory)" },
               "timeout": { "type": "integer", "description": "max seconds to wait", "default": 600 } },
               "required": ["app_name"] } },
         { "name": "logs", "description": "Fetch recent container logs for an app.",
@@ -175,29 +179,6 @@ fn optional_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
 }
 
-/// Poll an app's deploys until the newest one leaves `in_progress` (or a
-/// deploy first appears), or until `timeout_secs` elapses — the MCP analogue
-/// of `lh deploys <app> --wait`. Returns the final deploy list either way.
-async fn wait_for_deploy(
-    api: &ApiClient,
-    app: &str,
-    limit: u32,
-    timeout_secs: u64,
-) -> Result<Vec<crate::api_client::DeployListItem>> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let deploys = api.list_deploys(app, limit).await?;
-        let settled = match deploys.first() {
-            Some(d) => d.status != "in_progress",
-            None => false, // no deploy registered yet — keep waiting
-        };
-        if settled || std::time::Instant::now() >= deadline {
-            return Ok(deploys);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    }
-}
-
 /// Dispatch a tool call to the matching `ApiClient` operation.
 async fn call_tool(
     name: &str,
@@ -218,17 +199,42 @@ async fn call_tool(
             let result = api.deploy_app(&app, &image, sha.as_deref()).await?;
             Ok(serde_json::to_string_pretty(&result)?)
         }
+        "agent_guide" => Ok(crate::agent_guide::GUIDE.to_string()),
         "list_deploys" => {
             let app = required_str(args, "app_name")?;
             let limit = optional_u64(args, "limit").unwrap_or(20) as u32;
             let wait = optional_bool(args, "wait").unwrap_or(false);
             let timeout = optional_u64(args, "timeout").unwrap_or(600);
-            let deploys = if wait {
-                wait_for_deploy(api, &app, limit, timeout).await?
-            } else {
-                api.list_deploys(&app, limit).await?
+            if !wait {
+                let deploys = api.list_deploys(&app, limit).await?;
+                return Ok(serde_json::to_string_pretty(&deploys)?);
+            }
+            let sha = optional_str(args, "sha")
+                .as_deref()
+                .map(crate::deploy_wait::resolve_sha)
+                .transpose()?;
+            let build = match &sha {
+                Some(_) => crate::deploy_wait::BuildWatch::discover(api, &app).await,
+                None => None,
             };
-            Ok(serde_json::to_string_pretty(&deploys)?)
+            let (outcome, deploys) = crate::deploy_wait::wait(
+                api,
+                &app,
+                sha.as_deref(),
+                limit,
+                timeout,
+                build.as_ref(),
+            )
+            .await?;
+            let body = serde_json::to_string_pretty(&json!({
+                "outcome": outcome.label(),
+                "message": outcome.message(&app, sha.as_deref(), timeout),
+                "deploys": deploys,
+            }))?;
+            match outcome {
+                crate::deploy_wait::Outcome::Succeeded(_) => Ok(body),
+                _ => Err(anyhow!(body)),
+            }
         }
         "logs" => {
             let app = required_str(args, "app_name")?;
@@ -349,7 +355,7 @@ async fn run<R: BufRead, W: Write>(
 /// Entry point for `lh mcp serve`: load client config, build the API client,
 /// and run the stdio loop against real stdin/stdout.
 pub async fn serve() -> Result<()> {
-    let config = ClientConfig::load()?;
+    let config = ClientConfig::load_effective()?;
     let api = ApiClient::new(config.clone());
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -382,6 +388,32 @@ mod tests {
         assert_eq!(resp["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(resp["result"]["serverInfo"]["name"], "litehouse");
         assert_eq!(resp["result"]["capabilities"]["tools"], json!({}));
+    }
+
+    #[tokio::test]
+    async fn initialize_carries_agent_instructions() {
+        let (api, config) = dummy_ctx();
+        let resp = handle_request(request(1, "initialize", json!({})), &api, &config)
+            .await
+            .unwrap();
+        let instructions = resp["result"]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("agent_guide"));
+        assert!(instructions.contains("sha"));
+    }
+
+    #[tokio::test]
+    async fn agent_guide_tool_returns_the_guide() {
+        let (api, config) = dummy_ctx();
+        let resp = handle_request(
+            request(2, "tools/call", json!({ "name": "agent_guide", "arguments": {} })),
+            &api,
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["result"]["isError"], false);
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("lh deploys <app> --wait --sha HEAD"));
     }
 
     #[tokio::test]

@@ -130,9 +130,17 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Poll until the newest deploy leaves "in_progress"
+        /// Poll until the deploy settles (newest deploy, or the one for
+        /// --sha). Exit 0 succeeded, 1 failed, 2 timed out
         #[arg(long)]
         wait: bool,
+
+        /// With --wait: wait for the deploy of this commit (a sha, or a git
+        /// ref such as HEAD) instead of the newest deploy. Use this after a
+        /// `git push` — without it, the newest deploy is still the previous
+        /// one. Also fails fast if the commit's GitHub Actions build fails.
+        #[arg(long, requires = "wait")]
+        sha: Option<String>,
 
         /// Max seconds to wait with --wait before giving up (exit code 2)
         #[arg(long, default_value = "600")]
@@ -209,13 +217,35 @@ enum Commands {
         /// Base URL of the litehouse server (e.g. https://admin.example.com)
         base_url: String,
 
-        /// Admin token issued by the server
+        /// Admin token issued by the server. Defaults to $LITEHOUSE_TOKEN
         #[arg(long)]
-        token: String,
+        token: Option<String>,
+
+        /// Save without checking that the server is reachable and accepts
+        /// the token
+        #[arg(long)]
+        no_verify: bool,
     },
 
     /// Check DNS configuration for the configured domain
     CheckDns,
+
+    /// Print the guide for AI agents deploying with litehouse (the same text
+    /// as docs/agents.md, matching this version of lh)
+    AgentGuide,
+
+    /// Preflight for deploying the repo in the current directory: server
+    /// connection, GitHub token scopes, GitHub origin, Dockerfile + port.
+    /// Exits 1 if anything blocks a deploy
+    Doctor {
+        /// Also check this app (exists on the server, linked to this repo)
+        #[arg(long)]
+        app: Option<String>,
+
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// GitHub authentication used by `lh create` to commit deploy workflows
     /// and set deploy-token secrets.
@@ -427,22 +457,69 @@ pub async fn run() -> Result<()> {
             let config = ServerConfig::load()?;
             server::execute(config).await
         }
+        Commands::AgentGuide => {
+            print!("{}", crate::agent_guide::GUIDE);
+            Ok(())
+        }
         Commands::Mcp { command } => match command {
             McpCmd::Serve => crate::mcp::serve().await,
         },
-        Commands::Connect { base_url, token } => {
+        Commands::Connect {
+            base_url,
+            token,
+            no_verify,
+        } => {
+            let token = token
+                .or_else(|| std::env::var(crate::config::TOKEN_ENV_VAR).ok())
+                .filter(|t| !t.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "No admin token: pass --token <TOKEN> or set {}",
+                        crate::config::TOKEN_ENV_VAR
+                    )
+                })?;
             // Preserve any previously stored GitHub token — connecting to a
             // (possibly different) server has no bearing on GitHub auth.
             let mut config = ClientConfig::load().unwrap_or_default();
-            config.base_url = format!("{}/api", base_url.trim_end_matches('/'));
-            config.api_token = Some(token);
+            config.base_url = crate::config::api_base_url(&base_url);
+            config.api_token = Some(token.trim().to_string());
+
+            // Check before saving, so a typo can't silently replace a
+            // working config.
+            let info = if no_verify {
+                None
+            } else {
+                let info = ApiClient::new(config.clone())
+                    .get_server_info()
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Could not verify {}: {:#}\nNothing was saved. Check the URL and \
+                             token, or pass --no-verify to save anyway.",
+                            config.base_url,
+                            e
+                        )
+                    })?;
+                Some(info)
+            };
             config.save()?;
-            println!("Connected to {}", config.base_url);
+            match info {
+                Some(info) => println!(
+                    "Connected to {} (litehouse {}{})",
+                    config.base_url,
+                    info.version,
+                    info.domain
+                        .map(|d| format!(", apps at *.{d}"))
+                        .unwrap_or_default()
+                ),
+                None => println!("Saved {} (not verified)", config.base_url),
+            }
             Ok(())
         }
         _ => {
-            // For all other commands, load client config and use API client
-            let config = ClientConfig::load()?;
+            // For all other commands, load client config (with any
+            // LITEHOUSE_URL / LITEHOUSE_TOKEN overrides) and use API client
+            let config = ClientConfig::load_effective()?;
             let api_client = ApiClient::new(config.clone());
 
             match cli.command {
@@ -500,8 +577,9 @@ pub async fn run() -> Result<()> {
                     limit,
                     json,
                     wait,
+                    sha,
                     timeout,
-                } => run_deploys(&api_client, &app_name, limit, json, wait, timeout).await,
+                } => run_deploys(&api_client, &app_name, limit, json, wait, sha, timeout).await,
                 Commands::Env {
                     app_name,
                     key,
@@ -587,6 +665,9 @@ pub async fn run() -> Result<()> {
                 Commands::CheckDns => {
                     crate::commands::check_dns::execute().await
                 },
+                Commands::Doctor { app, json } => {
+                    crate::commands::doctor::execute(&api_client, &config, app.as_deref(), json).await
+                }
                 Commands::Github { command } => match command {
                     GithubCmd::Login => crate::commands::github_login::execute().await,
                 },
@@ -716,6 +797,7 @@ pub async fn run() -> Result<()> {
                 | Commands::Upgrade { .. }
                 | Commands::Serve
                 | Commands::Connect { .. }
+                | Commands::AgentGuide
                 | Commands::Mcp { .. } => {
                     unreachable!("Already handled above")
                 }
@@ -739,110 +821,86 @@ fn print_backup_report(report: &crate::backup::BackupReport) {
     }
 }
 
-/// `lh deploys <app>`: show deploy history, optionally polling until the
-/// newest deploy settles. This is the primitive CI/agents use to verify a
-/// deploy actually finished: `lh deploys <app> --wait` exits 0 on success,
-/// 1 (with the failure reason on stderr) on failure, 2 on timeout.
+/// `lh deploys <app> [--wait [--sha <ref>]]`: print deploy history, or
+/// block until the deploy settles (see `crate::deploy_wait`). Exits 0 on
+/// success, 1 (with the failure reason on stderr) on a failed deploy or a
+/// failed GitHub Actions build, 2 on timeout. With `--json`, stdout carries
+/// only the JSON deploy list; the final status goes to stderr.
 async fn run_deploys(
     api_client: &ApiClient,
     app_name: &str,
     limit: u32,
     json: bool,
     wait: bool,
+    sha: Option<String>,
     timeout_secs: u64,
 ) -> Result<()> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-
-    loop {
+    if !wait {
         let deploys = api_client.list_deploys(app_name, limit).await?;
-
-        // A deploy is "settled" once it exists and is no longer in_progress.
-        // When waiting, an empty list means the deploy hasn't been registered
-        // yet (e.g. the GitHub Actions build is still running) — keep polling
-        // until one appears rather than treating "no deploys" as terminal.
-        let settled = match deploys.first() {
-            Some(d) => d.status != "in_progress",
-            None => !wait,
-        };
-
-        if !wait || settled || std::time::Instant::now() >= deadline {
-            if json {
-                println!("{}", serde_json::to_string_pretty(&deploys.iter().map(|d| {
-                    serde_json::json!({
-                        "id": d.id,
-                        "status": d.status,
-                        "image": d.image,
-                        "git_sha": d.git_sha,
-                        "error": d.error,
-                        "created_at": d.created_at,
-                        "updated_at": d.updated_at,
-                    })
-                }).collect::<Vec<_>>())?);
-            } else {
-                println!(
-                    "{:<10} {:<12} {:<12} {:<40} {}",
-                    "ID", "STATUS", "SHA", "IMAGE", "CREATED"
-                );
-                for d in &deploys {
-                    let short_id = d.id.chars().take(8).collect::<String>();
-                    let short_sha = d
-                        .git_sha
-                        .as_deref()
-                        .map(|s| s.chars().take(10).collect::<String>())
-                        .unwrap_or_else(|| "-".to_string());
-                    println!(
-                        "{:<10} {:<12} {:<12} {:<40} {}",
-                        short_id, d.status, short_sha, d.image, d.created_at
-                    );
-                }
-            }
-
-            if !wait {
-                return Ok(());
-            }
-
-            if !settled {
-                match deploys.first() {
-                    Some(_) => eprintln!(
-                        "Timed out after {}s waiting for deploy to finish (still in_progress)",
-                        timeout_secs
-                    ),
-                    None => eprintln!(
-                        "Timed out after {}s waiting for a deploy to be registered for app '{}'",
-                        timeout_secs, app_name
-                    ),
-                }
-                std::process::exit(2);
-            }
-
-            // With --json, stdout must carry ONLY the JSON payload printed
-            // above — final status goes to stderr / the exit code.
-            return match deploys.first() {
-                Some(d) if d.status == "succeeded" => {
-                    if json {
-                        eprintln!("Deploy {} succeeded", d.id);
-                    } else {
-                        println!("Deploy {} succeeded", d.id);
-                    }
-                    Ok(())
-                }
-                Some(d) => {
-                    eprintln!(
-                        "Deploy {} failed: {}",
-                        d.id,
-                        d.error.as_deref().unwrap_or("unknown error")
-                    );
-                    std::process::exit(1);
-                }
-                None => {
-                    eprintln!("No deploys found for app '{}'", app_name);
-                    std::process::exit(1);
-                }
-            };
-        }
-
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        print_deploys(&deploys, json)?;
+        return Ok(());
     }
+
+    let sha = sha.as_deref().map(crate::deploy_wait::resolve_sha).transpose()?;
+    let build = match &sha {
+        Some(_) => crate::deploy_wait::BuildWatch::discover(api_client, app_name).await,
+        None => None,
+    };
+    let (outcome, deploys) = crate::deploy_wait::wait(
+        api_client,
+        app_name,
+        sha.as_deref(),
+        limit,
+        timeout_secs,
+        build.as_ref(),
+    )
+    .await?;
+
+    print_deploys(&deploys, json)?;
+    let message = outcome.message(app_name, sha.as_deref(), timeout_secs);
+    match outcome.exit_code() {
+        0 if json => eprintln!("{message}"),
+        0 => println!("{message}"),
+        code => {
+            eprintln!("{message}");
+            std::process::exit(code);
+        }
+    }
+    Ok(())
+}
+
+fn print_deploys(deploys: &[crate::api_client::DeployListItem], json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&deploys.iter().map(|d| {
+            serde_json::json!({
+                "id": d.id,
+                "status": d.status,
+                "image": d.image,
+                "git_sha": d.git_sha,
+                "error": d.error,
+                "created_at": d.created_at,
+                "updated_at": d.updated_at,
+            })
+        }).collect::<Vec<_>>())?);
+    } else {
+        println!(
+            "{:<10} {:<12} {:<12} {:<40} {}",
+            "ID", "STATUS", "SHA", "IMAGE", "CREATED"
+        );
+        for d in deploys {
+            let short_id = d.id.chars().take(8).collect::<String>();
+            let short_sha = d
+                .git_sha
+                .as_deref()
+                .map(|s| s.chars().take(10).collect::<String>())
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "{:<10} {:<12} {:<12} {:<40} {}",
+                short_id, d.status, short_sha, d.image, d.created_at
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `lh create <app> [--repo owner/name] [--rotate-token] [--json]`: the

@@ -29,7 +29,13 @@ CONNECT_URL=$(echo "$INSTALL_OUT" | grep -oE 'lh connect https://[^ ]+' | awk '{
 [ -n "$CONNECT_URL" ] || { echo "FATAL: no connect URL in install output"; exit 1; }
 
 echo "==> 4/7 connect CLI + smoke"
-$LH connect "$CONNECT_URL" --token "$TOKEN"
+# `lh connect` verifies the URL + token, and the admin host's TLS
+# certificate can take a little while to be issued right after install.
+for i in $(seq 1 30); do
+  $LH connect "$CONNECT_URL" --token "$TOKEN" && break
+  [ "$i" = 30 ] && { echo "FATAL: could not connect to $CONNECT_URL"; exit 1; }
+  sleep 5
+done
 $LH status
 
 echo "==> 5/7 ensure hello repo exists and is current"
@@ -46,7 +52,9 @@ echo "==> 7/7 trigger deploy and wait"
 # `lh create` above pushed a workflow commit straight to the repo, so pull
 # before pushing again to avoid a non-fast-forward rejection.
 (cd "$TMP" && git pull --rebase origin main && git commit -qm "deploy $(date +%s)" --allow-empty && git push -q origin main)
-$LH deploys hello --wait --timeout 600
+# Wait for *this* commit's deploy: without --sha, the workflow commit's
+# deploy (triggered by `lh create`) could satisfy the wait instead.
+$LH deploys hello --wait --sha "$(git -C "$TMP" rev-parse HEAD)" --timeout 600
 for i in $(seq 1 30); do
   if curl -fsS --max-time 10 "https://hello.${DOMAIN}" | grep -q "hello from litehouse"; then
     echo "ACCEPTANCE PASSED: https://hello.${DOMAIN} is live"; exit 0

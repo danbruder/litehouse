@@ -1,3 +1,4 @@
+pub mod agent_guide;
 pub mod api;
 pub mod api_client;
 pub mod auth;
@@ -8,6 +9,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod deploy;
+pub mod deploy_wait;
 pub mod github;
 pub mod install;
 pub mod mcp;

@@ -225,3 +225,109 @@ mod tests {
         assert_eq!(opened, b"hunter2");
     }
 }
+
+/// Filename of the deploy workflow `lh create` commits into an app's repo.
+pub const DEPLOY_WORKFLOW_FILE: &str = "litehouse-deploy.yml";
+
+/// A GitHub Actions run of the litehouse deploy workflow.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WorkflowRun {
+    pub id: u64,
+    pub head_sha: String,
+    /// "queued", "in_progress", "completed", ...
+    pub status: String,
+    /// Set once `status == "completed"`: "success", "failure", "cancelled", ...
+    pub conclusion: Option<String>,
+    pub html_url: String,
+}
+
+impl WorkflowRun {
+    /// True once the run finished without succeeding — the image was never
+    /// built/pushed, or the deploy hook call failed, so no litehouse deploy
+    /// for this commit is coming.
+    pub fn failed(&self) -> bool {
+        self.status == "completed" && self.conclusion.as_deref() != Some("success")
+    }
+}
+
+/// The newest run of the litehouse deploy workflow for a commit whose sha
+/// starts with `sha_prefix` (short or full sha). `Ok(None)` when there is no
+/// such run yet, or the repo has no litehouse workflow.
+pub async fn deploy_run_for_sha(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    sha_prefix: &str,
+) -> Result<Option<WorkflowRun>> {
+    #[derive(serde::Deserialize)]
+    struct Runs {
+        workflow_runs: Vec<WorkflowRun>,
+    }
+
+    let url = format!(
+        "{}/repos/{}/{}/actions/workflows/{}/runs?per_page=30",
+        API, owner, repo, DEPLOY_WORKFLOW_FILE
+    );
+    let resp = client(token)?
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("listing deploy workflow runs for {}/{}", owner, repo))?;
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "listing deploy workflow runs for {}/{} failed ({}): {}",
+            owner,
+            repo,
+            status,
+            body
+        ));
+    }
+    let runs: Runs = resp.json().await.context("parsing workflow runs")?;
+    Ok(newest_run_for_sha(runs.workflow_runs, sha_prefix))
+}
+
+/// Runs come back newest first; pick the first whose head sha matches.
+fn newest_run_for_sha(runs: Vec<WorkflowRun>, sha_prefix: &str) -> Option<WorkflowRun> {
+    let prefix = sha_prefix.to_lowercase();
+    runs.into_iter()
+        .find(|r| r.head_sha.to_lowercase().starts_with(&prefix))
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::*;
+
+    fn run(id: u64, sha: &str, status: &str, conclusion: Option<&str>) -> WorkflowRun {
+        WorkflowRun {
+            id,
+            head_sha: sha.to_string(),
+            status: status.to_string(),
+            conclusion: conclusion.map(str::to_string),
+            html_url: format!("https://github.com/o/r/actions/runs/{id}"),
+        }
+    }
+
+    #[test]
+    fn picks_newest_run_matching_short_sha() {
+        let runs = vec![
+            run(3, "ffff000", "completed", Some("success")),
+            run(2, "abc1234def", "completed", Some("failure")),
+            run(1, "abc1234def", "completed", Some("success")),
+        ];
+        let found = newest_run_for_sha(runs, "ABC1234").unwrap();
+        assert_eq!(found.id, 2);
+        assert!(found.failed());
+    }
+
+    #[test]
+    fn in_progress_and_successful_runs_are_not_failed() {
+        assert!(!run(1, "a", "in_progress", None).failed());
+        assert!(!run(1, "a", "completed", Some("success")).failed());
+        assert!(run(1, "a", "completed", Some("cancelled")).failed());
+    }
+}
