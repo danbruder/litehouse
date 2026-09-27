@@ -107,7 +107,8 @@ cargo test
 # round-trips); they need a pinned Docker API version:
 DOCKER_API_VERSION=1.42 cargo test test_backup_roundtrip_minio -- --ignored --nocapture
 
-# Build for production (Linux musl target)
+# Build for production (Linux musl target; aarch64-linux-musl-gcc /
+# aarch64-unknown-linux-musl for an ARM server)
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 ```
 

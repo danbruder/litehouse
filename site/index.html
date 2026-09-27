@@ -579,6 +579,10 @@ HTTP/2 200</pre>
         <p>Every running app gets a fresh container once a night at 3am US Eastern: same image, clean process. Opt out per app with <code>lh env &lt;app&gt; LITEHOUSE_SKIP_NIGHTLY_RESTART true</code>.</p>
       </details>
       <details>
+        <summary>Does it run on ARM?</summary>
+        <p>Yes. x86_64 and aarch64 servers are both supported: Hetzner CAX, AWS Graviton, Oracle Ampere. <code>lh create</code> generates a workflow that builds your app's image for whatever CPU the server has, and a deploy refuses an image built for the wrong one instead of crashing your app.</p>
+      </details>
+      <details>
         <summary>How do I upgrade litehouse?</summary>
         <p><code>lh upgrade</code>. It pulls the new binary and server image and restarts the server container. Your apps keep running.</p>
       </details>

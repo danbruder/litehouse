@@ -38,7 +38,7 @@ cargo test
 # Run specific test
 cargo test test_run_function_happy_path
 
-# Build for production (Linux musl target)
+# Build for production (Linux musl target; use aarch64-* for an ARM server)
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 
 # Deploy to server (use dev-deploy.sh)
@@ -59,9 +59,10 @@ The v2 refactor (external builds via GHCR, push-to-deploy, daily S3 backups, sin
 - Single admin token (sha256 hash stored server-side); `lh connect <url> --token <TOKEN>` — no users/orgs/JWT
 - Daily backups (VACUUM INTO snapshots, tar.gz to S3, 14-day retention); `lh backup run` / `lh backup status --json`
 - Incremental blob backup: apps get `LITEHOUSE_BLOB_PATH=/data/blobs` and anything written there is backed up to its own S3 prefix (`blobs/{app_name}/...`, NOT nested under `apps/{app_name}/`) on an upload-once basis — unchanged files are never re-uploaded. Restored automatically as part of `lh restore --yes`. See `docs/superpowers/specs/2026-07-14-blob-backup-design.md`.
-- Nightly app restart: every running app is restarted once a night at 3am US Eastern time (best-effort maintenance, not a redeploy — same image, just a fresh container). An app can opt out via `lh env set <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`. Apps mid-deploy or otherwise locked are skipped for that night rather than delayed. See `docs/superpowers/specs/2026-07-15-nightly-app-restart-design.md`.
+- Nightly app restart: every running app is restarted once a night at 3am US Eastern time (best-effort maintenance, not a redeploy — same image, just a fresh container). An app can opt out via `lh env <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`. Apps mid-deploy or otherwise locked are skipped for that night rather than delayed. See `docs/superpowers/specs/2026-07-15-nightly-app-restart-design.md`.
 - Disaster recovery: `lh install --domain ...` on a fresh node → `lh connect` → `lh restore --yes` rebuilds state, apps, and volumes from GHCR + S3
 - Admin UI served from the same binary, cookie-authenticated with the admin token. It is a React SPA (`frontend/`) — the dashboard (`/`), app detail (`/apps/:name`), deploy detail, `/backups` and `/settings` — built once (never on the server) and its output committed into `src/ui/spa/`, embedded with `include_str!` like `htmx.min.js`/`styles.css`. Only `/login` is still server-rendered Askama HTML (`templates/`). Read `frontend/README.md` before touching the UI or the SPA-only API endpoints (`/api/apps/summary`, `/api/apps/:name/summary`, `/api/apps/:name/metrics`, `/api/apps/:name/restart`, `/api/backups/catalog`, `/api/metrics/server`, `/api/server/info`). **Changing anything under `frontend/src` requires `npm run build` and committing the regenerated `src/ui/spa/` output** — `cargo build` never runs npm.
+- ARM (aarch64) servers are supported alongside x86_64. The release workflow builds a static musl binary per arch on native runners (`ubuntu-latest` / `ubuntu-24.04-arm` — cross-compiling `aws-lc-sys` is painful) and pushes a multi-arch `litehouse-server` image (the Dockerfile picks `${TARGETARCH}/lh`). `GET /api/server/info` reports the Docker host `platform`; `lh create` renders the app's deploy workflow for it (arm64 builds under QEMU on GitHub's amd64 runners). The deploy engine rejects a pulled image whose architecture doesn't match the host *before* replacing the running container. Moving an app to a server of a different arch: re-run `lh create <app> --rotate-token` to regenerate its workflow, then push.
 - `e2e/acceptance.sh` and `e2e/dr-drill.sh` automate the full push-to-deploy and disaster-recovery flows against a real droplet; `examples/hello` is the reference app used by both
 
 ### Key Components
@@ -244,13 +245,13 @@ docker restart litehouse-server
 - If containers won't start: Check Docker socket is accessible at `/var/run/docker.sock`
 - If backups are missing: `lh backup status --json` shows the last successful date and the last report; a backup day is only stamped when every app backs up with zero failures
 - If disaster recovery fails: confirm `lh config s3 get` / `lh config ghcr get` are populated on the fresh install before running `lh restore --yes`
-- If an app restarted unexpectedly overnight: check `docker logs litehouse-server` for `"nightly app restart complete"` around 3am Eastern — it logs which apps were restarted, skipped (and why), or failed. Opt an app out with `lh env set <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`.
+- If an app restarted unexpectedly overnight: check `docker logs litehouse-server` for `"nightly app restart complete"` around 3am Eastern — it logs which apps were restarted, skipped (and why), or failed. Opt an app out with `lh env <app> LITEHOUSE_SKIP_NIGHTLY_RESTART true`.
 
 ## Known Issues & TODOs
 
 See VISION.md for complete roadmap. Current status:
 - v2 (external builds via GHCR, push-to-deploy, daily S3 backups, single-token auth, admin UI, DR) - ✅ SHIPPED
-- Phase 3 (Cloudflare DNS automation, custom domains, multi-arch server image) - Next priority
+- Phase 3 (Cloudflare DNS automation, custom domains) - Next priority
 
 ## Development Context
 

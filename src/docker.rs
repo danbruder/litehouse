@@ -18,6 +18,8 @@ pub enum DockerError {
     ListImagesError(String),
     #[error("Pull error: {0}")]
     PullError(String),
+    #[error("{0}")]
+    PlatformMismatch(String),
     #[error("Bollard error: {0}")]
     BollardError(#[from] bollard::errors::Error),
     #[error("IO error: {0}")]
@@ -515,6 +517,52 @@ pub async fn pull(docker: &Docker, image: &str, registry_token: Option<&str>) ->
     Ok(())
 }
 
+/// Normalise a Docker/Go architecture name (`uname -m` spellings included)
+/// to the GOARCH form Docker uses in image manifests (`amd64`, `arm64`).
+fn normalize_arch(arch: &str) -> String {
+    match arch {
+        "x86_64" => "amd64".to_string(),
+        "aarch64" => "arm64".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// The Docker host's platform as `os/arch` (e.g. `linux/arm64`), as reported
+/// by the daemon. This is the platform app images must be built for; `None`
+/// if the daemon doesn't say.
+#[instrument(skip(docker))]
+pub async fn host_platform(docker: &Docker) -> Option<String> {
+    let version = docker.version().await.ok()?;
+    let os = version.os.unwrap_or_else(|| "linux".to_string());
+    let arch = normalize_arch(&version.arch?);
+    Some(format!("{os}/{arch}"))
+}
+
+/// Fail if a pulled `image` was built for a different CPU architecture than
+/// the Docker host. Docker happily pulls a single-arch image for the wrong
+/// platform (it only warns), and the container then dies at start with
+/// "exec format error" — after the previous container has already been
+/// removed. Checking right after the pull keeps the old deploy running.
+#[instrument(skip(docker))]
+pub async fn ensure_image_matches_host(docker: &Docker, image: &str) -> Result<()> {
+    let Some(host) = host_platform(docker).await else {
+        return Ok(());
+    };
+    let inspect = docker.inspect_image(image).await?;
+    let Some(image_arch) = inspect.architecture.as_deref().map(normalize_arch) else {
+        return Ok(());
+    };
+    let host_arch = host.rsplit('/').next().unwrap_or_default();
+    if image_arch != host_arch {
+        return Err(DockerError::PlatformMismatch(format!(
+            "image {image} is built for {image_arch}, but this server is {host}. \
+             Rebuild it for {host} (re-run `lh create <app> --rotate-token` to \
+             regenerate the deploy workflow for this server's architecture)"
+        )));
+    }
+    Ok(())
+}
+
 /// Stop and remove the container for `app_name` (i.e. `{app_name}-container`),
 /// tolerating the case where it's already stopped or doesn't exist at all
 /// (e.g. an app's first deploy). Used by the deploy engine to unconditionally
@@ -776,6 +824,51 @@ mod tests {
     // name, etc.) don't start a real container and are unaffected, so they
     // keep using `alpine:latest`.
     const TEST_IMAGE: &str = "redis:7.4-alpine";
+
+    #[test]
+    fn normalize_arch_maps_uname_names_to_docker_names() {
+        assert_eq!(normalize_arch("x86_64"), "amd64");
+        assert_eq!(normalize_arch("aarch64"), "arm64");
+        assert_eq!(normalize_arch("arm64"), "arm64");
+        assert_eq!(normalize_arch("amd64"), "amd64");
+    }
+
+    /// Build a `FROM scratch` image for `platform` without touching a
+    /// registry, tagged `tag`.
+    fn build_scratch_image(tag: &str, platform: &str) -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::write(dir.path().join("marker"), "x")?;
+        std::fs::write(dir.path().join("Dockerfile"), "FROM scratch\nCOPY marker /marker\n")?;
+        let status = std::process::Command::new("docker")
+            .args(["build", "--platform", platform, "-t", tag])
+            .arg(dir.path())
+            .status()?;
+        anyhow::ensure!(status.success(), "docker build for {platform} failed");
+        Ok(())
+    }
+
+    // A single-arch image for the wrong CPU is rejected right after the pull
+    // (before the running container is replaced); a matching one passes.
+    #[tokio::test]
+    async fn test_ensure_image_matches_host() -> Result<()> {
+        let docker = connect().await?;
+        let host = host_platform(&docker).await.expect("daemon reports a platform");
+        let other = if host.ends_with("/amd64") { "linux/arm64" } else { "linux/amd64" };
+
+        build_scratch_image("lh-arch-test:host", &host)?;
+        build_scratch_image("lh-arch-test:other", other)?;
+
+        assert!(ensure_image_matches_host(&docker, "lh-arch-test:host").await.is_ok());
+        let err = ensure_image_matches_host(&docker, "lh-arch-test:other")
+            .await
+            .expect_err("wrong-arch image must be rejected");
+        assert!(err.to_string().contains(&host), "error names the host platform: {err}");
+
+        let _ = std::process::Command::new("docker")
+            .args(["rmi", "lh-arch-test:host", "lh-arch-test:other"])
+            .output();
+        Ok(())
+    }
 
     // Test the happy path: run function creates and starts a container, then verify it's running
     #[tokio::test]

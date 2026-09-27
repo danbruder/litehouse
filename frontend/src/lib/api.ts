@@ -86,6 +86,7 @@ export interface ServerInfo {
   domain: string | null;
   admin_host: string | null;
   docker_version: string | null;
+  platform?: string | null;
   apps_total: number;
   apps_running: number;
   local_dev: boolean;

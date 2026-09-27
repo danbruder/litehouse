@@ -105,6 +105,7 @@ async fn do_deploy(
         .await
         .context("failed to pull image")?;
     db::deploy::append_log(pool, deploy_id, "Image pulled").await?;
+    docker::ensure_image_matches_host(docker_conn, image).await?;
 
     let exposed_port = docker::get_exposed_port(image)
         .await
