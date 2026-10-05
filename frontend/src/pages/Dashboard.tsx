@@ -7,6 +7,7 @@ import { api } from "../lib/api";
 import { relativeTime, absoluteTime, formatBytes } from "../lib/format";
 import { AppCard } from "../components/AppCard";
 import { Sparkline } from "../components/Sparkline";
+import { bucketCpu, cpuHeading } from "../lib/metrics";
 import { Button } from "../components/Button";
 import { ErrorNote } from "../components/ErrorNote";
 
@@ -94,7 +95,6 @@ function ServerResourcesCard() {
     samples.map((s) => ({ value: pick(s), ts: s.ts }));
   const latest = (pick: (s: (typeof samples)[number]) => number | null) =>
     [...samples].reverse().map(pick).find((v) => v != null) ?? null;
-  const latestCpu = latest((s) => s.cpu_pct);
   const latestMem = latest((s) => s.mem_bytes);
   const latestDisk = latest((s) => s.disk_bytes);
 
@@ -105,11 +105,12 @@ function ServerResourcesCard() {
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
         <div>
           <h4 className="mb-1 text-xs text-ink-2">
-            CPU <span className="muted">{latestCpu != null ? `${latestCpu.toFixed(1)}% · 24h` : "24h"}</span>
+            CPU <span className="muted">{cpuHeading(samples)}</span>
           </h4>
           <Sparkline
-            data={series((s) => s.cpu_pct)}
+            data={bucketCpu(samples)}
             color="var(--color-signal)"
+            max={100}
             format={(v) => `${v.toFixed(1)}%`}
           />
         </div>

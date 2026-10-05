@@ -10,6 +10,7 @@ import { Button } from "../components/Button";
 import { ConfirmButton } from "../components/ConfirmButton";
 import { ErrorNote } from "../components/ErrorNote";
 import { Sparkline } from "../components/Sparkline";
+import { bucketCpu, cpuHeading } from "../lib/metrics";
 import { LogTerminal } from "../components/LogTerminal";
 
 function useAppAction(name: string, action: "start" | "stop" | "restart") {
@@ -492,13 +493,12 @@ export function AppDetail() {
             <div>
               <h4>
                 CPU{" "}
-                <span className="muted">
-                  {latest((s) => s.cpu_pct) != null ? `${latest((s) => s.cpu_pct)!.toFixed(1)}% · 24h` : "24h"}
-                </span>
+                <span className="muted">{cpuHeading(samples)}</span>
               </h4>
               <Sparkline
-                data={series((s) => s.cpu_pct)}
+                data={bucketCpu(samples)}
                 color="var(--color-signal)"
+                max={100}
                 height={70}
                 format={(v) => `${v.toFixed(1)}%`}
               />
@@ -537,9 +537,47 @@ export function AppDetail() {
             Deploys <span className="muted">last {deploys?.length ?? 0}</span>
           </h3>
           {deploysError && <ErrorNote error={deploysError} what="deploys" />}
-          {/* At phone width the five fixed-percentage columns collide; let the
-              table keep its proportions and scroll instead of overlapping. */}
-          <div className="overflow-x-auto">
+          {/* At phone width the five-column table only fits by scrolling
+              sideways, and its status column still clips "succeeded" — so
+              phones get one stacked row per deploy instead. */}
+          <ul className="m-0 list-none p-0 sm:hidden">
+            {!deploys || deploys.length === 0 ? (
+              <li className="muted">no deploys yet</li>
+            ) : (
+              deploys.map((d) => (
+                <li key={d.id} className="border-0 border-b border-solid border-rule py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <Link to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}>
+                      <DeployBadge status={d.status} />
+                    </Link>
+                    <span className="text-xs text-ink-3" title={absoluteTime(d.created_at)}>
+                      {d.git_sha && summary.repo ? (
+                        <a
+                          href={`https://github.com/${summary.repo}/commit/${d.git_sha}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {d.git_sha.slice(0, 7)}
+                        </a>
+                      ) : (
+                        d.git_sha?.slice(0, 7)
+                      )}{" "}
+                      · {relativeTime(d.created_at)}
+                    </span>
+                  </div>
+                  <Link
+                    to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}
+                    className="mt-1 block truncate text-xs text-ink-2"
+                    title={d.image}
+                  >
+                    {d.image}
+                  </Link>
+                  {d.error && <div className="deploy-error-body mt-1 text-xs text-bad">{d.error}</div>}
+                </li>
+              ))
+            )}
+          </ul>
+          <div className="hidden overflow-x-auto sm:block">
           <table className="deploys" style={{ minWidth: "38rem" }}>
             <colgroup>
               <col className="col-status" />

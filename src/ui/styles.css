@@ -196,7 +196,10 @@ main > p:first-child a {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, …), not bare 1fr: a 1fr track never shrinks below its
+     longest unbreakable word, so one digest-pinned image
+     (`…@sha256:<64 hex>`) widened every card past a phone's viewport. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
   gap: 1.5rem;
   margin: 1.75rem 0 1.5rem;
@@ -208,7 +211,7 @@ main > p:first-child a {
 
 @media (max-width: 760px) {
   .detail-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -238,6 +241,11 @@ main > p:first-child a {
 .card p {
   margin: 0.4rem 0;
   color: var(--color-ink-2);
+}
+
+.card code,
+.card a {
+  overflow-wrap: anywhere;
 }
 
 .card p strong {
