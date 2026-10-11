@@ -4,6 +4,7 @@ use tracing::{info, instrument};
 
 use crate::backup::{BLOB_MOUNT_PATH, BLOB_PATH_ENV_VAR};
 use crate::caddy;
+use crate::storage::{DEFAULT_STORAGE_URL, STORAGE_TOKEN_ENV_VAR, STORAGE_URL_ENV_VAR};
 use crate::db;
 use crate::docker;
 use crate::models::{App, AppState, EnvVar};
@@ -66,6 +67,22 @@ fn ensure_blob_path_env_var(mut env_vars: Vec<EnvVar>, app_id: &str) -> Vec<EnvV
     env_vars
 }
 
+/// Hand every app the storage API URL and its own storage token (see
+/// `crate::storage`), so it can keep objects in litehouse's S3 bucket without
+/// the S3 credentials. Like the blob path, an explicit `lh env set` value for
+/// either key wins.
+fn ensure_storage_env_vars(mut env_vars: Vec<EnvVar>, app_id: &str, token: &str) -> Vec<EnvVar> {
+    for (key, value) in [
+        (STORAGE_URL_ENV_VAR, DEFAULT_STORAGE_URL),
+        (STORAGE_TOKEN_ENV_VAR, token),
+    ] {
+        if !env_vars.iter().any(|e| e.key == key) {
+            env_vars.push(EnvVar::new(app_id, key, value));
+        }
+    }
+    env_vars
+}
+
 /// Create (or recreate) and start the container for `app` running `image_tag`,
 /// including volume provisioning and environment variables. Does not touch
 /// the app's database record or Caddy — callers are responsible for both,
@@ -90,6 +107,10 @@ pub async fn start_container(
     tracing::info!("Found {} environment variables", env_vars.len());
     let memory_limit_mb = resolve_memory_limit_mb(&env_vars);
     let env_vars = ensure_blob_path_env_var(env_vars, &app.id);
+    let storage_token = crate::storage::token_for_app(pool, app)
+        .await
+        .map_err(|e| StartError::DatabaseError(e.to_string()))?;
+    let env_vars = ensure_storage_env_vars(env_vars, &app.id, &storage_token);
 
     // Create app volume if it doesn't exist (idempotent)
     let volume_name = crate::volume::create_app_volume(docker, &app.id)
@@ -224,6 +245,26 @@ mod tests {
         let env_vars = ensure_blob_path_env_var(vec![explicit], "app-1");
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars[0].value, "/data/custom-blobs");
+    }
+
+    #[test]
+    fn ensure_storage_env_vars_adds_url_and_token() {
+        let env_vars = ensure_storage_env_vars(vec![], "app-1", "lhs_tok");
+        assert_eq!(env_vars.len(), 2);
+        assert!(env_vars
+            .iter()
+            .any(|e| e.key == "LITEHOUSE_STORAGE_URL" && e.value == "http://litehouse-server:3030/api/storage"));
+        assert!(env_vars.iter().any(|e| e.key == "LITEHOUSE_STORAGE_TOKEN" && e.value == "lhs_tok"));
+    }
+
+    #[test]
+    fn ensure_storage_env_vars_respects_explicit_override() {
+        let explicit = EnvVar::new("app-1", "LITEHOUSE_STORAGE_URL", "http://example.test/api/storage");
+        let env_vars = ensure_storage_env_vars(vec![explicit], "app-1", "lhs_tok");
+        assert_eq!(env_vars.len(), 2);
+        assert!(env_vars
+            .iter()
+            .any(|e| e.key == "LITEHOUSE_STORAGE_URL" && e.value == "http://example.test/api/storage"));
     }
 
     #[test]

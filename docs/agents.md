@@ -62,6 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cl
 | Persistent data only under `/data` | `/data` is a volume that survives deploys and restarts. Everything else in the container is thrown away on each deploy and on the nightly restart. |
 | SQLite in `/data` | Use `/data/app.db` (an empty one is created for you). Every `*.db`, `*.sqlite` and `*.sqlite3` under `/data` is snapshotted nightly with `VACUUM INTO`. Other files in `/data` go into the same nightly tarball. |
 | Uploads and large files in `$LITEHOUSE_BLOB_PATH` | Set to `/data/blobs`. Each file there is uploaded to S3 once, never re-uploaded. |
+| Objects in S3 via `$LITEHOUSE_STORAGE_URL` (optional) | When the server has S3 configured, the app can store objects in litehouse's bucket under its own namespace, without S3 credentials. See "Object storage" below. |
 | Fit in 256 MB of RAM | That's the default limit. Raise it with `lh env <app> LITEHOUSE_MEMORY_LIMIT_MB 512`. |
 | Configuration through env vars | `lh env <app> KEY VALUE`, then `lh restart <app>`. Env changes apply to the next container start. |
 | App name is a DNS label | 1–63 lowercase letters, digits and hyphens. It becomes the subdomain. |
@@ -84,6 +85,33 @@ CMD ["node", "server.js"]
 
 An optional health check lets Caddy route around a container that's
 starting up: `lh health-check set <app> /healthz`.
+
+### Object storage
+
+Every app container gets `LITEHOUSE_STORAGE_URL`
+(`http://litehouse-server:3030/api/storage`) and its own
+`LITEHOUSE_STORAGE_TOKEN`. Send the token as `Authorization: Bearer
+$LITEHOUSE_STORAGE_TOKEN`. Objects live in the server's S3 bucket under
+`storage/<app>/`, apart from backups, and are never pruned or restored by
+litehouse: S3 is their only copy.
+
+| Request | Does |
+|---|---|
+| `PUT $LITEHOUSE_STORAGE_URL/objects/<key>` | Uploads the request body, sent through the server. Pass `Content-Type` to keep it. |
+| `GET $LITEHOUSE_STORAGE_URL/objects/<key>` | Downloads the object, or 404. |
+| `DELETE $LITEHOUSE_STORAGE_URL/objects/<key>` | Deletes it. Returns 204 even if it was already gone. |
+| `GET $LITEHOUSE_STORAGE_URL/objects?prefix=<p>` | Returns `{"objects": [{"key", "size", "last_modified"}]}` with app-relative keys. |
+| `POST $LITEHOUSE_STORAGE_URL/presign` | Body `{"key", "method": "PUT"\|"GET"\|"DELETE", "expires_in_secs"?, "content_type"?}`. Returns `{"url", "method", "headers", ...}`: a URL that goes straight to S3, for large files or browser uploads. Send the returned `headers` with it. Expiry defaults to 3600 seconds, at most 7 days. |
+
+Keys are relative paths like `avatars/42.png`: no leading or trailing `/`,
+no `//`, `.` or `..` segments, at most 1024 bytes. The API returns 503
+until the server has S3 configured (`lh config s3 set`).
+
+```sh
+curl -X PUT -H "Authorization: Bearer $LITEHOUSE_STORAGE_TOKEN" \
+  -H "Content-Type: image/png" --data-binary @42.png \
+  "$LITEHOUSE_STORAGE_URL/objects/avatars/42.png"
+```
 
 ## 3. First deploy
 
