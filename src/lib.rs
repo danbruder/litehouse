@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod models;
 pub mod provision;
 pub mod restart;
+pub mod storage;
 pub mod docker;
 pub mod ui;
 pub mod volume;

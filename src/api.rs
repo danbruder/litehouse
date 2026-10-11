@@ -76,6 +76,14 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
 
     let public_routes = Router::new()
         .route("/hooks/deploy", post(hook_deploy))
+        // App object storage, authenticated per app by its storage token
+        // (LITEHOUSE_STORAGE_TOKEN) — see `crate::storage`.
+        .route("/storage/presign", post(storage_presign))
+        .route("/storage/objects", get(storage_list))
+        .route(
+            "/storage/objects/*key",
+            get(storage_get).put(storage_put).delete(storage_delete),
+        )
         .with_state(state.clone());
 
     Router::new()
@@ -695,6 +703,197 @@ async fn hook_deploy(
 fn hook_authorized(token: &str, app: Option<&crate::models::App>) -> bool {
     app.map(|a| crate::deploy::verify_deploy_token(token, a.deploy_token_hash.as_deref()))
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------
+// App object storage (`/api/storage/...`)
+// ---------------------------------------------------------------------
+
+fn storage_error(status: StatusCode, msg: impl Into<String>) -> axum::response::Response {
+    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+}
+
+/// Authenticate the app's storage token and open its namespaced view of the
+/// bucket. Like the deploy hook, every auth failure is the same 401.
+async fn storage_for_request(
+    state: &Arc<RwLock<AppState>>,
+    headers: &axum::http::HeaderMap,
+) -> Result<crate::storage::AppStorage, axum::response::Response> {
+    let pool = state.read().await.db_pool.clone();
+    let unauthorized = || storage_error(StatusCode::UNAUTHORIZED, "unauthorized");
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or_else(unauthorized)?;
+    let app = match crate::storage::authenticate(&pool, token).await {
+        Ok(Some(app)) => app,
+        Ok(None) => return Err(unauthorized()),
+        Err(e) => {
+            tracing::error!("storage auth failed: {e:#}");
+            return Err(storage_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error"));
+        }
+    };
+    match db_system_config::get_s3_config(&pool).await {
+        Ok(Some(cfg)) => Ok(crate::storage::AppStorage::new(&cfg, &app.name)),
+        Ok(None) => Err(storage_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "S3 is not configured on this litehouse server (lh config s3 set)",
+        )),
+        Err(e) => {
+            tracing::error!("failed to load S3 config: {e:#}");
+            Err(storage_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error"))
+        }
+    }
+}
+
+fn storage_backend_error(e: anyhow::Error) -> axum::response::Response {
+    tracing::error!("app storage S3 error: {e:#}");
+    storage_error(StatusCode::BAD_GATEWAY, "storage backend error")
+}
+
+fn request_content_type(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+}
+
+#[derive(Debug, Deserialize)]
+struct StoragePresignRequest {
+    key: String,
+    method: crate::storage::PresignMethod,
+    expires_in_secs: Option<u64>,
+    /// PUT only: signed into the URL, so the uploader must send the same
+    /// `Content-Type`.
+    content_type: Option<String>,
+}
+
+/// `POST /api/storage/presign` — a presigned S3 URL for one object in the
+/// caller's namespace, so large bodies (or browser uploads) go straight to
+/// S3 instead of through the server.
+#[instrument(skip(state, headers, req))]
+async fn storage_presign(
+    State(state): State<Arc<RwLock<AppState>>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<StoragePresignRequest>,
+) -> impl IntoResponse {
+    let storage = match storage_for_request(&state, &headers).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    if let Err(msg) = crate::storage::validate_object_key(&req.key) {
+        return storage_error(StatusCode::BAD_REQUEST, msg);
+    }
+    let expires = req
+        .expires_in_secs
+        .unwrap_or(crate::storage::DEFAULT_PRESIGN_EXPIRES_SECS);
+    if expires == 0 || expires > crate::storage::MAX_PRESIGN_EXPIRES_SECS {
+        return storage_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "expires_in_secs must be between 1 and {}",
+                crate::storage::MAX_PRESIGN_EXPIRES_SECS
+            ),
+        );
+    }
+    match storage
+        .presign(req.method, &req.key, expires, req.content_type.as_deref())
+        .await
+    {
+        Ok(presigned) => Json(presigned).into_response(),
+        Err(e) => storage_backend_error(e),
+    }
+}
+
+/// `GET /api/storage/objects?prefix=...` — list the caller's objects
+/// (app-relative keys).
+#[instrument(skip(state, headers))]
+async fn storage_list(
+    State(state): State<Arc<RwLock<AppState>>>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let storage = match storage_for_request(&state, &headers).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    let prefix = params.get("prefix").map(String::as_str).unwrap_or("");
+    if let Err(msg) = crate::storage::validate_list_prefix(prefix) {
+        return storage_error(StatusCode::BAD_REQUEST, msg);
+    }
+    match storage.list(prefix).await {
+        Ok(objects) => Json(serde_json::json!({ "objects": objects })).into_response(),
+        Err(e) => storage_backend_error(e),
+    }
+}
+
+/// `PUT /api/storage/objects/{key}` — upload the request body, proxied
+/// through the server. Fine for small objects; use `presign` for big ones.
+#[instrument(skip(state, headers, body))]
+async fn storage_put(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(key): Path<String>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let storage = match storage_for_request(&state, &headers).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    if let Err(msg) = crate::storage::validate_object_key(&key) {
+        return storage_error(StatusCode::BAD_REQUEST, msg);
+    }
+    let size = body.len();
+    match storage.put(&key, body, request_content_type(&headers)).await {
+        Ok(()) => Json(serde_json::json!({ "key": key, "size": size })).into_response(),
+        Err(e) => storage_backend_error(e),
+    }
+}
+
+/// `GET /api/storage/objects/{key}` — download one object.
+#[instrument(skip(state, headers))]
+async fn storage_get(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(key): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let storage = match storage_for_request(&state, &headers).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    if let Err(msg) = crate::storage::validate_object_key(&key) {
+        return storage_error(StatusCode::BAD_REQUEST, msg);
+    }
+    match storage.get(&key).await {
+        Ok(Some(obj)) => {
+            let content_type = obj
+                .content_type
+                .unwrap_or_else(|| "application/octet-stream".to_string());
+            ([(axum::http::header::CONTENT_TYPE, content_type)], obj.bytes).into_response()
+        }
+        Ok(None) => storage_error(StatusCode::NOT_FOUND, "not found"),
+        Err(e) => storage_backend_error(e),
+    }
+}
+
+/// `DELETE /api/storage/objects/{key}` — idempotent.
+#[instrument(skip(state, headers))]
+async fn storage_delete(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Path(key): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let storage = match storage_for_request(&state, &headers).await {
+        Ok(s) => s,
+        Err(resp) => return resp,
+    };
+    if let Err(msg) = crate::storage::validate_object_key(&key) {
+        return storage_error(StatusCode::BAD_REQUEST, msg);
+    }
+    match storage.delete(&key).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => storage_backend_error(e),
+    }
 }
 
 /// Uniform 500 mapping for internal errors — never echoes anything sensitive.
@@ -1662,5 +1861,248 @@ async fn get_server_metrics(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_api_tests {
+    use super::*;
+    use crate::db::test::get_test_pool;
+    use crate::models::App;
+    use axum::body::Body;
+    use axum::http::{header, Method, Request};
+    use tower::ServiceExt;
+
+    async fn test_state() -> Arc<RwLock<AppState>> {
+        Arc::new(RwLock::new(AppState {
+            db_pool: get_test_pool().await,
+            docker: crate::docker::connect().await.expect("connect to docker"),
+            admin_token_hash: crate::auth::hash_token("admin"),
+            server_config: ServerConfig::default(),
+            app_locks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }))
+    }
+
+    async fn send(
+        state: &Arc<RwLock<AppState>>,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Body,
+    ) -> (StatusCode, Bytes) {
+        let mut req = Request::builder().method(method).uri(uri);
+        if let Some(t) = token {
+            req = req.header(header::AUTHORIZATION, format!("Bearer {t}"));
+        }
+        if uri.ends_with("/presign") {
+            req = req.header(header::CONTENT_TYPE, "application/json");
+        }
+        let resp = create_api_router(state.clone())
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        (status, hyper::body::to_bytes(resp.into_body()).await.unwrap())
+    }
+
+    async fn app_and_token(state: &Arc<RwLock<AppState>>, name: &str) -> (App, String) {
+        let pool = state.read().await.db_pool.clone();
+        let app = App::new(name).unwrap();
+        db::app::save(&pool, &app).await.unwrap();
+        let token = crate::storage::token_for_app(&pool, &app).await.unwrap();
+        (app, token)
+    }
+
+    #[tokio::test]
+    async fn storage_rejects_missing_and_bad_tokens_uniformly() {
+        let state = test_state().await;
+        let (app, token) = app_and_token(&state, "store-auth").await;
+
+        let (s, _) = send(&state, Method::GET, "/storage/objects", None, Body::empty()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // The admin token is not a storage token.
+        let (s, _) = send(&state, Method::GET, "/storage/objects", Some("admin"), Body::empty()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+        // A token minted with a different secret is rejected.
+        let forged = crate::storage::mint_token("not-the-secret", &app.id);
+        let (s, _) = send(&state, Method::GET, "/storage/objects", Some(&forged), Body::empty()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+
+        // A deleted app's token stops working.
+        let pool = state.read().await.db_pool.clone();
+        db::app::delete_by_app_id(&pool, &app.id).await.unwrap();
+        let (s, _) = send(&state, Method::GET, "/storage/objects", Some(&token), Body::empty()).await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn storage_is_unavailable_without_s3_config() {
+        let state = test_state().await;
+        let (_, token) = app_and_token(&state, "store-nos3").await;
+        let (s, _) = send(&state, Method::GET, "/storage/objects", Some(&token), Body::empty()).await;
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// End to end against a real S3 API: two apps share the bucket but only
+    /// see their own `storage/{app}/` namespace, and nothing lands under the
+    /// backup roots.
+    ///
+    /// Uses `LITEHOUSE_TEST_S3_ENDPOINT` (minioadmin/minioadmin credentials)
+    /// when set, otherwise starts MinIO in Docker. Run with:
+    ///   DOCKER_API_VERSION=1.42 cargo test test_app_storage_roundtrip -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_app_storage_roundtrip() {
+        let minio_container = "litehouse-storage-test-minio";
+        let endpoint = match std::env::var("LITEHOUSE_TEST_S3_ENDPOINT") {
+            Ok(e) => e,
+            Err(_) => {
+                let _ = std::process::Command::new("docker").args(["rm", "-f", minio_container]).output();
+                let status = std::process::Command::new("docker")
+                    .args([
+                        "run", "-d", "--rm", "--name", minio_container, "-p", "19001:9000",
+                        "-e", "MINIO_ROOT_USER=minioadmin", "-e", "MINIO_ROOT_PASSWORD=minioadmin",
+                        "minio/minio", "server", "/data",
+                    ])
+                    .status()
+                    .expect("start minio");
+                assert!(status.success(), "failed to start minio container");
+                for _ in 0..60 {
+                    if std::net::TcpStream::connect(("127.0.0.1", 19001)).is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                "http://localhost:19001".to_string()
+            }
+        };
+
+        let state = test_state().await;
+        let pool = state.read().await.db_pool.clone();
+        let s3_config = S3Config {
+            access_key_id: "minioadmin".to_string(),
+            secret_access_key: "minioadmin".to_string(),
+            bucket: "litehouse-storage-test".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint: Some(endpoint),
+            path_prefix: Some("lh".to_string()),
+        };
+        let client = crate::backup::s3_client(&s3_config);
+        let _ = client.create_bucket().bucket(&s3_config.bucket).send().await;
+        db_system_config::save_s3_config(&pool, &SystemConfig::new_s3_config(&s3_config))
+            .await
+            .unwrap();
+
+        let (_, token_a) = app_and_token(&state, "store-a").await;
+        let (_, token_b) = app_and_token(&state, "store-b").await;
+
+        // Proxied upload + download.
+        let (s, _) = send(
+            &state,
+            Method::PUT,
+            "/storage/objects/avatars/1.txt",
+            Some(&token_a),
+            Body::from("hello from a"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let (s, body) =
+            send(&state, Method::GET, "/storage/objects/avatars/1.txt", Some(&token_a), Body::empty()).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(&body[..], b"hello from a");
+
+        // App B can't see A's object.
+        let (s, _) =
+            send(&state, Method::GET, "/storage/objects/avatars/1.txt", Some(&token_b), Body::empty()).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        let (_, body) = send(&state, Method::GET, "/storage/objects", Some(&token_b), Body::empty()).await;
+        let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed["objects"].as_array().unwrap().len(), 0);
+
+        // Escapes are rejected (axum percent-decodes the wildcard).
+        let (s, _) = send(
+            &state,
+            Method::PUT,
+            "/storage/objects/..%2F..%2Fapps%2Fstore-a%2F2099-01-01.tar.gz",
+            Some(&token_a),
+            Body::from("x"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // The object really lives under storage/{app}/, nowhere near backups.
+        let raw = client
+            .list_objects_v2()
+            .bucket(&s3_config.bucket)
+            .send()
+            .await
+            .unwrap();
+        let keys: Vec<&str> = raw.contents().iter().filter_map(|o| o.key()).collect();
+        assert_eq!(keys, vec!["lh/storage/store-a/avatars/1.txt"]);
+
+        // Listing returns app-relative keys, filtered by prefix.
+        let (_, body) =
+            send(&state, Method::GET, "/storage/objects?prefix=avatars/", Some(&token_a), Body::empty()).await;
+        let listed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed["objects"][0]["key"], "avatars/1.txt");
+        assert_eq!(listed["objects"][0]["size"], 12);
+
+        // Presigned PUT, then presigned GET, straight against S3.
+        let (s, body) = send(
+            &state,
+            Method::POST,
+            "/storage/presign",
+            Some(&token_a),
+            Body::from(r#"{"key":"docs/report.txt","method":"PUT","content_type":"text/plain"}"#),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let presigned: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(presigned["method"], "PUT");
+        let http = reqwest::Client::new();
+        let put = http
+            .put(presigned["url"].as_str().unwrap())
+            .header("content-type", "text/plain")
+            .body("presigned body")
+            .send()
+            .await
+            .unwrap();
+        assert!(put.status().is_success(), "presigned PUT failed: {}", put.status());
+
+        let (_, body) = send(
+            &state,
+            Method::POST,
+            "/storage/presign",
+            Some(&token_a),
+            Body::from(r#"{"key":"docs/report.txt","method":"GET","expires_in_secs":60}"#),
+        )
+        .await;
+        let presigned: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let got = http.get(presigned["url"].as_str().unwrap()).send().await.unwrap();
+        assert_eq!(got.text().await.unwrap(), "presigned body");
+
+        // Out-of-range expiry is rejected.
+        let (s, _) = send(
+            &state,
+            Method::POST,
+            "/storage/presign",
+            Some(&token_a),
+            Body::from(r#"{"key":"x","method":"GET","expires_in_secs":999999999}"#),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+
+        // Delete is idempotent.
+        for _ in 0..2 {
+            let (s, _) =
+                send(&state, Method::DELETE, "/storage/objects/avatars/1.txt", Some(&token_a), Body::empty())
+                    .await;
+            assert_eq!(s, StatusCode::NO_CONTENT);
+        }
+        let (s, _) =
+            send(&state, Method::GET, "/storage/objects/avatars/1.txt", Some(&token_a), Body::empty()).await;
+        assert_eq!(s, StatusCode::NOT_FOUND);
+
+        let _ = std::process::Command::new("docker").args(["rm", "-f", minio_container]).output();
     }
 }
