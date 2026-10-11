@@ -322,7 +322,15 @@ cd /data
 find . -path './blobs' -prune -o -name '*.db' -print -o -name '*.sqlite' -print -o -name '*.sqlite3' -print | while read -r f; do
   mkdir -p "/backup/dbs/$(dirname "$f")"
   esc=$(printf '%s' "$f" | sed "s/'/''/g")
-  sqlite3 "file:$f?mode=ro&immutable=0" "VACUUM INTO '/backup/dbs/$esc'"
+  if ! sqlite3 "file:$f?mode=ro&immutable=0" "VACUUM INTO '/backup/dbs/$esc'" 2>/dev/null; then
+    # A WAL-mode DB that nothing has open has no -shm file, and SQLite can't
+    # create one on the read-only mount: snapshot a private copy instead
+    # (with its -wal, should a crash have left one behind).
+    rm -rf "/backup/dbs/$f" /tmp/snap && mkdir -p /tmp/snap
+    cp "$f" /tmp/snap/db
+    if [ -e "$f-wal" ]; then cp "$f-wal" /tmp/snap/db-wal; fi
+    sqlite3 /tmp/snap/db "VACUUM INTO '/backup/dbs/$esc'"
+  fi
 done
 tar czf /backup/files.tar.gz --exclude='*.db' --exclude='*.sqlite' --exclude='*.sqlite3' --exclude='*-wal' --exclude='*-shm' --exclude='./blobs' .
 [ -d blobs ] && cp -a blobs /backup/blobs || true
@@ -2199,6 +2207,205 @@ mod integration_tests {
         );
 
         // Cleanup.
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &app_volume])
+            .output();
+        cleanup_minio(minio_container);
+    }
+
+    /// Run `script` under `sh` in a one-shot `keinos/sqlite3` container with
+    /// the app's data volume mounted at `/data`; returns (exit code, output).
+    async fn run_sqlite_script_in_volume(docker: &Docker, app_id: &str, script: &str) -> (i64, String) {
+        let app_volume = crate::volume::get_app_volume_name(app_id);
+        let container_name = "litehouse-backup-test-script";
+        let _ = docker
+            .remove_container(
+                container_name,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        let container_config = ContainerConfig {
+            image: Some("keinos/sqlite3:latest".to_string()),
+            entrypoint: Some(vec!["sh".to_string()]),
+            cmd: Some(vec!["-c".to_string(), script.to_string()]),
+            host_config: Some(HostConfig {
+                binds: Some(vec![format!("{}:/data", app_volume)]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let container = docker
+            .create_container(
+                Some(CreateContainerOptions {
+                    name: container_name.to_string(),
+                    platform: None,
+                }),
+                container_config,
+            )
+            .await
+            .expect("create script container");
+        docker
+            .start_container::<String>(&container.id, None)
+            .await
+            .expect("start script container");
+
+        let mut wait_stream = docker.wait_container(&container.id, None::<WaitContainerOptions<String>>);
+        while let Some(result) = wait_stream.next().await {
+            let _ = result;
+        }
+        let inspect = docker.inspect_container(&container.id, None).await.unwrap();
+        let exit_code = inspect.state.and_then(|s| s.exit_code).unwrap_or(-1);
+        let log = fetch_log_tail(docker, &container.id).await;
+
+        let _ = docker
+            .remove_container(
+                &container.id,
+                Some(RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        (exit_code, log)
+    }
+
+    /// An app that keeps one SQLite file per tenant in a subdirectory (the
+    /// layout gex uses: `control.db` indexing `orgs/<id>.db` files, plus the
+    /// first tenant's `gex.db`, all in WAL mode) must round-trip through
+    /// backup + restore with every file back at its original relative path,
+    /// including writes still sitting in a `-wal` file at backup time, and
+    /// WAL-mode files nothing has open (no `-shm`, which SQLite can't create
+    /// on the snapshot container's read-only `/data` mount).
+    ///
+    /// Requires Docker. Run with:
+    ///   DOCKER_API_VERSION=1.42 cargo test test_restore_nested_dbs_minio -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn test_restore_nested_dbs_minio() {
+        let db_dir = tempfile::tempdir().expect("tempdir for test db");
+        let pool = get_file_backed_test_pool(db_dir.path()).await;
+        let docker = crate::docker::connect().await.expect("connect to docker");
+
+        let minio_container = "litehouse-restore-nested-test-minio";
+        let minio_port = 19011u16;
+        cleanup_minio(minio_container);
+
+        let status = std::process::Command::new("docker")
+            .args([
+                "run", "-d", "--rm", "--name", minio_container,
+                "-p", &format!("{minio_port}:9000"),
+                "-e", "MINIO_ROOT_USER=minioadmin",
+                "-e", "MINIO_ROOT_PASSWORD=minioadmin",
+                "minio/minio", "server", "/data",
+            ])
+            .status()
+            .expect("start minio");
+        assert!(status.success(), "failed to start minio container");
+        wait_for_port(minio_port).await;
+
+        let s3_config = S3Config {
+            access_key_id: "minioadmin".to_string(),
+            secret_access_key: "minioadmin".to_string(),
+            bucket: "litehouse-restore-nested-test".to_string(),
+            region: "us-east-1".to_string(),
+            endpoint: Some(format!("http://localhost:{minio_port}")),
+            path_prefix: None,
+        };
+        let client = s3_client(&s3_config);
+        let _ = client.create_bucket().bucket(&s3_config.bucket).send().await;
+        let system_config = crate::models::SystemConfig::new_s3_config(&s3_config);
+        db::system_config::save_s3_config(&pool, &system_config)
+            .await
+            .expect("save s3 config");
+
+        let app_name = "restore-nested-app";
+        let container_name = format!("{app_name}-container");
+        let mut app = crate::models::App::new(app_name).expect("valid app name");
+        app.image = Some("nginx:alpine".to_string());
+        app.exposed_port = Some("80".to_string());
+        db::app::save(&pool, &app).await.expect("save app");
+
+        let app_volume = crate::volume::get_app_volume_name(&app.id);
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &app_volume])
+            .output();
+        crate::volume::create_app_volume(&docker, &app.id)
+            .await
+            .expect("create app volume");
+        crate::volume::init_app_volume(&docker, &app.id, &app_volume, None)
+            .await
+            .expect("init app volume permissions");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        // The last two rows of orgs/second.db are left in its -wal file: a
+        // second connection holds the DB open so the writer isn't the last
+        // to close (and so doesn't checkpoint), then it's killed outright.
+        let seed = r#"set -e
+cd /data
+sqlite3 gex.db "PRAGMA journal_mode=WAL; CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t DEFAULT VALUES;" >/dev/null
+sqlite3 control.db "PRAGMA journal_mode=WAL; CREATE TABLE orgs (id TEXT PRIMARY KEY, db_name TEXT NOT NULL); INSERT INTO orgs VALUES ('first', 'gex.db'), ('second', 'orgs/second.db');" >/dev/null
+mkdir orgs
+sqlite3 orgs/second.db "PRAGMA journal_mode=WAL; CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t DEFAULT VALUES;" >/dev/null
+(echo 'SELECT 1;'; sleep 30) | sqlite3 orgs/second.db >/dev/null &
+holder=$!
+sleep 1
+sqlite3 orgs/second.db "INSERT INTO t DEFAULT VALUES; INSERT INTO t DEFAULT VALUES;"
+kill -9 $holder
+test -s orgs/second.db-wal
+"#;
+        let (code, log) = run_sqlite_script_in_volume(&docker, &app.id, seed).await;
+        assert_eq!(code, 0, "seeding nested dbs failed (or left no -wal file): {log}");
+
+        let backup_report = run_backup(&pool, &docker).await.expect("run_backup");
+        assert!(
+            backup_report.succeeded.contains(&app_name.to_string()),
+            "expected {app_name} in succeeded, got {:?} (failed: {:?})",
+            backup_report.succeeded,
+            backup_report.failed
+        );
+
+        // Disaster: the app row, its volume and its container are gone.
+        db::app::delete_by_app_id(&pool, &app.id).await.expect("delete app row");
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &container_name])
+            .output();
+        let _ = std::process::Command::new("docker")
+            .args(["volume", "rm", "-f", &app_volume])
+            .output();
+
+        let restore_report = restore_all(&pool, &docker).await.expect("restore_all");
+        assert!(
+            restore_report.restored.contains(&app_name.to_string()),
+            "expected {app_name} in restored, got restored={:?} skipped={:?}",
+            restore_report.restored,
+            restore_report.skipped
+        );
+
+        // Every file is back at its relative path, and each org listed in
+        // control.db resolves to a restored file with its rows.
+        let check = r#"set -e
+cd /data
+echo "gex=$(sqlite3 gex.db 'SELECT COUNT(*) FROM t;')"
+echo "orgs=$(sqlite3 control.db 'SELECT group_concat(db_name) FROM (SELECT db_name FROM orgs ORDER BY id);')"
+echo "second=$(sqlite3 orgs/second.db 'SELECT COUNT(*) FROM t;')"
+"#;
+        let (code, log) = run_sqlite_script_in_volume(&docker, &app.id, check).await;
+        assert_eq!(code, 0, "reading restored dbs failed: {log}");
+        let lines: Vec<&str> = log.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["gex=1", "orgs=gex.db,orgs/second.db", "second=3"],
+            "restored volume contents"
+        );
+
         let _ = std::process::Command::new("docker")
             .args(["rm", "-f", &container_name])
             .output();
