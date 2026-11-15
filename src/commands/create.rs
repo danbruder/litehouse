@@ -25,7 +25,7 @@ pub type Result<T> = std::result::Result<T, AppCreateError>;
 /// Create a new app
 #[instrument(skip(pool))]
 pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
-    if let Some(_) = db::app::get_by_name(pool, app_name).await? {
+    if db::app::get_by_name(pool, app_name).await?.is_some() {
         return Err(AppCreateError::AppAlreadyExists(app_name.to_string()));
     }
 
@@ -36,7 +36,7 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> Result<()> {
     // Initialize default environment variables
     db::env_var::init_default_env_vars(pool, &app.id, &app.name)
         .await
-        .map_err(|e| AppCreateError::DatabaseError(e.into()))?;
+        .map_err(AppCreateError::DatabaseError)?;
 
     info!("Initialized default environment variables for app '{}'", app.name);
 

@@ -1,5 +1,7 @@
 # Litehouse
 
+[![CI](https://github.com/danbruder/litehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/danbruder/litehouse/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A self-hosted, single-server platform for SQLite apps. `lh create` once, `git push` to deploy forever — similar to Vercel, but it's your own box.
 
 The server never builds anything. GitHub Actions builds each app's image and pushes it to GHCR; the server just pulls, runs, routes, and backs up.
@@ -153,4 +155,4 @@ DATABASE_URL="sqlite:$PWD/.dev/litehouse.db" cargo sqlx prepare
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

@@ -145,6 +145,9 @@ pub async fn execute() -> Result<()> {
 }
 
 #[cfg(test)]
+// The env-var lock is a std Mutex held across awaits on purpose: these tests
+// mutate process-wide env vars, so they must run one at a time.
+#[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
@@ -213,8 +216,10 @@ mod tests {
     fn stored_token_reads_client_config() {
         let _guard = lock_env();
         let (_data, _config) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.github_token = Some("from-config".to_string());
+        let config = ClientConfig {
+            github_token: Some("from-config".to_string()),
+            ..Default::default()
+        };
         config.save().unwrap();
 
         assert_eq!(stored_token(), Some("from-config".to_string()));
@@ -235,8 +240,10 @@ mod tests {
         let _guard = lock_env();
         let _gh_disabled = GhCliDisabled::new();
         let (_data, _config) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.github_token = Some("from-config".to_string());
+        let config = ClientConfig {
+            github_token: Some("from-config".to_string()),
+            ..Default::default()
+        };
         config.save().unwrap();
 
         unsafe { std::env::set_var("GITHUB_TOKEN", "from-env") };
@@ -252,8 +259,10 @@ mod tests {
         let _gh_disabled = GhCliDisabled::new();
         let (_data, _config) = setup_test_dirs();
         unsafe { std::env::remove_var("GITHUB_TOKEN") };
-        let mut config = ClientConfig::default();
-        config.github_token = Some("from-config".to_string());
+        let config = ClientConfig {
+            github_token: Some("from-config".to_string()),
+            ..Default::default()
+        };
         config.save().unwrap();
 
         let token = resolve_github_token(false).await.unwrap();

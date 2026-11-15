@@ -48,51 +48,47 @@ pub fn run_command_with_timeout(
     let all_output_stderr = Arc::clone(&all_output);
 
     // Spawn thread to read stdout
-    let log_window_stdout = log_window.map(|pb| pb.clone());
+    let log_window_stdout = log_window.cloned();
     let stdout_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                // Add to all output
-                all_output_stdout.lock().unwrap().push(line.clone());
+        for line in reader.lines().map_while(Result::ok) {
+            // Add to all output
+            all_output_stdout.lock().unwrap().push(line.clone());
 
-                // Update log buffer (keep last 20 lines)
-                let mut buffer = log_buffer_stdout.lock().unwrap();
-                if buffer.len() >= 20 {
-                    buffer.pop_front();
-                }
-                buffer.push_back(line.clone());
+            // Update log buffer (keep last 20 lines)
+            let mut buffer = log_buffer_stdout.lock().unwrap();
+            if buffer.len() >= 20 {
+                buffer.pop_front();
+            }
+            buffer.push_back(line.clone());
 
-                // Update log window if provided
-                if let Some(ref pb) = log_window_stdout {
-                    let log_display: Vec<String> = buffer.iter().cloned().collect();
-                    pb.set_message(log_display.join("\n"));
-                }
+            // Update log window if provided
+            if let Some(ref pb) = log_window_stdout {
+                let log_display: Vec<String> = buffer.iter().cloned().collect();
+                pb.set_message(log_display.join("\n"));
             }
         }
     });
 
     // Spawn thread to read stderr
-    let log_window_stderr = log_window.map(|pb| pb.clone());
+    let log_window_stderr = log_window.cloned();
     let stderr_handle = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                // Add to all output
-                all_output_stderr.lock().unwrap().push(line.clone());
+        for line in reader.lines().map_while(Result::ok) {
+            // Add to all output
+            all_output_stderr.lock().unwrap().push(line.clone());
 
-                // Update log buffer (keep last 20 lines)
-                let mut buffer = log_buffer_stderr.lock().unwrap();
-                if buffer.len() >= 20 {
-                    buffer.pop_front();
-                }
-                buffer.push_back(format!("STDERR: {}", line));
+            // Update log buffer (keep last 20 lines)
+            let mut buffer = log_buffer_stderr.lock().unwrap();
+            if buffer.len() >= 20 {
+                buffer.pop_front();
+            }
+            buffer.push_back(format!("STDERR: {}", line));
 
-                // Update log window if provided
-                if let Some(ref pb) = log_window_stderr {
-                    let log_display: Vec<String> = buffer.iter().cloned().collect();
-                    pb.set_message(log_display.join("\n"));
-                }
+            // Update log window if provided
+            if let Some(ref pb) = log_window_stderr {
+                let log_display: Vec<String> = buffer.iter().cloned().collect();
+                pb.set_message(log_display.join("\n"));
             }
         }
     });

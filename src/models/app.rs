@@ -157,11 +157,11 @@ fn is_valid_app_name(name: &str) -> bool {
         return false;
     }
 
-    let valid_chars = name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    
 
-    valid_chars
+    name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 #[cfg(test)]

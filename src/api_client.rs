@@ -694,8 +694,10 @@ mod tests {
     #[test]
     fn test_get_auth_header_with_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.api_token = Some("test-token".to_string());
+        let config = ClientConfig {
+            api_token: Some("test-token".to_string()),
+            ..Default::default()
+        };
         config.save().unwrap();
 
         let client = ApiClient::new(config);
@@ -717,8 +719,10 @@ mod tests {
     #[test]
     fn test_get_api_token() {
         let (_data_dir, _config_dir) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.api_token = Some("test-token".to_string());
+        let config = ClientConfig {
+            api_token: Some("test-token".to_string()),
+            ..Default::default()
+        };
         config.save().unwrap();
 
         let client = ApiClient::new(config);

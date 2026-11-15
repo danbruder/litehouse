@@ -281,7 +281,7 @@ export function Settings() {
         <span className="panel-label">maintenance</span>
         <p className="muted">
           Every running app is restarted once a night at 3am US Eastern. Opt one out with{" "}
-          <code>lh env set &lt;app&gt; LITEHOUSE_SKIP_NIGHTLY_RESTART true</code>.
+          <code>lh env &lt;app&gt; LITEHOUSE_SKIP_NIGHTLY_RESTART true</code>.
         </p>
         <p className="muted">
           Disaster recovery stays a CLI operation on purpose: <code>lh restore --yes</code> rebuilds

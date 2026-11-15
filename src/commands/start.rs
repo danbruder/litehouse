@@ -39,7 +39,7 @@ impl From<crate::db::DatabaseError> for StartError {
     }
 }
 
-/// Env var an app can set (via `lh env set`) to override its container's
+/// Env var an app can set (via `lh env`) to override its container's
 /// memory cap in megabytes. See `docker::DEFAULT_APP_MEMORY_LIMIT_MB` for
 /// the default applied when this isn't set (or is malformed).
 pub const MEMORY_LIMIT_ENV_VAR: &str = "LITEHOUSE_MEMORY_LIMIT_MB";
@@ -59,7 +59,7 @@ fn resolve_memory_limit_mb(env_vars: &[EnvVar]) -> i64 {
 /// Give every app a stable place to write incrementally-backed-up blobs
 /// (see `backup` module docs and `docs/superpowers/specs/2026-07-14-blob-backup-design.md`)
 /// without hardcoding the path. Only appends the default if the app hasn't
-/// explicitly set its own value for this key via `lh env set`.
+/// explicitly set its own value for this key via `lh env`.
 fn ensure_blob_path_env_var(mut env_vars: Vec<EnvVar>, app_id: &str) -> Vec<EnvVar> {
     if !env_vars.iter().any(|e| e.key == BLOB_PATH_ENV_VAR) {
         env_vars.push(EnvVar::new(app_id, BLOB_PATH_ENV_VAR, BLOB_MOUNT_PATH));
@@ -69,7 +69,7 @@ fn ensure_blob_path_env_var(mut env_vars: Vec<EnvVar>, app_id: &str) -> Vec<EnvV
 
 /// Hand every app the storage API URL and its own storage token (see
 /// `crate::storage`), so it can keep objects in litehouse's S3 bucket without
-/// the S3 credentials. Like the blob path, an explicit `lh env set` value for
+/// the S3 credentials. Like the blob path, an explicit `lh env` value for
 /// either key wins.
 fn ensure_storage_env_vars(mut env_vars: Vec<EnvVar>, app_id: &str, token: &str) -> Vec<EnvVar> {
     for (key, value) in [

@@ -330,12 +330,11 @@ async fn get_container_state(docker: &Docker, container_name: &str) -> Result<Co
     let all_containers = docker.list_containers(Some(list_options)).await?;
 
     for container in all_containers {
-        if let Some(names) = &container.names {
-            if names
+        if let Some(names) = &container.names
+            && names
                 .iter()
                 .any(|n| n == container_name || n == &format!("/{}", container_name))
-            {
-                if let Some(id) = &container.id {
+                && let Some(id) = &container.id {
                     let state = container.state.as_deref().unwrap_or("unknown");
                     info!("Found container {} in state: {}", id, state);
 
@@ -348,8 +347,6 @@ async fn get_container_state(docker: &Docker, container_name: &str) -> Result<Co
                         _ => ContainerState::Error { id: id.clone() },
                     });
                 }
-            }
-        }
     }
 
     Ok(ContainerState::NotExists)
@@ -360,8 +357,8 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
     match docker.inspect_container(container_id, None).await {
         Ok(inspect) => {
             if let Some(state) = inspect.state {
-                if let Some(health) = state.health {
-                    if let Some(status) = health.status {
+                if let Some(health) = state.health
+                    && let Some(status) = health.status {
                         info!("Container health status: {:?}", status);
                         // EMPTY means no healthcheck configured, treat as healthy if running
                         if matches!(
@@ -373,7 +370,6 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
                         }
                         return Ok(false);
                     }
-                }
                 // If no health check is configured, assume healthy if running
                 Ok(state.running.unwrap_or(false))
             } else {
@@ -410,8 +406,8 @@ async fn verify_container_ports(
                     for (container_port, host_bindings) in ports {
                         if let Some(bindings) = host_bindings {
                             for binding in bindings {
-                                if let Some(host_port_str) = &binding.host_port {
-                                    if let Ok(host_port) = host_port_str.parse::<u16>() {
+                                if let Some(host_port_str) = &binding.host_port
+                                    && let Ok(host_port) = host_port_str.parse::<u16>() {
                                         if container_port == "80/tcp"
                                             && host_port == expected_http_port
                                         {
@@ -430,7 +426,6 @@ async fn verify_container_ports(
                                             );
                                         }
                                     }
-                                }
                             }
                         }
                     }

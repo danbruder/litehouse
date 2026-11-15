@@ -587,7 +587,11 @@ pub async fn run() -> Result<()> {
                     delete,
                 } => {
                     api_client.set_env(&app_name, &key, &value, delete).await?;
-                    println!("Environment variable set for app '{}'", app_name);
+                    if delete {
+                        println!("Environment variable '{}' deleted for app '{}'", key, app_name);
+                    } else {
+                        println!("Environment variable '{}' set for app '{}'", key, app_name);
+                    }
                     Ok(())
                 }
                 Commands::Status { app_name } => {
@@ -884,8 +888,8 @@ fn print_deploys(deploys: &[crate::api_client::DeployListItem], json: bool) -> R
         }).collect::<Vec<_>>())?);
     } else {
         println!(
-            "{:<10} {:<12} {:<12} {:<40} {}",
-            "ID", "STATUS", "SHA", "IMAGE", "CREATED"
+            "{:<10} {:<12} {:<12} {:<40} CREATED",
+            "ID", "STATUS", "SHA", "IMAGE"
         );
         for d in deploys {
             let short_id = d.id.chars().take(8).collect::<String>();

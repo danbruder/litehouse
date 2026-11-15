@@ -296,7 +296,7 @@ pub fn phase9a_start_caddy_container(
     // Load initial Caddy configuration with admin route
     info!("Loading initial Caddy configuration...");
     let initial_config = templates::initial_caddy_config(domain, admin_label);
-    let config_file = format!("/tmp/caddy_initial_config.json");
+    let config_file = "/tmp/caddy_initial_config.json".to_string();
     std::fs::write(&config_file, &initial_config)?;
 
     // Send config to Caddy API

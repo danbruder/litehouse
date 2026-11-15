@@ -428,7 +428,7 @@ async fn get_logs(
                     Ok(data) => Ok(Bytes::from(data.into_bytes())),
                     Err(e) => {
                         tracing::warn!("Error reading log stream for {}: {}", app_name, e);
-                        Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                        Err(std::io::Error::other(e.to_string()))
                     }
                 });
                 let body = StreamBody::new(body_stream);
@@ -715,6 +715,9 @@ fn storage_error(status: StatusCode, msg: impl Into<String>) -> axum::response::
 
 /// Authenticate the app's storage token and open its namespaced view of the
 /// bucket. Like the deploy hook, every auth failure is the same 401.
+// The error is a ready-to-return Response (axum's early-return pattern) on a
+// cold path, so its size doesn't matter.
+#[allow(clippy::result_large_err)]
 async fn storage_for_request(
     state: &Arc<RwLock<AppState>>,
     headers: &axum::http::HeaderMap,
