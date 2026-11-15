@@ -41,7 +41,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
-      # The runner has Docker, so the Docker integration tests run here too.
+      # The Docker integration tests assume a host that looks like a litehouse
+      # server: the images they run are already pulled (docker::run never
+      # pulls) and the shared bridge network exists (caddy::start makes it).
+      - name: Prepare Docker for integration tests
+        run: |
+          docker pull -q redis:7.4-alpine
+          docker pull -q alpine:3.20
+          docker pull -q nginx:alpine
+          docker network create litehouse-network
+
       # Tests marked #[ignore] (MinIO round-trips) stay skipped.
       - name: Tests
         run: cargo test

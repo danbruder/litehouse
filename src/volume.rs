@@ -225,7 +225,10 @@ pub async fn init_app_volume(
         cmd: Some(cmd),
         host_config: Some(HostConfig {
             binds: Some(vec![format!("{}:/data", volume_name)]),
-            auto_remove: Some(true),
+            // Not auto_remove: this command exits in milliseconds, and an
+            // auto-removed container can be gone before the first inspect
+            // below, which then 404s and fails the whole app start. We
+            // remove it ourselves once we've read the exit code.
             ..Default::default()
         }),
         ..Default::default()
@@ -252,8 +255,17 @@ pub async fn init_app_volume(
     let timeout = tokio::time::Duration::from_secs(30);
     let start_time = tokio::time::Instant::now();
 
-    loop {
+    let exit_code = loop {
         if start_time.elapsed() > timeout {
+            let _ = docker
+                .remove_container(
+                    &container_info.id,
+                    Some(bollard::container::RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
             return Err(anyhow::anyhow!("Init container timed out after 30 seconds"));
         }
 
@@ -261,22 +273,25 @@ pub async fn init_app_volume(
 
         if let Some(state) = container.state
             && let Some(running) = state.running
-                && !running {
-                    // Container has finished
-                    if let Some(exit_code) = state.exit_code {
-                        if exit_code == 0 {
-                            info!("Init container completed successfully");
-                            return Ok(());
-                        } else {
-                            return Err(anyhow::anyhow!(
-                                "Init container failed with exit code: {}",
-                                exit_code
-                            ));
-                        }
-                    }
-                }
+            && !running
+            && let Some(exit_code) = state.exit_code
+        {
+            break exit_code;
+        }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    };
+
+    docker.remove_container(&container_info.id, None).await?;
+
+    if exit_code == 0 {
+        info!("Init container completed successfully");
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Init container failed with exit code: {}",
+            exit_code
+        ))
     }
 }
 
@@ -623,7 +638,8 @@ mod tests {
             ]),
             host_config: Some(HostConfig {
                 binds: Some(vec![format!("{}:/data", volume_name)]),
-                auto_remove: Some(true),
+                // Not auto_remove: the container can exit and vanish before
+                // the first inspect below, leaving no exit code to read.
                 ..Default::default()
             }),
             ..Default::default()
@@ -645,6 +661,15 @@ mod tests {
 
         loop {
             if start_time.elapsed() > timeout {
+                let _ = docker
+                    .remove_container(
+                        &container_info.id,
+                        Some(bollard::container::RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
                 delete_app_volume(&docker, app_id).await?;
                 return Err(anyhow::anyhow!("Verification timed out"));
             }
@@ -655,6 +680,9 @@ mod tests {
                     && let Some(running) = state.running
                         && !running {
                             let exit_code = state.exit_code.unwrap_or(-1);
+                            docker
+                                .remove_container(&container_info.id, None)
+                                .await?;
                             delete_app_volume(&docker, app_id).await?;
                             if exit_code == 0 {
                                 return Ok(());
