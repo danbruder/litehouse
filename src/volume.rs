@@ -623,7 +623,8 @@ mod tests {
             ]),
             host_config: Some(HostConfig {
                 binds: Some(vec![format!("{}:/data", volume_name)]),
-                auto_remove: Some(true),
+                // Not auto_remove: the container can exit and vanish before
+                // the first inspect below, leaving no exit code to read.
                 ..Default::default()
             }),
             ..Default::default()
@@ -645,6 +646,15 @@ mod tests {
 
         loop {
             if start_time.elapsed() > timeout {
+                let _ = docker
+                    .remove_container(
+                        &container_info.id,
+                        Some(bollard::container::RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
                 delete_app_volume(&docker, app_id).await?;
                 return Err(anyhow::anyhow!("Verification timed out"));
             }
@@ -655,6 +665,9 @@ mod tests {
                     && let Some(running) = state.running
                         && !running {
                             let exit_code = state.exit_code.unwrap_or(-1);
+                            docker
+                                .remove_container(&container_info.id, None)
+                                .await?;
                             delete_app_volume(&docker, app_id).await?;
                             if exit_code == 0 {
                                 return Ok(());
