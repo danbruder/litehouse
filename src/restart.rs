@@ -10,7 +10,7 @@ use crate::db;
 use crate::docker;
 use crate::models::App;
 
-/// Env var key an app can set (via `lh env set`) to exclude itself from the
+/// Env var key an app can set (via `lh env`) to exclude itself from the
 /// nightly restart pass.
 pub const SKIP_ENV_VAR: &str = "LITEHOUSE_SKIP_NIGHTLY_RESTART";
 
