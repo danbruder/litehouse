@@ -43,8 +43,8 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     }
 
     // Try to remove the Docker image, but don't fail if it doesn't exist
-    if let Some(image_tag) = &app.image {
-        if let Err(e) = docker::remove(image_tag).await {
+    if let Some(image_tag) = &app.image
+        && let Err(e) = docker::remove(image_tag).await {
             // Check if it's a "not found" error - that's fine, image is already gone
             let error_str = e.to_string();
             if error_str.contains("No such image") || error_str.contains("404") {
@@ -53,7 +53,6 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
                 tracing::warn!("Failed to remove image '{}': {}. Continuing with delete.", image_tag, e);
             }
         }
-    }
 
     // Delete app volume
     if let Err(e) = crate::volume::delete_app_volume(&docker_conn, &app.id).await {
@@ -71,12 +70,12 @@ pub async fn execute(pool: &Pool<Sqlite>, app_name: &str) -> DeleteResult<()> {
     db::deploy::delete_by_app(pool, &app.id).await?;
 
     // Delete app
-    db::app::delete_by_app_id(&pool, &app.id).await?;
+    db::app::delete_by_app_id(pool, &app.id).await?;
 
     println!("Successfully stopped app '{}'", app_name);
 
     // Sync Caddy configuration
-    if let Err(e) = caddy::sync_configuration(&docker_conn, &pool).await {
+    if let Err(e) = caddy::sync_configuration(&docker_conn, pool).await {
         tracing::warn!(
             "Failed to sync Caddy configuration after stopping app '{}': {}",
             app_name,

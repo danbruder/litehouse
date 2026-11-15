@@ -162,7 +162,7 @@ pub async fn discover_image_user(docker: &Docker, image_tag: &str) -> Result<Opt
     // We only support numeric formats
     let parts: Vec<&str> = user_string.split(':').collect();
 
-    let uid: u32 = match parts.get(0) {
+    let uid: u32 = match parts.first() {
         Some(uid_str) => match uid_str.parse() {
             Ok(uid) => uid,
             Err(_) => {
@@ -259,9 +259,9 @@ pub async fn init_app_volume(
 
         let container = docker.inspect_container(&container_info.id, None).await?;
 
-        if let Some(state) = container.state {
-            if let Some(running) = state.running {
-                if !running {
+        if let Some(state) = container.state
+            && let Some(running) = state.running
+                && !running {
                     // Container has finished
                     if let Some(exit_code) = state.exit_code {
                         if exit_code == 0 {
@@ -275,8 +275,6 @@ pub async fn init_app_volume(
                         }
                     }
                 }
-            }
-        }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
@@ -360,14 +358,12 @@ pub async fn init_app_database_in_volume(
 
         let inspect = docker.inspect_container(&container_info.id, None).await?;
 
-        if let Some(state) = inspect.state {
-            if let Some(running) = state.running {
-                if !running {
+        if let Some(state) = inspect.state
+            && let Some(running) = state.running
+                && !running {
                     // Container finished
                     break state.exit_code.unwrap_or(-1);
                 }
-            }
-        }
 
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
@@ -420,8 +416,8 @@ pub async fn verify_volume_single_writer(
         if let Some(mounts) = inspect.mounts {
             for mount in mounts {
                 // Check if this mount uses our volume
-                if let Some(name) = mount.name {
-                    if name == volume_name {
+                if let Some(name) = mount.name
+                    && name == volume_name {
                         // Check if it's read-write (RW is the default, RO means read-only)
                         let is_read_only = mount.rw.map(|rw| !rw).unwrap_or(false);
 
@@ -445,7 +441,6 @@ pub async fn verify_volume_single_writer(
                             );
                         }
                     }
-                }
             }
         }
     }
@@ -655,10 +650,10 @@ mod tests {
             }
 
             let inspect = docker.inspect_container(&container_info.id, None).await;
-            if let Ok(container) = inspect {
-                if let Some(state) = container.state {
-                    if let Some(running) = state.running {
-                        if !running {
+            if let Ok(container) = inspect
+                && let Some(state) = container.state
+                    && let Some(running) = state.running
+                        && !running {
                             let exit_code = state.exit_code.unwrap_or(-1);
                             delete_app_volume(&docker, app_id).await?;
                             if exit_code == 0 {
@@ -667,9 +662,6 @@ mod tests {
                                 return Err(anyhow::anyhow!("Database file not found in volume"));
                             }
                         }
-                    }
-                }
-            }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }

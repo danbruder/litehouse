@@ -40,6 +40,7 @@ use crate::install::phases::*;
 /// Phase 11: Verification (optional)
 
 #[instrument(skip_all)]
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     domain: &str,
     skip_verify: bool,

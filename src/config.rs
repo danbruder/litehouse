@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use tracing::instrument;
 
 thread_local! {
-    static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
-    static TEST_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+    static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    static TEST_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Debug, PartialEq, thiserror::Error)]
@@ -414,6 +414,61 @@ impl ClientConfig {
     }
 }
 
+impl ServerConfig {
+    #[tracing::instrument]
+    pub fn load() -> Result<Self, ConfigError> {
+        let config_path = Self::get_config_path()?;
+        tracing::info!("Loading server config from {}", config_path.display());
+
+        if !config_path.exists() {
+            tracing::info!("Server config file not found, using defaults");
+            return Ok(Self::default());
+        }
+
+        let contents = fs::read_to_string(config_path)
+            .map_err(|_| ConfigError::IoError("Failed to read config file".to_string()))?;
+        let config: Self =
+            toml::from_str(&contents).map_err(|e| ConfigError::TomlError(e.to_string()))?;
+        Ok(config)
+    }
+
+    // skip(self): configs can hold tokens, which must not reach the logs.
+    #[tracing::instrument(skip(self))]
+    pub fn save(&self) -> Result<(), ConfigError> {
+        let config_path = Self::get_config_path()?;
+        let contents =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::TomlError(e.to_string()))?;
+        tracing::info!("Saving server config to {}", config_path.display());
+        fs::write(config_path, contents)
+            .map_err(|_| ConfigError::IoError("Failed to write config file".to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_config_path() -> Result<PathBuf, ConfigError> {
+        Ok(get_config_dir()?.join("server-config.toml"))
+    }
+
+    /// The subdomain label used for the admin API/UI (default: "admin").
+    pub fn admin_label(&self) -> &str {
+        self.admin_subdomain.as_deref().unwrap_or("admin")
+    }
+}
+
+fn get_base_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("LITEHOUSE_DIR") {
+        return PathBuf::from(dir);
+    }
+
+    // macOS (local dev): keep data under the user's home directory rather
+    // than a hardcoded developer-specific path.
+    if cfg!(target_os = "macos")
+        && let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".local/share/litehouse");
+        }
+
+    PathBuf::from("/opt/litehouse")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,9 +522,11 @@ mod tests {
     #[test]
     fn test_client_config_save_and_load() {
         let (_data_dir, _config_dir) = setup_test_dirs();
-        let mut config = ClientConfig::default();
-        config.base_url = "http://test.example.com/api".to_string();
-        config.api_token = Some("test-token".to_string());
+        let config = ClientConfig {
+            base_url: "http://test.example.com/api".to_string(),
+            api_token: Some("test-token".to_string()),
+            ..Default::default()
+        };
 
         config.save().unwrap();
 
@@ -508,60 +565,4 @@ mod tests {
         let loaded = ClientConfig::load().unwrap();
         assert_eq!(loaded.api_token, None);
     }
-}
-
-impl ServerConfig {
-    #[tracing::instrument]
-    pub fn load() -> Result<Self, ConfigError> {
-        let config_path = Self::get_config_path()?;
-        tracing::info!("Loading server config from {}", config_path.display());
-
-        if !config_path.exists() {
-            tracing::info!("Server config file not found, using defaults");
-            return Ok(Self::default());
-        }
-
-        let contents = fs::read_to_string(config_path)
-            .map_err(|_| ConfigError::IoError("Failed to read config file".to_string()))?;
-        let config: Self =
-            toml::from_str(&contents).map_err(|e| ConfigError::TomlError(e.to_string()))?;
-        Ok(config)
-    }
-
-    // skip(self): configs can hold tokens, which must not reach the logs.
-    #[tracing::instrument(skip(self))]
-    pub fn save(&self) -> Result<(), ConfigError> {
-        let config_path = Self::get_config_path()?;
-        let contents =
-            toml::to_string_pretty(self).map_err(|e| ConfigError::TomlError(e.to_string()))?;
-        tracing::info!("Saving server config to {}", config_path.display());
-        fs::write(config_path, contents)
-            .map_err(|_| ConfigError::IoError("Failed to write config file".to_string()))?;
-        Ok(())
-    }
-
-    pub fn get_config_path() -> Result<PathBuf, ConfigError> {
-        Ok(get_config_dir()?.join("server-config.toml"))
-    }
-
-    /// The subdomain label used for the admin API/UI (default: "admin").
-    pub fn admin_label(&self) -> &str {
-        self.admin_subdomain.as_deref().unwrap_or("admin")
-    }
-}
-
-fn get_base_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("LITEHOUSE_DIR") {
-        return PathBuf::from(dir);
-    }
-
-    // macOS (local dev): keep data under the user's home directory rather
-    // than a hardcoded developer-specific path.
-    if cfg!(target_os = "macos") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(".local/share/litehouse");
-        }
-    }
-
-    PathBuf::from("/opt/litehouse")
 }

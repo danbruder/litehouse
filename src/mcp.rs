@@ -124,9 +124,7 @@ async fn handle_request(
     config: &ClientConfig,
 ) -> Option<Value> {
     // Notifications carry no id and expect no response.
-    if req.id.is_none() {
-        return None;
-    }
+    req.id.as_ref()?;
     let id = req.id.clone().unwrap();
 
     match req.method.as_str() {

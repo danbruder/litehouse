@@ -428,7 +428,7 @@ async fn get_logs(
                     Ok(data) => Ok(Bytes::from(data.into_bytes())),
                     Err(e) => {
                         tracing::warn!("Error reading log stream for {}: {}", app_name, e);
-                        Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                        Err(std::io::Error::other(e.to_string()))
                     }
                 });
                 let body = StreamBody::new(body_stream);

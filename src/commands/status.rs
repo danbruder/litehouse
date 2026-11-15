@@ -52,11 +52,10 @@ async fn live_state(app_name: &str) -> AppState {
         Ok(state) => state,
         // Docker unreachable → fall back to the DB-cached desired state.
         Err(_) => {
-            if let Ok(pool) = db::init_pool().await {
-                if let Ok(Some(app)) = db::app::get_by_name(&pool, app_name).await {
+            if let Ok(pool) = db::init_pool().await
+                && let Ok(Some(app)) = db::app::get_by_name(&pool, app_name).await {
                     return app.state;
                 }
-            }
             AppState::Stopped
         }
     }

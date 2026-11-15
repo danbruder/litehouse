@@ -129,7 +129,7 @@ pub async fn run(
 ) -> Result<()> {
     // Validate input parameters
     if name.trim().is_empty() {
-        return Err(DockerError::BuildError("App name cannot be empty".to_string()).into());
+        return Err(DockerError::BuildError("App name cannot be empty".to_string()));
     }
 
     info!("Running app: {}", name);
@@ -363,7 +363,7 @@ pub async fn logs_stream(
     let mut logs_opts = bollard::container::LogsOptions::<String> {
         stdout: true,
         stderr: true,
-        follow: follow,
+        follow,
         ..Default::default()
     };
     
@@ -415,8 +415,8 @@ pub async fn stop(app: &App) -> Result<()> {
     let all_containers = docker.list_containers::<String>(options).await?;
 
     for container in all_containers {
-        if let Some(names) = &container.names {
-            if names.iter().any(|name| name.contains(&container_name)) {
+        if let Some(names) = &container.names
+            && names.iter().any(|name| name.contains(&container_name)) {
                 info!(
                     "Stopping container: {}",
                     container.id.as_ref().unwrap_or(&"unknown".to_string())
@@ -424,15 +424,14 @@ pub async fn stop(app: &App) -> Result<()> {
 
                 if let Some(id) = &container.id {
                     // Check if the container is already stopped
-                    if let Some(state) = &container.state {
-                        if state == "exited" || state == "stopped" {
+                    if let Some(state) = &container.state
+                        && (state == "exited" || state == "stopped") {
                             info!(
                                 "Container {} is already {} (ID: {})",
                                 container_name, state, id
                             );
                             continue;
                         }
-                    }
 
                     match docker.stop_container(id, None).await {
                         Ok(_) => {
@@ -452,7 +451,6 @@ pub async fn stop(app: &App) -> Result<()> {
                     }
                 }
             }
-        }
     }
 
     Ok(())
@@ -786,23 +784,21 @@ mod tests {
 
     #[test]
     fn pick_http_port_prefers_tcp_over_udp() {
-        let ports = vec![
-            "4000/tcp".to_string(),
+        let ports = ["4000/tcp".to_string(),
             "50000/udp".to_string(),
-            "50099/udp".to_string(),
-        ];
+            "50099/udp".to_string()];
         assert_eq!(pick_http_port(ports.iter()), "4000");
     }
 
     #[test]
     fn pick_http_port_picks_lowest_tcp_port() {
-        let ports = vec!["8080/tcp".to_string(), "3000/tcp".to_string()];
+        let ports = ["8080/tcp".to_string(), "3000/tcp".to_string()];
         assert_eq!(pick_http_port(ports.iter()), "3000");
     }
 
     #[test]
     fn pick_http_port_falls_back_when_only_udp() {
-        let ports = vec!["50000/udp".to_string()];
+        let ports = ["50000/udp".to_string()];
         assert_eq!(pick_http_port(ports.iter()), "3000");
     }
 
@@ -1380,11 +1376,9 @@ mod tests {
     // Test pulling a public image from Docker Hub with no registry credentials
     #[test]
     fn udp_port_bindings_publishes_udp_one_to_one_and_skips_tcp() {
-        let exposed = vec![
-            "4000/tcp".to_string(),
+        let exposed = ["4000/tcp".to_string(),
             "50000/udp".to_string(),
-            "50001/udp".to_string(),
-        ];
+            "50001/udp".to_string()];
         let map = udp_port_bindings(exposed.iter()).unwrap();
         assert_eq!(map.len(), 2);
         let binding = &map["50000/udp"].as_ref().unwrap()[0];
@@ -1395,7 +1389,7 @@ mod tests {
 
     #[test]
     fn udp_port_bindings_none_when_no_udp() {
-        let exposed = vec!["8080/tcp".to_string()];
+        let exposed = ["8080/tcp".to_string()];
         assert!(udp_port_bindings(exposed.iter()).is_none());
     }
 

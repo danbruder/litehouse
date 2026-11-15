@@ -656,6 +656,7 @@ pub fn blobs_missing_from_s3(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn backup_app(
     pool: &Pool<Sqlite>,
     docker: &Docker,
@@ -985,6 +986,7 @@ enum RestoreOutcome {
 /// Apps with no recorded image, or with an image but no app-data backup in
 /// S3, are skipped (not errored) — see [`RestoreReport`].
 #[instrument(skip(pool, docker, client, backups_dir, ghcr_token, app))]
+#[allow(clippy::too_many_arguments)]
 async fn restore_app(
     pool: &Pool<Sqlite>,
     docker: &Docker,
