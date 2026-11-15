@@ -2,7 +2,8 @@
 name = "litehouse"
 version = "0.2.0-alpha.28"
 edition = "2024"
-description = "A platform for deploying and running containerized applications"
+description = "Self-hosted git push deploys for SQLite apps, on your own server"
+license = "MIT"
 authors = ["Dan Bruder <danbruder@hey.com>"]
 
 [dependencies]
