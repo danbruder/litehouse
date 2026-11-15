@@ -35,6 +35,10 @@ cargo run -- serve
 # Run tests (includes comprehensive Docker integration tests)
 cargo test
 
+# CI (.github/workflows/ci.yml) runs on every PR: clippy with -D warnings,
+# cargo test, and a check that src/ui/spa/ matches a fresh `npm run build`.
+# Keep clippy clean.
+
 # Run specific test
 cargo test test_run_function_happy_path
 
