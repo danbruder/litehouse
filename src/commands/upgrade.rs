@@ -5,7 +5,7 @@ use tracing::{info, instrument};
 use crate::install::executor::run_command;
 use crate::install::phases::{
     get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
-    phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image,
+    phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image, phase6b_pull_images,
     phase9b_start_litehouse_container,
 };
 
@@ -283,6 +283,25 @@ pub async fn execute(
         }
     };
     pb.inc(1);
+
+    // Phase 2b: Refresh Caddy and the backup/restore helper images. Install
+    // pulls these once; without re-pulling here the internet-facing Caddy
+    // edge would never pick up security fixes. When the server restarts
+    // below, `caddy::start` sees the running container is on an older image
+    // than the fresh local `caddy:latest` and recreates it. A failed pull is
+    // only a warning: the images already on disk keep working.
+    pb.set_message("Refreshing Caddy and helper images...");
+    let log_window_clone = log_window.clone();
+    let uid_for_pull = litehouse_uid.clone();
+    match tokio::task::spawn_blocking(move || {
+        phase6b_pull_images(&uid_for_pull, Some(&log_window_clone))
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("Failed to refresh Caddy/helper images: {:#}", e),
+        Err(e) => tracing::warn!("Image refresh task panicked: {}", e),
+    }
 
     // Phase 3: Restart litehouse-server container
     pb.set_message("Restarting litehouse-server container...");

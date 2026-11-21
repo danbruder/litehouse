@@ -1,6 +1,8 @@
-FROM alpine:3.20
+FROM alpine:3.24
 ARG TARGETARCH
-RUN apk add --no-cache ca-certificates git
+# `apk upgrade` picks up security fixes released since the alpine base
+# image was last published; the weekly scheduled rebuild re-runs it.
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates git
 # The release workflow stages one static binary per platform at
 # {amd64,arm64}/lh; buildx sets TARGETARCH to pick the matching one.
 # Actions artifacts strip the execute bit — restore it at copy time

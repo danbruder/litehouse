@@ -9,7 +9,7 @@ use tracing::{info, instrument, warn};
 /// Utility image for one-shot volume-management containers. Pinned (and
 /// pre-pulled during `lh install`); callers ensure it exists via
 /// `ensure_utility_image` before running one-shots.
-pub const UTILITY_IMAGE: &str = "alpine:3.20";
+pub const UTILITY_IMAGE: &str = "alpine:3.24";
 
 /// Pull the utility image if it isn't present locally.
 pub async fn ensure_utility_image(docker: &Docker) -> Result<()> {
