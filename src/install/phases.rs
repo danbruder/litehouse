@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use indicatif::ProgressBar;
 use tracing::{info, instrument, warn};
 
-use super::executor::{run_command, run_command_with_log, sudo_write_file};
+use super::executor::{run_command, run_command_with_log, run_command_with_timeout, sudo_write_file};
 use super::templates;
 
 /// Phase 1: Validation
@@ -425,6 +425,25 @@ pub fn phase13_weekly_reboot_timer() -> Result<()> {
     run_command("sudo systemctl enable --now litehouse-weekly-reboot.timer")?;
 
     info!("Phase 13 completed successfully");
+    Ok(())
+}
+
+/// Phase 14: Automatic OS security updates (unattended-upgrades).
+/// Idempotent; re-applied on every `lh upgrade`. See
+/// docs/superpowers/specs/2026-11-21-os-security-updates-design.md.
+#[instrument(skip(log_window))]
+pub fn phase14_os_security_updates(log_window: Option<&ProgressBar>) -> Result<()> {
+    info!("Phase 14: Automatic OS security updates");
+
+    let script = templates::os_security_updates_script();
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("os_security_updates.sh");
+    std::fs::write(&path, script)?;
+    // apt may be holding its lock for a few minutes (apt-daily on a fresh
+    // boot); the script waits up to 300s per apt call, so allow for that.
+    run_command_with_timeout(&format!("bash {}", path.display()), log_window, 900)?;
+
+    info!("Phase 14 completed successfully");
     Ok(())
 }
 

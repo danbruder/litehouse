@@ -5,6 +5,7 @@ use tracing::{info, instrument};
 use crate::install::executor::run_command;
 use crate::install::phases::{
     get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
+    phase14_os_security_updates,
     phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image,
     phase9b_start_litehouse_container,
 };
@@ -318,6 +319,19 @@ pub async fn execute(
         return Err(e);
     }
 
+    // Phase 3c: Re-apply automatic OS security updates. Brings servers
+    // installed before this existed up to date on their next upgrade. A
+    // failure (e.g. apt mirror unreachable) is a warning, not an abort: the
+    // container is already upgraded and `lh os-updates enable` retries it.
+    pb.set_message("Re-applying automatic OS security updates...");
+    let os_updates_warning = match phase14_os_security_updates(Some(&log_window)) {
+        Ok(()) => None,
+        Err(e) => {
+            tracing::warn!("Enabling automatic OS security updates failed: {:#}", e);
+            Some(format!("{:#}", e))
+        }
+    };
+
     // Phase 4: Install the new host binary. The container is already
     // running the new image at this point, so a failure here is logged as
     // a warning rather than aborting the upgrade - the server itself is
@@ -339,7 +353,7 @@ pub async fn execute(
         cleanup_temp_dir(&binary_path).ok();
     }
 
-    if binary_install_warning.is_some() {
+    if binary_install_warning.is_some() || os_updates_warning.is_some() {
         pb.finish_with_message("⚠️  Upgrade completed with a warning");
     } else {
         pb.finish_with_message("✅ Upgrade completed successfully!");
@@ -354,6 +368,10 @@ pub async fn execute(
         println!("  The container is running the new version; re-run `lh upgrade` to retry the host binary.");
     } else {
         println!("✓ litehouse upgraded successfully");
+    }
+    if let Some(warning) = &os_updates_warning {
+        println!("⚠ Could not enable automatic OS security updates: {}", warning);
+        println!("  Retry with `lh os-updates enable` (as root); check with `lh os-updates status`.");
     }
     println!("  Previous: {}", current_version.trim());
     println!("  Current:  {}", new_version.trim());

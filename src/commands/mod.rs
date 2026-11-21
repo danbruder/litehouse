@@ -8,6 +8,7 @@ pub mod github_login;
 pub mod health_check;
 pub mod install;
 pub mod logs;
+pub mod os_updates;
 pub mod server;
 pub mod start;
 pub mod status;
