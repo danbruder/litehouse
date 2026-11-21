@@ -6,62 +6,134 @@
       {
         "name": "hour",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "hour"
+          }
+        }
       },
       {
         "name": "scope",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "scope"
+          }
+        }
       },
       {
         "name": "cpu_avg",
         "ordinal": 2,
-        "type_info": "Float"
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "cpu_avg"
+          }
+        }
       },
       {
         "name": "cpu_min",
         "ordinal": 3,
-        "type_info": "Float"
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "cpu_min"
+          }
+        }
       },
       {
         "name": "cpu_max",
         "ordinal": 4,
-        "type_info": "Float"
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "cpu_max"
+          }
+        }
       },
       {
         "name": "mem_avg",
         "ordinal": 5,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "mem_avg"
+          }
+        }
       },
       {
         "name": "mem_min",
         "ordinal": 6,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "mem_min"
+          }
+        }
       },
       {
         "name": "mem_max",
         "ordinal": 7,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "mem_max"
+          }
+        }
       },
       {
         "name": "disk_avg",
         "ordinal": 8,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "disk_avg"
+          }
+        }
       },
       {
         "name": "disk_min",
         "ordinal": 9,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "disk_min"
+          }
+        }
       },
       {
         "name": "disk_max",
         "ordinal": 10,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "disk_max"
+          }
+        }
       },
       {
         "name": "samples",
         "ordinal": 11,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_hourly",
+            "name": "samples"
+          }
+        }
       }
     ],
     "parameters": {

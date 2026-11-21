@@ -19,7 +19,7 @@ impl Type<Sqlite> for UtcDateTime {
 
 impl<'r> Decode<'r, Sqlite> for UtcDateTime {
     fn decode(
-        value: <Sqlite as sqlx::database::HasValueRef<'r>>::ValueRef,
+        value: <Sqlite as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         // Decode as string and parse - handles TEXT storage in SQLite
         let s = <String as Decode<Sqlite>>::decode(value)?;
@@ -34,8 +34,8 @@ impl<'r> Decode<'r, Sqlite> for UtcDateTime {
 impl<'q> Encode<'q, Sqlite> for UtcDateTime {
     fn encode_by_ref(
         &self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull {
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         // Encode as TEXT in ISO format for SQLite compatibility
         let s = self.0.naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
         <String as Encode<Sqlite>>::encode_by_ref(&s, buf)

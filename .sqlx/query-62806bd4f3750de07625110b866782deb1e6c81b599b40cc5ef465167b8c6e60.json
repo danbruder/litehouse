@@ -6,7 +6,13 @@
       {
         "name": "last_backup_report",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "system_config",
+            "name": "last_backup_report"
+          }
+        }
       }
     ],
     "parameters": {

@@ -5,6 +5,7 @@ import { api, type S3ConfigInput } from "../lib/api";
 import { Button } from "../components/Button";
 import { ConfirmButton } from "../components/ConfirmButton";
 import { ErrorNote } from "../components/ErrorNote";
+import { relativeTime } from "../lib/format";
 
 // Server-wide settings had no UI at all before this page: S3 credentials and
 // the GHCR read token were reachable only through `lh config ...`, which
@@ -270,6 +271,131 @@ function ServerCard() {
   );
 }
 
+// Remote MCP: the URL and ready-to-paste snippets for Claude (connector,
+// Claude Code, .mcp.json), plus the OAuth grants already handed out. The
+// admin token is never shown here: the cookie holding it is HttpOnly and the
+// server only stores its hash, so token-bearing snippets use a placeholder.
+// Prefer the OAuth rows, which need no token at all.
+function CopyRow({ label, hint, value }: { label: string; hint?: string; value: string }) {
+  return (
+    <div className="mt-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-ink-2">{label}</span>
+        <Button
+          variant="ghost"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(value);
+              toast.success(`Copied ${label.toLowerCase()}`);
+            } catch {
+              toast.error("Couldn't copy to clipboard");
+            }
+          }}
+        >
+          copy
+        </Button>
+      </div>
+      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all border border-rule bg-paper-2 p-2 text-xs">
+        {value}
+      </pre>
+      {hint ? <p className="muted mt-1 text-xs">{hint}</p> : null}
+    </div>
+  );
+}
+
+function McpCard() {
+  const qc = useQueryClient();
+  const url = `${window.location.origin}/mcp`;
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: ["mcp-connections"],
+    queryFn: api.mcpConnections,
+  });
+  const revoke = useMutation({
+    mutationFn: api.revokeMcpConnection,
+    onSuccess: () => {
+      toast.success("Connection revoked");
+      qc.invalidateQueries({ queryKey: ["mcp-connections"] });
+    },
+    onError: (err: Error) => toast.error("Couldn't revoke connection", { description: err.message }),
+  });
+
+  const mcpJson = JSON.stringify(
+    {
+      mcpServers: {
+        litehouse: {
+          type: "http",
+          url,
+          headers: { Authorization: "Bearer ${LITEHOUSE_TOKEN}" },
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  return (
+    <div className="card">
+      <span className="panel-label">connect claude (mcp)</span>
+      <p className="muted text-xs">
+        Lets Claude deploy and manage apps here. On the web, desktop and mobile apps it signs in with OAuth:
+        you approve it with your admin token once, and can revoke it below.
+      </p>
+
+      <CopyRow
+        label="Connector URL"
+        value={url}
+        hint="claude.ai → Settings → Connectors → Add custom connector. Then it works in the mobile app too."
+      />
+      <CopyRow
+        label="Claude Code (OAuth)"
+        value={`claude mcp add --transport http litehouse ${url}`}
+        hint="Then run /mcp in Claude Code and choose litehouse to sign in."
+      />
+      <CopyRow
+        label="Claude Code (admin token)"
+        value={`claude mcp add --transport http litehouse ${url} --header "Authorization: Bearer $LITEHOUSE_TOKEN"`}
+        hint="Set LITEHOUSE_TOKEN to your admin token first. It's never shown on this page."
+      />
+      <CopyRow
+        label=".mcp.json (Claude Code cloud sessions)"
+        value={mcpJson}
+        hint="Commit this to a repo and add LITEHOUSE_TOKEN as a secret in the cloud environment."
+      />
+      <CopyRow label="Local stdio" value="claude mcp add litehouse -- lh mcp serve" hint="Uses the token from lh connect." />
+
+      <div className="mt-4">
+        <span className="text-xs text-ink-2">Connected clients</span>
+        {error ? (
+          <ErrorNote error={error} what="MCP connections" onRetry={() => refetch()} />
+        ) : isLoading ? (
+          <p className="muted">loading…</p>
+        ) : !data || data.length === 0 ? (
+          <p className="muted text-xs">none yet</p>
+        ) : (
+          <ul className="mt-1 space-y-1">
+            {data.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span>
+                  <strong>{c.client_name}</strong> · {c.read_only ? "read-only" : "full access"} · last used{" "}
+                  {c.last_used_at ? relativeTime(c.last_used_at) : "never"}
+                </span>
+                <ConfirmButton
+                  variant="ghost"
+                  confirmLabel="revoke"
+                  disabled={revoke.isPending}
+                  onConfirm={() => revoke.mutate(c.id)}
+                >
+                  revoke
+                </ConfirmButton>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
   return (
     <>
@@ -277,6 +403,7 @@ export function Settings() {
       <ServerCard />
       <S3Card />
       <GhcrCard />
+      <McpCard />
       <div className="card">
         <span className="panel-label">maintenance</span>
         <p className="muted">

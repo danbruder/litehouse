@@ -6,32 +6,68 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "app_name",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "app_name"
+          }
+        }
       },
       {
         "name": "s3_key",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "s3_key"
+          }
+        }
       },
       {
         "name": "size_bytes",
         "ordinal": 3,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "size_bytes"
+          }
+        }
       },
       {
         "name": "status",
         "ordinal": 4,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "status"
+          }
+        }
       },
       {
         "name": "created_at",
         "ordinal": 5,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "backup",
+            "name": "created_at"
+          }
+        }
       }
     ],
     "parameters": {

@@ -1396,7 +1396,7 @@ mod tests {
     #[tokio::test]
     async fn test_pull_public_image() {
         let docker = connect().await.unwrap();
-        pull(&docker, "alpine:3.20", None).await.unwrap();
-        assert!(image_exists("alpine:3.20").await.unwrap());
+        pull(&docker, "alpine:3.24", None).await.unwrap();
+        assert!(image_exists("alpine:3.24").await.unwrap());
     }
 }

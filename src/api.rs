@@ -68,6 +68,11 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/backups/catalog", get(get_backup_catalog))
         .route("/restore", post(run_restore))
         .route("/metrics/server", get(get_server_metrics))
+        .route("/mcp/connections", get(crate::oauth::list_connections))
+        .route(
+            "/mcp/connections/:id",
+            delete(crate::oauth::revoke_connection),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::admin_auth_middleware,

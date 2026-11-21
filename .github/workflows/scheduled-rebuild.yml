@@ -1,0 +1,27 @@
+name: Scheduled rebuild
+
+# The litehouse-server image is `alpine` + `apk add ca-certificates git` on
+# top of the prebuilt binary, and Caddy is pulled as `caddy:latest`. Neither
+# picks up upstream security patches unless something rebuilds/redeploys.
+# This kicks off the normal main deploy (release.yml) once a week, which
+# rebuilds the image on the current alpine packages and runs `lh upgrade`,
+# which also re-pulls Caddy and the helper images and recreates Caddy when
+# its image changed.
+on:
+  schedule:
+    - cron: "41 9 * * 2" # Tuesdays 09:41 UTC (after Monday's Dependabot run)
+  workflow_dispatch:
+
+permissions:
+  actions: write # dispatch release.yml
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      # A GITHUB_TOKEN-dispatched workflow_dispatch event is allowed to start
+      # another workflow (unlike most GITHUB_TOKEN-triggered events).
+      - name: Redeploy main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}connect {{ client_name }} - litehouse{% endblock %}
+
+{% block content %}
+<div class="terminal-shell">
+  <div class="login-box">
+    <p class="lede">litehouse://connect</p>
+    <div class="card">
+      <span class="panel-label">authorize</span>
+      {% if let Some(err) = error %}
+      <p class="error">{{ err }}</p>
+      {% endif %}
+      <p><strong>{{ client_name }}</strong> wants to manage this litehouse server through MCP.</p>
+      <p class="muted">It will be able to see apps, deploys and logs. With full access it can also deploy, change env vars, stop and delete apps. You can revoke it any time under settings.</p>
+      <form method="post" action="/oauth/authorize">
+        <input type="hidden" name="client_id" value="{{ client_id }}">
+        <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+        <input type="hidden" name="state" value="{{ state }}">
+        <input type="hidden" name="code_challenge" value="{{ code_challenge }}">
+        <input type="hidden" name="code_challenge_method" value="S256">
+        <input type="hidden" name="response_type" value="code">
+        <input type="hidden" name="resource" value="{{ resource }}">
+        <fieldset>
+          <label><input type="radio" name="access" value="full" {% if !read_only %}checked{% endif %}> full access</label>
+          <label><input type="radio" name="access" value="read" {% if read_only %}checked{% endif %}> read-only (status, deploys, logs)</label>
+        </fieldset>
+        {% if !signed_in %}
+        <label class="field-label" for="token">admin token</label>
+        <div class="prompt-row">
+          <span class="prompt-marker">&gt;</span>
+          <input type="password" id="token" name="token" placeholder="••••••••••••••••" autofocus>
+        </div>
+        {% endif %}
+        <button type="submit" name="decision" value="allow">allow</button>
+        <button type="submit" name="decision" value="deny" class="btn-outline">deny</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

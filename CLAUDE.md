@@ -39,6 +39,15 @@ cargo test
 # cargo test, and a check that src/ui/spa/ matches a fresh `npm run build`.
 # Keep clippy clean.
 
+# Security maintenance (see .github/): Dependabot opens weekly grouped PRs for
+# cargo, npm (frontend/), Docker base images, and Actions; security.yml runs
+# cargo-audit, npm audit, and a Trivy scan of the deployed images on PRs and
+# weekly; scheduled-rebuild.yml redeploys main weekly so alpine/Caddy patches
+# land without a code change. Accepted advisories live in .cargo/audit.toml,
+# each with a reason. `lh upgrade` re-pulls caddy:latest + helper images and
+# the server recreates Caddy when its image changed. When bumping alpine,
+# move Dockerfile, volume::UTILITY_IMAGE, install templates, and ci.yml together.
+
 # Run specific test
 cargo test test_run_function_happy_path
 
@@ -202,6 +211,8 @@ Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `
 - New app names must be DNS labels (lowercase letters, digits, hyphens, ≤63, not `admin`/the admin label) — validated in `api::create_app`.
 
 **AI-agent access (MCP):** `lh mcp serve` runs a Model Context Protocol server on stdio. Point an MCP-capable agent at the command `lh mcp serve` (on a host where `lh connect` has already stored the admin token). Tools mirror the CLI: `deploy`, `list_apps`, `app_status`, `list_deploys` (with `wait`), `logs`, `env_set`, `start_app`/`stop_app`/`delete_app`, `add_domain`/`remove_domain`/`list_domains`, `backup_status`/`run_backup`, `create_app`, and `agent_guide`. `list_deploys` takes `sha` (with `wait`) and returns an error result unless that deploy succeeded. `create_app` needs a GitHub token already available ($GITHUB_TOKEN, `gh`, or a prior `lh github login`) since device-flow login can't run through MCP.
+
+**Remote MCP (HTTP + OAuth):** `litehouse-server` also serves MCP over Streamable HTTP at `POST /mcp` on the admin host (`src/mcp_http.rs`), so claude.ai / Claude mobile (custom connector) and Claude Code cloud sessions can use it. It reuses `crate::mcp`'s request handling with a `Mode { remote, read_only }`: `create_app` is hidden (needs a client-side GitHub token), `sha` must be a literal hex sha, waits cap at 120s. Tool calls go through `ApiClient::new_loopback` to the server's own `/api`, authenticated by a per-process `auth::internal_token()` (the server only has the admin token's hash). Auth on `/mcp`: the admin token as a bearer, or an OAuth access token from the built-in authorization server (`src/oauth.rs`: RFC 9728/8414 metadata, open DCR restricted to Claude's hosted callback or loopback redirects, PKCE S256, consent page `templates/oauth_authorize.html` gated by the admin token/cookie, `mcp` and `mcp:read` scopes, 1h access / 30d rotating refresh, hashes only in `oauth_*` tables). Grants record the admin hash they were approved under, so rotating the admin token revokes them. Settings page "connect claude" card lists/revokes grants via `/api/mcp/connections`. See `docs/superpowers/specs/2026-11-21-remote-mcp-server-design.md`.
 
 **Server startup:**
 1. Server starts → Connects to SQLite and Docker

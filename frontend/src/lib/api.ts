@@ -171,7 +171,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.text()) as unknown as T;
 }
 
+// `GET /api/mcp/connections` — OAuth grants held by remote MCP clients
+// (Claude connectors). Revoking one cuts that client off immediately.
+export interface McpConnection {
+  id: string;
+  client_name: string;
+  scope: string;
+  read_only: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
 export const api = {
+  mcpConnections: () => request<McpConnection[]>("/mcp/connections"),
+  revokeMcpConnection: (id: string) =>
+    request<void>(`/mcp/connections/${encodeURIComponent(id)}`, { method: "DELETE" }),
   appsSummary: () => request<AppSummary[]>("/apps/summary"),
   appSummary: (name: string) => request<AppDetailSummary>(`/apps/${encodeURIComponent(name)}/summary`),
   appMetrics: (name: string, hours = 24) =>

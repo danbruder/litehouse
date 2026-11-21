@@ -6,27 +6,57 @@
       {
         "name": "ts",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metric_sample",
+            "name": "ts"
+          }
+        }
       },
       {
         "name": "scope",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metric_sample",
+            "name": "scope"
+          }
+        }
       },
       {
         "name": "cpu_pct",
         "ordinal": 2,
-        "type_info": "Float"
+        "type_info": "Float",
+        "origin": {
+          "Table": {
+            "table": "metric_sample",
+            "name": "cpu_pct"
+          }
+        }
       },
       {
         "name": "mem_bytes",
         "ordinal": 3,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_sample",
+            "name": "mem_bytes"
+          }
+        }
       },
       {
         "name": "disk_bytes",
         "ordinal": 4,
-        "type_info": "Int64"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metric_sample",
+            "name": "disk_bytes"
+          }
+        }
       }
     ],
     "parameters": {
