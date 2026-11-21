@@ -43,7 +43,7 @@ Your app is live at `https://myapp.lh.example.com`. See `examples/hello` for a m
 
 ## Deploying with an AI agent
 
-litehouse is built to be driven by coding agents (Claude Code, Codex, Cursor, …). Connect the CLI yourself (above) so the admin token never enters the agent's transcript, then ask the agent to deploy the repo and follow `lh agent-guide`. The guide ([`docs/agents.md`](docs/agents.md), compiled into the CLI) covers the app contract — Dockerfile at the repo root, `EXPOSE` the port, persistent data under `/data` — and the exact preflight/create/deploy/verify steps. `lh mcp serve` exposes the same operations as MCP tools (`claude mcp add litehouse -- lh mcp serve`), with an `agent_guide` tool and `list_deploys` that waits on a specific commit.
+litehouse is built to be driven by coding agents (Claude Code, Codex, Cursor, …). Connect the CLI yourself (above) so the admin token never enters the agent's transcript, then ask the agent to deploy the repo and follow `lh agent-guide`. The guide ([`docs/agents.md`](docs/agents.md), compiled into the CLI) covers the app contract — Dockerfile at the repo root, `EXPOSE` the port, persistent data under `/data` — and the exact preflight/create/deploy/verify steps. `lh mcp serve` exposes the same operations as MCP tools (`claude mcp add litehouse -- lh mcp serve`), with an `agent_guide` tool and `list_deploys` that waits on a specific commit. The server also serves MCP over HTTP with OAuth at `https://admin.<domain>/mcp`, so you can add it to claude.ai or the Claude mobile app as a custom connector (copy-ready snippets on the admin UI's settings page).
 
 ### Optional: backups and private images at install time
 

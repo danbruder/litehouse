@@ -1,6 +1,7 @@
 # Remote (HTTP) MCP Server — Scoping
 
-Status: **scoping, not implemented.** Follows
+Status: **implemented** (see "As built" at the end for where it differs
+from the plan below). Follows
 `2026-07-25-litehouse-mcp-server-design.md` (the stdio server, `lh mcp serve`).
 
 ## Problem
@@ -260,3 +261,29 @@ cloud) work over HTTP by itself. **Mobile works only after phase 2.**
 - Streaming logs (`follow`) and SSE responses
 - Multi-user accounts or per-app tokens (litehouse stays single-admin)
 - Listing in Anthropic's connector directory
+
+## As built (2026-11-21)
+
+- **Tool reuse is simpler than the trait plan.** `src/mcp_http.rs` builds an
+  `ApiClient` (`ApiClient::new_loopback`, no env proxy) pointed at the
+  server's own `/api` over loopback, authenticated with a per-process random
+  `auth::internal_token()` that the admin middleware accepts as a bearer.
+  `crate::mcp` is unchanged apart from taking a `Mode { remote, read_only }`.
+  There's no `LitehouseOps` trait and no in-process `oneshot`. It costs one
+  localhost HTTP hop per tool call, and it means zero changes to the
+  handlers or `ApiClient` methods.
+- `initialize` negotiates `2024-11-05`, `2025-03-26`, `2025-06-18` and
+  `2025-11-25`. `ping` is supported. Batches are accepted. Responses are
+  plain JSON, and `GET`/`DELETE /mcp` return `405`.
+- **OAuth** is in `src/oauth.rs` with migration `20261121_oauth.sql`, as
+  designed:
+  - Loopback redirect ports are ignored when matching (RFC 8252).
+  - Unused client registrations are pruned after 24h, with a cap of 500.
+  - A failed admin token on the consent page sleeps 1s.
+- **Settings card** ("connect claude (mcp)") derives the URL from
+  `window.location.origin`, so `/api/server/info` didn't change.
+- **Not yet verified against real clients:** adding the connector on
+  claude.ai and using it from mobile, and Claude Code's OAuth flow.
+  Integration tests in `mcp_http.rs` walk register → consent → PKCE
+  exchange → refresh rotation → revoke → admin-token rotation over real
+  HTTP.

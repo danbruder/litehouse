@@ -80,6 +80,18 @@ impl ApiClient {
         }
     }
 
+    /// A client for the server calling its own API over loopback (the remote
+    /// MCP endpoint). Never goes through an HTTP proxy from the environment.
+    pub fn new_loopback(config: ClientConfig) -> Self {
+        Self {
+            client: Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+            config,
+        }
+    }
+
     /// The admin token this client was built with, falling back to the
     /// config on disk (plus env overrides) when it was built without one.
     fn get_api_token(&self) -> Result<Option<String>> {
