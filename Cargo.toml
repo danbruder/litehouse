@@ -26,7 +26,7 @@ chrono-tz = "0.9"
 toml = "0.8"
 bollard = {version = "0.15"}
 axum = { version = "0.6", features = ["multipart"] }
-tower = "0.4"
+tower = "0.5"
 hyper = { version = "0.14", features = ["full"] }
 http = "0.2"
 futures-util = "0.3"
