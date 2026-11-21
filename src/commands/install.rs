@@ -37,6 +37,10 @@ use crate::install::phases::*;
 /// Phase 10: Enable podman-restart service
 ///              │
 ///              v
+/// Phases 12-14: dial-stdio cleanup timer, weekly reboot timer,
+///               automatic OS security updates (unattended-upgrades)
+///              │
+///              v
 /// Phase 11: Verification (optional)
 
 #[instrument(skip_all)]
@@ -71,7 +75,7 @@ pub async fn execute(
     let multi = MultiProgress::new();
 
     // Create progress bar for phases
-    let total_phases = if skip_verify { 13 } else { 14 };
+    let total_phases = if skip_verify { 14 } else { 15 };
     let pb = multi.add(ProgressBar::new(total_phases));
     pb.set_style(
         ProgressStyle::default_bar()
@@ -308,6 +312,16 @@ pub async fn execute(
     if let Err(e) = phase13_weekly_reboot_timer() {
         pb.finish_with_message("❌ Weekly reboot timer setup failed");
         error!("Phase 13 failed: {}", e);
+        return Err(e);
+    }
+    pb.inc(1);
+
+    // Phase 14: Automatic OS security updates
+    pb.set_message("Enabling automatic OS security updates...");
+    log_window.set_message("Configuring unattended-upgrades...");
+    if let Err(e) = phase14_os_security_updates(Some(&log_window)) {
+        pb.finish_with_message("❌ Automatic OS security updates setup failed");
+        error!("Phase 14 failed: {}", e);
         return Err(e);
     }
     pb.inc(1);
