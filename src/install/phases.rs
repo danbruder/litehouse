@@ -428,6 +428,21 @@ pub fn phase13_weekly_reboot_timer() -> Result<()> {
     Ok(())
 }
 
+/// Phase 15: Install the CI deploy wrapper used as the forced command of
+/// the CI SSH key. Idempotent; re-applied on every `lh upgrade`.
+/// `sudo_write_file` renames into place, so a running copy of the script
+/// (the upgrade may have been started by it) keeps its old inode.
+#[instrument]
+pub fn phase15_ci_deploy_wrapper() -> Result<()> {
+    info!("Phase 15: CI deploy wrapper");
+    sudo_write_file(CI_DEPLOY_WRAPPER_PATH, templates::ci_deploy_wrapper())?;
+    run_command(&format!("sudo chmod 755 {}", CI_DEPLOY_WRAPPER_PATH))?;
+    info!("Phase 15 completed successfully");
+    Ok(())
+}
+
+pub const CI_DEPLOY_WRAPPER_PATH: &str = "/usr/local/bin/litehouse-ci-deploy";
+
 /// Phase 14: Automatic OS security updates (unattended-upgrades).
 /// Idempotent; re-applied on every `lh upgrade`. See
 /// docs/superpowers/specs/2026-11-21-os-security-updates-design.md.
