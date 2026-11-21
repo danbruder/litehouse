@@ -36,7 +36,7 @@ lh --version                # not found? install it (below), or ask the user to
 lh doctor --app <app>       # checks every prerequisite; fix each FAIL, then re-run
 ```
 
-Install the CLI with no root access. It lands in `~/.local/bin`:
+Install the CLI with no root access. It lands in `~/.local/bin`. Releases ship a linux/x86_64 binary only; on any other platform (e.g. macOS) build it with `cargo install --locked --git https://github.com/danbruder/litehouse litehouse`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh

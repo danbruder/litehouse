@@ -28,8 +28,12 @@ fn download_binary(version: Option<&str>, log_window: Option<&ProgressBar>) -> R
     let arch_output = run_command("uname -m")?;
     let arch = match arch_output.trim() {
         "x86_64" | "amd64" => "x86_64",
-        "aarch64" | "arm64" => "aarch64",
-        other => anyhow::bail!("Unsupported architecture: {}", other),
+        // Releases only ship linux/x86_64. On another arch, build a binary
+        // and use `lh upgrade --from-path` (see dev-deploy.sh).
+        other => anyhow::bail!(
+            "Unsupported architecture: {} (releases only ship linux/x86_64; build lh yourself and use `lh upgrade --from-path`)",
+            other
+        ),
     };
 
     // Determine download URL

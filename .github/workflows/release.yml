@@ -17,18 +17,21 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Each Linux architecture builds natively on its own runner: aws-lc-sys
-  # (pulled in by the S3 SDK) compiles C and is painful to cross-compile to
-  # musl. macOS builds are CLI-only (for `lh` on laptops, via install-cli.sh);
-  # both come from the Apple Silicon runner, whose toolchain targets Intel too.
-  #
-  # The macOS binaries only go into the GitHub Release, so only tag pushes
-  # build them; main/manual deploys build just the two Linux binaries the
-  # server image needs.
+  # Only the platform the server runs on (DigitalOcean droplets are
+  # linux/x86_64) is built, for every kind of run including tags: no arm64,
+  # no macOS. To bring a platform back, add a matrix entry (arm64 needs
+  # `ubuntu-24.04-arm`, a `docker_arch: arm64` image context, and
+  # `linux/arm64` in publish-image's platforms; aws-lc-sys doesn't
+  # cross-compile to musl, so build natively).
   build:
     strategy:
       matrix:
-        include: ${{ fromJSON(github.ref_type == 'tag' && '[{"os":"linux","arch":"x86_64","docker_arch":"amd64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest"},{"os":"linux","arch":"aarch64","docker_arch":"arm64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-24.04-arm"},{"os":"darwin","arch":"aarch64","target":"aarch64-apple-darwin","runner":"macos-latest"},{"os":"darwin","arch":"x86_64","target":"x86_64-apple-darwin","runner":"macos-latest"}]' || '[{"os":"linux","arch":"x86_64","docker_arch":"amd64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest"},{"os":"linux","arch":"aarch64","docker_arch":"arm64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-24.04-arm"}]') }}
+        include:
+          - os: linux
+            arch: x86_64
+            docker_arch: amd64
+            target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
     # Back-to-back merges to main: a newer commit's build cancels the older
     # one still in flight (its publish/deploy jobs then skip). Tag builds are
     # never cancelled, and the deploy jobs have their own non-cancelling
@@ -174,11 +177,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The image only runs `apk add` on top of the prebuilt binaries, so
-      # emulating arm64 here is cheap.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -186,7 +184,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: image-context
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.version.outputs.tags }}
 

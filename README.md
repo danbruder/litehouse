@@ -21,7 +21,7 @@ Install on a fresh Linux host with wildcard DNS already pointed at it (`*.lh.exa
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sudo sh -s -- --domain lh.example.com
 ```
 
-This prints an admin token once — save it. On your laptop, install the CLI (Linux or macOS, no root) and point it at the server:
+This prints an admin token once — save it. On your laptop, install the CLI (no root) and point it at the server. Releases ship a linux/x86_64 binary only; on macOS or ARM, `install-cli.sh` prints the `cargo install --locked --git https://github.com/danbruder/litehouse litehouse` command to build it instead:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh
