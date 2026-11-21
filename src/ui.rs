@@ -32,14 +32,14 @@ use crate::commands::server::AppState;
 
 const COOKIE_NAME: &str = "litehouse_token";
 
-fn is_local_dev() -> bool {
+pub(crate) fn is_local_dev() -> bool {
     std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions)
 }
 
 /// Thin wrapper turning any `askama::Template` into an axum response.
 /// (`askama_axum` was not used here: its 0.4 line requires axum 0.7, but
 /// this project is still on axum 0.6 — see Cargo.toml.)
-struct HtmlTemplate<T>(T);
+pub(crate) struct HtmlTemplate<T>(pub T);
 
 impl<T: Template> IntoResponse for HtmlTemplate<T> {
     fn into_response(self) -> Response {
@@ -54,7 +54,7 @@ impl<T: Template> IntoResponse for HtmlTemplate<T> {
     }
 }
 
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn cookie_token(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::COOKIE)
         .and_then(|h| h.to_str().ok())
