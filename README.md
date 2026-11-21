@@ -71,7 +71,7 @@ Run `lh --help` or `lh <command> --help` for full details; flags below are the n
 | Command | What it does |
 |---|---|
 | `lh install --domain <domain>` | Install litehouse on this server (run as root); accepts `--s3-*` and `--ghcr-token` to configure backups/private images up front |
-| `lh upgrade [--version <v>]` | Upgrade the litehouse binary and container image |
+| `lh upgrade [--version <v>] [--from-path <bin>] [--image-tag <tag>]` | Upgrade the litehouse binary and container image |
 | `lh connect <url> [--token <token>]` | Point this CLI at a server; verifies before saving. Token defaults to `$LITEHOUSE_TOKEN` |
 | `lh doctor [--app <name>] [--json]` | Preflight the repo in the current directory for deploying (exit 1 if anything blocks it) |
 | `lh agent-guide` | Print the guide for AI agents deploying with litehouse |
@@ -136,6 +136,8 @@ That job needs these repo secrets (Settings → Secrets and variables → Action
 | `LITEHOUSE_SERVER_HOST` | Server hostname/IP (e.g. `lh.danbruder.com`) |
 | `LITEHOUSE_SERVER_USER` | SSH user (e.g. `root`) |
 | `LITEHOUSE_SERVER_SSH_KEY` | Private key for a keypair authorized on the server, dedicated to CI |
+
+**Deploying a commit without a tag:** run the same workflow by hand, from the Actions tab ("Build and Release Binary" → "Run workflow", pick a branch) or with `gh workflow run release.yml --ref main`. It builds that commit, pushes `ghcr.io/danbruder/litehouse:sha-<short>` and `:edge` (`:latest` stays on the newest tagged release), copies the matching `lh` binary to the server, and runs `lh upgrade --from-path <binary> --image-tag sha-<short>`. No version bump, tag, or GitHub Release. It uses the same three secrets as the tag deploy. `lh --version` keeps reporting the last `Cargo.toml` version; the running image tag (`docker inspect litehouse-server --format '{{.Config.Image}}'`) shows the commit.
 
 `dev-deploy.sh` remains for local iteration: it builds the binary on your machine and runs `lh upgrade --from-path` over SSH, without waiting on a tagged release.
 

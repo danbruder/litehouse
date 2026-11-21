@@ -1,5 +1,13 @@
 name: Build and Release Binary
 
+# Two ways to ship:
+#   - Push a `v*` tag (./release.sh): GitHub Release + `:<version>`/`:latest`
+#     image, then `lh upgrade` on the server.
+#   - Run this workflow by hand (Actions → "Run workflow", or
+#     `gh workflow run release.yml --ref <branch>`): builds that commit,
+#     pushes `:sha-<short>`/`:edge`, and deploys it to the server with
+#     `lh upgrade --from-path ... --image-tag sha-<short>`. No tag, no
+#     version bump, no GitHub Release, and `:latest` is left alone.
 on:
   push:
     tags:
@@ -121,7 +129,6 @@ jobs:
   publish-image:
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: read
       packages: write
@@ -141,11 +148,29 @@ jobs:
       - name: Stage Dockerfile
         run: cp Dockerfile image-context/Dockerfile
 
-      - name: Compute image tag (strip leading v)
+      # Tag pushes publish `:<version>` (leading v stripped) and `:latest`.
+      # Manual runs publish `:sha-<short>` and `:edge` so `:latest` keeps
+      # meaning "newest tagged release" for fresh installs.
+      - name: Compute image tags
         id: version
         run: |
-          RAW_TAG="${GITHUB_REF#refs/tags/}"
-          echo "version=${RAW_TAG#v}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${RAW_TAG#v}"
+            {
+              echo "tags<<EOF"
+              echo "ghcr.io/danbruder/litehouse:${VERSION}"
+              echo "ghcr.io/danbruder/litehouse:latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "ghcr.io/danbruder/litehouse:sha-${GITHUB_SHA::7}"
+              echo "ghcr.io/danbruder/litehouse:edge"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -168,9 +193,7 @@ jobs:
           context: image-context
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/danbruder/litehouse:${{ steps.version.outputs.version }}
-            ghcr.io/danbruder/litehouse:latest
+          tags: ${{ steps.version.outputs.tags }}
 
   deploy:
     needs: [release, publish-image]
@@ -185,3 +208,54 @@ jobs:
           username: ${{ secrets.LITEHOUSE_SERVER_USER }}
           key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
           script: sudo /usr/local/bin/lh upgrade
+
+  # Manual runs: deploy exactly this commit. The binary comes from this run's
+  # artifacts (there is no GitHub Release to download it from) and the
+  # container runs the `sha-<short>` image pushed above, not the image named
+  # by Cargo.toml's version, which between releases is the previous release.
+  deploy-commit:
+    needs: publish-image
+    runs-on: ubuntu-latest
+    if: github.ref_type != 'tag'
+    concurrency:
+      group: litehouse-server-deploy
+      cancel-in-progress: false
+    permissions:
+      actions: read # artifact download from the build job
+
+    steps:
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-context-*
+          path: litehouse-deploy
+          merge-multiple: true
+
+      - name: Upload binaries to the server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.LITEHOUSE_SERVER_HOST }}
+          username: ${{ secrets.LITEHOUSE_SERVER_USER }}
+          key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
+          source: litehouse-deploy
+          target: /tmp
+          overwrite: true
+
+      - name: SSH and upgrade litehouse to this commit
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.LITEHOUSE_SERVER_HOST }}
+          username: ${{ secrets.LITEHOUSE_SERVER_USER }}
+          key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
+          script: |
+            set -e
+            SHORT_SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
+            case "$(uname -m)" in
+              x86_64|amd64) ARCH=amd64 ;;
+              aarch64|arm64) ARCH=arm64 ;;
+              *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+            esac
+            BIN=/tmp/litehouse-deploy/$ARCH/lh
+            chmod +x "$BIN"
+            sudo "$BIN" upgrade --from-path "$BIN" --image-tag "sha-$SHORT_SHA"
+            rm -rf /tmp/litehouse-deploy

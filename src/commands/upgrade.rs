@@ -5,7 +5,8 @@ use tracing::{info, instrument};
 use crate::install::executor::run_command;
 use crate::install::phases::{
     get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
-    phase6a_pull_litehouse_image, phase9b_start_litehouse_container,
+    phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image,
+    phase9b_start_litehouse_container,
 };
 
 const GITHUB_REPO: &str = "danbruder/litehouse";
@@ -177,7 +178,11 @@ fn cleanup_temp_dir(binary_path: &str) -> Result<()> {
 }
 
 #[instrument]
-pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<()> {
+pub async fn execute(
+    version: Option<&str>,
+    from_path: Option<&str>,
+    image_tag: Option<&str>,
+) -> Result<()> {
     info!("Starting litehouse upgrade");
 
     // Check if running as root
@@ -253,11 +258,16 @@ pub async fn execute(version: Option<&str>, from_path: Option<&str>) -> Result<(
     log_window.set_message("Pulling new container image...");
 
     let litehouse_uid = get_litehouse_uid().context("Failed to get litehouse user UID")?;
+    // An explicit --image-tag (a per-commit `sha-*` image from the
+    // workflow_dispatch deploy) wins over the binary's Cargo version, which
+    // between tagged releases still names the *previous* release's image.
+    let exact_tag = image_tag.map(str::to_string);
     let pull_version = parse_version(&new_version);
 
     let log_window_clone = log_window.clone();
-    let pull_result = tokio::task::spawn_blocking(move || {
-        phase6a_pull_litehouse_image(&pull_version, Some(&log_window_clone))
+    let pull_result = tokio::task::spawn_blocking(move || match exact_tag {
+        Some(tag) => phase6a_pull_exact_litehouse_image(&tag, Some(&log_window_clone)),
+        None => phase6a_pull_litehouse_image(&pull_version, Some(&log_window_clone)),
     })
     .await
     .map_err(|e| anyhow::anyhow!("Image pull task panicked: {}", e))?;
