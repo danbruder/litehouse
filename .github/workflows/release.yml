@@ -3,13 +3,15 @@ name: Build and Release Binary
 # Two ways to ship:
 #   - Push a `v*` tag (./release.sh): GitHub Release + `:<version>`/`:latest`
 #     image, then `lh upgrade` on the server.
-#   - Run this workflow by hand (Actions → "Run workflow", or
-#     `gh workflow run release.yml --ref <branch>`): builds that commit,
+#   - Push/merge to main, or run this workflow by hand (Actions → "Run
+#     workflow", or `gh workflow run release.yml --ref <branch>`): builds that commit,
 #     pushes `:sha-<short>`/`:edge`, and deploys it to the server with
 #     `lh upgrade --from-path ... --image-tag sha-<short>`. No tag, no
 #     version bump, no GitHub Release, and `:latest` is left alone.
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -149,7 +151,7 @@ jobs:
         run: cp Dockerfile image-context/Dockerfile
 
       # Tag pushes publish `:<version>` (leading v stripped) and `:latest`.
-      # Manual runs publish `:sha-<short>` and `:edge` so `:latest` keeps
+      # Main pushes and manual runs publish `:sha-<short>` and `:edge` so `:latest` keeps
       # meaning "newest tagged release" for fresh installs.
       - name: Compute image tags
         id: version
@@ -199,6 +201,11 @@ jobs:
     needs: [release, publish-image]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    # Shared with deploy-commit: ./release.sh pushes main and the tag
+    # together, so both deploys run; this keeps them from overlapping.
+    concurrency:
+      group: litehouse-server-deploy
+      cancel-in-progress: false
 
     steps:
       - name: SSH and upgrade litehouse on the server
@@ -209,7 +216,7 @@ jobs:
           key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
           script: sudo /usr/local/bin/lh upgrade
 
-  # Manual runs: deploy exactly this commit. The binary comes from this run's
+  # Pushes to main and manual runs: deploy exactly this commit. The binary comes from this run's
   # artifacts (there is no GitHub Release to download it from) and the
   # container runs the `sha-<short>` image pushed above, not the image named
   # by Cargo.toml's version, which between releases is the previous release.
