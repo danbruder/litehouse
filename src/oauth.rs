@@ -421,14 +421,16 @@ fn param<'a>(p: &'a HashMap<String, String>, k: &str) -> &'a str {
 async fn checked_client(
     pool: &Pool<Sqlite>,
     p: &HashMap<String, String>,
-) -> Result<Client, Response> {
+) -> Result<Client, Box<Response>> {
     let Some(client) = get_client(pool, param(p, "client_id")).await else {
-        return Err(error_page(
+        return Err(Box::new(error_page(
             "Unknown client. Remove the connector and add it again.",
-        ));
+        )));
     };
     if !redirect_matches(&client.redirect_uris, param(p, "redirect_uri")) {
-        return Err(error_page("The redirect URI doesn't match this client's registration."));
+        return Err(Box::new(error_page(
+            "The redirect URI doesn't match this client's registration.",
+        )));
     }
     Ok(client)
 }
@@ -459,7 +461,7 @@ async fn authorize_page(
     };
     let client = match checked_client(&pool, &p).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if param(&p, "response_type") != "code" {
         return redirect_error(&p, "unsupported_response_type", "only response_type=code is supported");
@@ -496,7 +498,7 @@ async fn authorize_submit(
     };
     let client = match checked_client(&pool, &p).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if param(&p, "code_challenge").is_empty() {
         return redirect_error(&p, "invalid_request", "PKCE code_challenge is required");
