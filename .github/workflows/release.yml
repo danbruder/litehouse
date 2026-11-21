@@ -21,28 +21,21 @@ jobs:
   # (pulled in by the S3 SDK) compiles C and is painful to cross-compile to
   # musl. macOS builds are CLI-only (for `lh` on laptops, via install-cli.sh);
   # both come from the Apple Silicon runner, whose toolchain targets Intel too.
+  #
+  # The macOS binaries only go into the GitHub Release, so only tag pushes
+  # build them; main/manual deploys build just the two Linux binaries the
+  # server image needs.
   build:
     strategy:
       matrix:
-        include:
-          - os: linux
-            arch: x86_64
-            docker_arch: amd64
-            target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
-          - os: linux
-            arch: aarch64
-            docker_arch: arm64
-            target: aarch64-unknown-linux-musl
-            runner: ubuntu-24.04-arm
-          - os: darwin
-            arch: aarch64
-            target: aarch64-apple-darwin
-            runner: macos-latest
-          - os: darwin
-            arch: x86_64
-            target: x86_64-apple-darwin
-            runner: macos-latest
+        include: ${{ fromJSON(github.ref_type == 'tag' && '[{"os":"linux","arch":"x86_64","docker_arch":"amd64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest"},{"os":"linux","arch":"aarch64","docker_arch":"arm64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-24.04-arm"},{"os":"darwin","arch":"aarch64","target":"aarch64-apple-darwin","runner":"macos-latest"},{"os":"darwin","arch":"x86_64","target":"x86_64-apple-darwin","runner":"macos-latest"}]' || '[{"os":"linux","arch":"x86_64","docker_arch":"amd64","target":"x86_64-unknown-linux-musl","runner":"ubuntu-latest"},{"os":"linux","arch":"aarch64","docker_arch":"arm64","target":"aarch64-unknown-linux-musl","runner":"ubuntu-24.04-arm"}]') }}
+    # Back-to-back merges to main: a newer commit's build cancels the older
+    # one still in flight (its publish/deploy jobs then skip). Tag builds are
+    # never cancelled, and the deploy jobs have their own non-cancelling
+    # concurrency group, so a running `lh upgrade` is never interrupted.
+    concurrency:
+      group: release-build-${{ github.ref }}-${{ matrix.os }}-${{ matrix.arch }}
+      cancel-in-progress: ${{ github.ref_type != 'tag' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

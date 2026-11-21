@@ -35,15 +35,19 @@ cargo run -- serve
 # Run tests (includes comprehensive Docker integration tests)
 cargo test
 
-# CI (.github/workflows/ci.yml) runs on every PR: clippy with -D warnings,
+# CI (.github/workflows/ci.yml) runs on PRs: clippy with -D warnings,
 # cargo test, and a check that src/ui/spa/ matches a fresh `npm run build`.
 # Keep clippy clean.
 
-# Security maintenance (see .github/): Dependabot opens weekly grouped PRs for
-# cargo, npm (frontend/), Docker base images, and Actions; security.yml runs
-# cargo-audit, npm audit, and a Trivy scan of the deployed images on PRs and
-# weekly; scheduled-rebuild.yml redeploys main weekly so alpine/Caddy patches
-# land without a code change. Accepted advisories live in .cargo/audit.toml,
+# Security maintenance (see .github/): Dependabot opens ONE grouped PR per
+# ecosystem per month (cargo, npm in frontend/, Docker, Actions), plus one
+# grouped security PR per ecosystem when an advisory lands; security.yml runs
+# cargo-audit and npm audit on lockfile PRs and weekly (Wed), plus a Trivy
+# scan of the deployed images; scheduled-rebuild.yml redeploys main on Tuesday
+# unless a merge already did in the last 6 days. CI is PR-only and a
+# "changes" job skips the Rust or frontend job when a PR doesn't touch it;
+# release.yml builds macOS binaries only for tags. Keep CI minutes in mind
+# when adding workflows. Accepted advisories live in .cargo/audit.toml,
 # each with a reason. `lh upgrade` re-pulls caddy:latest + helper images and
 # the server recreates Caddy when its image changed. When bumping alpine,
 # move Dockerfile, volume::UTILITY_IMAGE, install templates, and ci.yml together.
