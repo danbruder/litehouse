@@ -17,8 +17,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Each Linux architecture builds natively on its own runner: aws-lc-sys
-  # (pulled in by the S3 SDK) compiles C and is painful to cross-compile to
+  # Each Linux architecture builds natively on its own runner: ring (rustls's
+  # crypto) compiles C and assembly, which is painful to cross-compile to
   # musl. macOS builds are CLI-only (for `lh` on laptops, via install-cli.sh);
   # both come from the Apple Silicon runner, whose toolchain targets Intel too.
   build:
@@ -58,18 +58,14 @@ jobs:
 
       - name: Install musl-tools
         if: matrix.os == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # Registry + compiled dependencies per target (rust-cache adds the
+      # Cargo.lock and toolchain hashes to the key).
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.os }}-${{ matrix.arch }}-cargo-
+          key: ${{ matrix.target }}
 
       - name: Build release binary
         run: |

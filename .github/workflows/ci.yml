@@ -28,15 +28,13 @@ jobs:
         with:
           components: clippy
 
-      - uses: actions/cache@v4
+      # Caches the registry and compiled dependencies (not litehouse itself),
+      # keyed on Cargo.lock + toolchain, and re-saves when they change.
+      # Only main saves, so PR runs restore main's warm cache instead of each
+      # writing its own copy into the 10 GB repo cache limit.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ci-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ci-${{ runner.os }}-cargo-
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings

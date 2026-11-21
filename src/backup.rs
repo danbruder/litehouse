@@ -173,6 +173,16 @@ fn validate_app_name_for_shell(name: &str) -> Result<(), BackupError> {
 // S3 client
 // ---------------------------------------------------------------------
 
+/// HTTPS client for the S3 SDK: rustls on ring. aws-sdk-s3 is built without
+/// its default client (rustls on aws-lc-rs) so clean builds skip compiling
+/// aws-lc's C sources; see the aws-sdk-s3 entry in Cargo.toml.
+fn https_client() -> aws_sdk_s3::config::SharedHttpClient {
+    use aws_smithy_http_client::tls::{rustls_provider::CryptoMode, Provider};
+    aws_smithy_http_client::Builder::new()
+        .tls_provider(Provider::Rustls(CryptoMode::Ring))
+        .build_https()
+}
+
 pub fn s3_client(cfg: &S3Config) -> S3Client {
     let creds = aws_credential_types::Credentials::new(
         cfg.access_key_id.clone(),
@@ -185,6 +195,7 @@ pub fn s3_client(cfg: &S3Config) -> S3Client {
         .behavior_version(BehaviorVersion::latest())
         .region(Region::new(cfg.region.clone()))
         .credentials_provider(creds)
+        .http_client(https_client())
         .force_path_style(true);
     if let Some(endpoint) = &cfg.endpoint {
         builder = builder.endpoint_url(endpoint.clone());
