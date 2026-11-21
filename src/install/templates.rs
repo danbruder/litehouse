@@ -107,6 +107,106 @@ ExecStart=/usr/bin/systemctl reboot
 "#
 }
 
+/// `/etc/apt/apt.conf.d/20auto-upgrades`: turn on the daily apt list
+/// refresh and the daily unattended-upgrade run. Same file name and keys
+/// Ubuntu/Debian's own `dpkg-reconfigure unattended-upgrades` writes, so
+/// we replace it rather than layering a second file that could disagree.
+/// See docs/superpowers/specs/2026-11-21-os-security-updates-design.md.
+pub fn auto_upgrades_config() -> &'static str {
+    r#"// Managed by litehouse (lh install / lh upgrade / lh os-updates enable).
+APT::Periodic::Enable "1";
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
+"#
+}
+
+/// `/etc/apt/apt.conf.d/52litehouse-unattended-upgrades`: litehouse's
+/// overrides on top of the distro's `50unattended-upgrades` (sorts after
+/// it, so these win). Allowed-Origins is left at the distro default, which
+/// is the security pocket only, so feature upgrades never land unattended.
+///
+/// Automatic-Reboot stays off: the weekly reboot timer (Sun 3am Eastern,
+/// see `weekly_reboot_timer`) already reboots the box, which is what picks
+/// up a patched kernel or libc. Letting unattended-upgrades reboot on its
+/// own would add a second, unscheduled outage window.
+pub fn unattended_upgrades_config() -> &'static str {
+    r#"// Managed by litehouse (lh install / lh upgrade / lh os-updates enable).
+// Security updates only (the distro default origins). No automatic
+// reboot: litehouse-weekly-reboot.timer reboots Sun 03:00 America/New_York,
+// which picks up kernel/libc patches.
+Unattended-Upgrade::Automatic-Reboot "false";
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::MinimalSteps "true";
+"#
+}
+
+/// Drop-in for `apt-daily-upgrade.timer` pinning the unattended-upgrade
+/// run to 02:00 US Eastern. The distro default (06:00 + up to 60 min,
+/// host-local time, which is UTC on a droplet) lands mid-morning in the US.
+/// A `docker.io`/`containerd` security update restarts the Docker daemon
+/// and with it every container (they come back via their restart policy),
+/// so it belongs in the same quiet window as the 3am nightly app restart
+/// and the Sunday 3am reboot, and before them, so the reboot picks up
+/// whatever was just installed. The empty `OnCalendar=` clears the
+/// distro's schedule instead of adding a second one.
+pub fn apt_daily_upgrade_timer_override() -> &'static str {
+    r#"# Managed by litehouse. Run unattended security upgrades at 02:00 US
+# Eastern, before the 03:00 nightly app restart / Sunday reboot.
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 02:00:00 America/New_York
+RandomizedDelaySec=15m
+Persistent=true
+"#
+}
+
+/// Install + enable unattended security upgrades. Idempotent: safe on a
+/// box that already has unattended-upgrades (stock Ubuntu cloud images do)
+/// and on every `lh upgrade`. Waits for the apt lock rather than failing
+/// if apt-daily happens to be running.
+pub fn os_security_updates_script() -> String {
+    format!(
+        r#"#!/bin/bash
+set -e
+
+if ! dpkg -s unattended-upgrades >/dev/null 2>&1; then
+    echo "Installing unattended-upgrades..."
+    apt-get -o DPkg::Lock::Timeout=300 update -y
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y unattended-upgrades
+else
+    echo "unattended-upgrades already installed"
+fi
+
+echo "Writing apt periodic + unattended-upgrades config..."
+cat > /etc/apt/apt.conf.d/20auto-upgrades <<'LH_EOF'
+{auto}LH_EOF
+cat > /etc/apt/apt.conf.d/52litehouse-unattended-upgrades <<'LH_EOF'
+{uu}LH_EOF
+chmod 644 /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/52litehouse-unattended-upgrades
+
+echo "Scheduling unattended upgrades for 02:00 US Eastern..."
+mkdir -p /etc/systemd/system/apt-daily-upgrade.timer.d
+cat > /etc/systemd/system/apt-daily-upgrade.timer.d/litehouse.conf <<'LH_EOF'
+{timer}LH_EOF
+
+systemctl daemon-reload
+systemctl enable apt-daily.timer apt-daily-upgrade.timer
+# restart (not just start) so an already-running timer picks up the drop-in
+systemctl restart apt-daily.timer apt-daily-upgrade.timer
+systemctl enable --now unattended-upgrades.service >/dev/null 2>&1 || true
+
+echo "Automatic OS security updates enabled"
+"#,
+        auto = auto_upgrades_config(),
+        uu = unattended_upgrades_config(),
+        timer = apt_daily_upgrade_timer_override(),
+    )
+}
+
 /// Bootstrap script for system preparation
 pub fn system_preparation_script() -> &'static str {
     r#"#!/bin/bash
@@ -124,7 +224,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     git \
     ufw \
     fail2ban \
-    sqlite3
+    sqlite3 \
+    unattended-upgrades
 
 echo "Enabling and starting Docker..."
 systemctl enable docker
@@ -522,6 +623,38 @@ pub fn initial_caddy_config(domain: &str, admin_label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn os_security_updates_never_auto_reboot_and_run_before_maintenance() {
+        let uu = unattended_upgrades_config();
+        assert!(uu.contains(r#"Unattended-Upgrade::Automatic-Reboot "false";"#));
+        // Distro default origins (security only) must stay in charge.
+        assert!(!uu.contains("Allowed-Origins"));
+        assert!(!uu.contains("Origins-Pattern"));
+
+        let auto = auto_upgrades_config();
+        assert!(auto.contains(r#"APT::Periodic::Unattended-Upgrade "1";"#));
+        assert!(auto.contains(r#"APT::Periodic::Update-Package-Lists "1";"#));
+
+        // Clears the distro schedule, then runs before the 03:00 Eastern
+        // nightly restart / Sunday reboot.
+        let timer = apt_daily_upgrade_timer_override();
+        assert!(timer.contains("OnCalendar=\nOnCalendar=*-*-* 02:00:00 America/New_York"));
+    }
+
+    #[test]
+    fn os_security_updates_script_embeds_all_config_and_is_idempotent() {
+        let script = os_security_updates_script();
+        assert!(script.contains(auto_upgrades_config()));
+        assert!(script.contains(unattended_upgrades_config()));
+        assert!(script.contains(apt_daily_upgrade_timer_override()));
+        assert!(script.contains("dpkg -s unattended-upgrades"));
+        assert!(script.contains("DPkg::Lock::Timeout"));
+        assert!(script.contains("systemctl restart apt-daily.timer apt-daily-upgrade.timer"));
+        // Every heredoc body ends in a newline before its terminator.
+        assert!(!script.contains("\"LH_EOF"));
+        assert_eq!(script.matches("<<'LH_EOF'").count(), script.matches("\nLH_EOF\n").count());
+    }
 
     #[test]
     fn litehouse_run_script_uses_ghcr_image_and_backups_volume() {
