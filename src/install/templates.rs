@@ -302,6 +302,30 @@ echo "UID:$LITEHOUSE_UID"
 /// which tag actually landed (`<version>` or `latest`) and use the same
 /// image reference when starting the container.
 pub fn pull_litehouse_image_script(version: &str) -> String {
+    pull_litehouse_image_script_with_fallback(version, true)
+}
+
+/// Like [`pull_litehouse_image_script`], but when `fallback_to_latest` is
+/// false a missing tag fails the script instead of silently pulling
+/// `:latest`. Used by `lh upgrade --image-tag`, where the caller names an
+/// exact per-commit image and running anything else would be wrong.
+pub fn pull_litehouse_image_script_with_fallback(version: &str, fallback_to_latest: bool) -> String {
+    if !fallback_to_latest {
+        return format!(
+            r#"#!/bin/bash
+set -e
+
+VERSION_TAG="ghcr.io/danbruder/litehouse:{version}"
+
+echo "Pulling litehouse-server image ($VERSION_TAG)..."
+docker pull "$VERSION_TAG"
+echo "PULLED_TAG:{version}"
+
+echo "litehouse-server image pull completed"
+"#,
+            version = version
+        );
+    }
     format!(
         r#"#!/bin/bash
 set -e
@@ -507,6 +531,14 @@ mod tests {
         assert!(script.contains("LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups"));
         assert!(!script.to_lowercase().contains("litestream"));
         assert!(!script.contains("docker build"));
+    }
+
+    #[test]
+    fn exact_pull_script_never_falls_back_to_latest() {
+        let script = pull_litehouse_image_script_with_fallback("sha-abc1234", false);
+        assert!(script.contains("ghcr.io/danbruder/litehouse:sha-abc1234"));
+        assert!(script.contains("PULLED_TAG:sha-abc1234"));
+        assert!(!script.contains(":latest"));
     }
 
     #[test]

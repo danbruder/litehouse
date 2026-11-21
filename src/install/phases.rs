@@ -131,9 +131,24 @@ pub fn get_litehouse_uid() -> Result<String> {
 /// use the same image reference when starting the container.
 #[instrument(skip(log_window))]
 pub fn phase6a_pull_litehouse_image(version: &str, log_window: Option<&ProgressBar>) -> Result<String> {
+    pull_litehouse_image(version, true, log_window)
+}
+
+/// Phase 6a variant for `lh upgrade --image-tag`: pulls exactly `tag` and
+/// fails if it isn't published, instead of falling back to `:latest`.
+#[instrument(skip(log_window))]
+pub fn phase6a_pull_exact_litehouse_image(tag: &str, log_window: Option<&ProgressBar>) -> Result<String> {
+    pull_litehouse_image(tag, false, log_window)
+}
+
+fn pull_litehouse_image(
+    version: &str,
+    fallback_to_latest: bool,
+    log_window: Option<&ProgressBar>,
+) -> Result<String> {
     info!("Phase 6a: Pull litehouse image from GHCR");
 
-    let script = templates::pull_litehouse_image_script(version);
+    let script = templates::pull_litehouse_image_script_with_fallback(version, fallback_to_latest);
     std::fs::write("/tmp/pull_litehouse.sh", &script)?;
     run_command("chmod +x /tmp/pull_litehouse.sh")?;
     let output = run_command_with_log("/tmp/pull_litehouse.sh", log_window)?;

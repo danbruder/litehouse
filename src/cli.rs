@@ -70,6 +70,13 @@ enum Commands {
         /// Path to a local binary to use instead of downloading
         #[arg(long)]
         from_path: Option<String>,
+
+        /// Exact litehouse-server image tag to run (e.g. `sha-abc1234`),
+        /// instead of the tag matching the binary's version. Fails rather
+        /// than falling back to `latest`. Used by the "deploy this commit"
+        /// path in .github/workflows/release.yml.
+        #[arg(long)]
+        image_tag: Option<String>,
     },
 
     /// Create a new app: registers it on the server, commits a deploy
@@ -450,8 +457,17 @@ pub async fn run() -> Result<()> {
             admin_subdomain.as_deref(),
         )
         .await,
-        Commands::Upgrade { version, from_path } => {
-            crate::commands::upgrade::execute(version.as_deref(), from_path.as_deref()).await
+        Commands::Upgrade {
+            version,
+            from_path,
+            image_tag,
+        } => {
+            crate::commands::upgrade::execute(
+                version.as_deref(),
+                from_path.as_deref(),
+                image_tag.as_deref(),
+            )
+            .await
         }
         Commands::Serve => {
             let config = ServerConfig::load()?;
