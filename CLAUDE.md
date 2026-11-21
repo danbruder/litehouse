@@ -45,7 +45,8 @@ cargo test test_run_function_happy_path
 # Build for production (Linux musl target; use aarch64-* for an ARM server)
 TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-linux-musl
 
-# Deploy the current commit to the server without tagging a release
+# Merging to main deploys that commit to the server automatically.
+# Deploy another branch without tagging a release
 # (builds in Actions, pushes ghcr.io/danbruder/litehouse:sha-<short>, runs
 # `lh upgrade --from-path ... --image-tag sha-<short>` over SSH)
 gh workflow run release.yml --ref <branch>
