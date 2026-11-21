@@ -362,7 +362,7 @@ echo "Pulling sqlite3 helper image..."
 docker pull keinos/sqlite3:latest
 
 echo "Pulling alpine helper image..."
-docker pull alpine:3.20
+docker pull alpine:3.24
 
 echo "Image pull completed"
 "#
@@ -420,7 +420,7 @@ if [ -f /opt/litehouse/config/server-config.toml ]; then
   docker run --rm \
     -v litehouse_config:/target \
     -v /opt/litehouse/config/server-config.toml:/source/server-config.toml:ro \
-    alpine:3.20 \
+    alpine:3.24 \
     sh -c 'if [ ! -f /target/server-config.toml ]; then cp /source/server-config.toml /target/server-config.toml; echo "Server config seeded from host (volume was empty)"; else echo "Server config already present in volume, leaving it in place"; fi'
 else
   echo "Warning: /opt/litehouse/config/server-config.toml not found, container will use defaults"
@@ -575,7 +575,7 @@ mod tests {
     fn pull_images_script_includes_backup_helper_images() {
         let script = pull_images_script("1000");
         assert!(script.contains("keinos/sqlite3"));
-        assert!(script.contains("alpine:3.20"));
+        assert!(script.contains("alpine:3.24"));
         assert!(script.contains("caddy:latest"));
     }
 

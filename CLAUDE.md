@@ -39,6 +39,15 @@ cargo test
 # cargo test, and a check that src/ui/spa/ matches a fresh `npm run build`.
 # Keep clippy clean.
 
+# Security maintenance (see .github/): Dependabot opens weekly grouped PRs for
+# cargo, npm (frontend/), Docker base images, and Actions; security.yml runs
+# cargo-audit, npm audit, and a Trivy scan of the deployed images on PRs and
+# weekly; scheduled-rebuild.yml redeploys main weekly so alpine/Caddy patches
+# land without a code change. Accepted advisories live in .cargo/audit.toml,
+# each with a reason. `lh upgrade` re-pulls caddy:latest + helper images and
+# the server recreates Caddy when its image changed. When bumping alpine,
+# move Dockerfile, volume::UTILITY_IMAGE, install templates, and ci.yml together.
+
 # Run specific test
 cargo test test_run_function_happy_path
 

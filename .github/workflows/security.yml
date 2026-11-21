@@ -1,0 +1,79 @@
+name: Security audit
+
+# Checks litehouse's own dependencies against published advisories:
+#   - Rust crates (RustSec advisory DB) via cargo-audit
+#   - Admin UI runtime npm packages (what ships in the embedded bundle)
+#   - The published litehouse-server and caddy images (OS packages) via Trivy
+#
+# Runs on PRs that touch a lockfile/Dockerfile, on main, and weekly so new
+# advisories against unchanged code are caught too.
+on:
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - frontend/package.json
+      - frontend/package-lock.json
+      - Dockerfile
+      - .github/workflows/security.yml
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 13 * * 1" # Mondays 13:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: Rust advisories (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # Fails on vulnerabilities. Unmaintained/yanked crates are reported as
+      # warnings only. To accept a specific advisory, add it to
+      # .cargo/audit.toml's [advisories] ignore list with a reason.
+      - name: cargo audit
+        run: cargo audit
+
+  npm-audit:
+    name: Admin UI advisories (npm audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Only runtime deps end up in the embedded bundle served to admins;
+      # dev tooling (vite, esbuild, tsc) never runs on the server.
+      - name: npm audit (runtime deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (all deps, report only)
+        run: npm audit || true
+
+  image-scan:
+    name: Image scan (Trivy)
+    # Scans what is actually deployed, so it only makes sense off PRs.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ghcr.io/danbruder/litehouse:edge
+          - caddy:latest
+    steps:
+      # Trivy runs from its pinned release image rather than a third-party
+      # action, so a compromised action tag can't run in this job.
+      - name: Scan ${{ matrix.image }}
+        run: |
+          docker run --rm aquasec/trivy:0.76.2 image \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 \
+            --no-progress "${{ matrix.image }}"

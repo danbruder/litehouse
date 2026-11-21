@@ -6,7 +6,13 @@
       {
         "name": "ghcr_token",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "system_config",
+            "name": "ghcr_token"
+          }
+        }
       }
     ],
     "parameters": {
