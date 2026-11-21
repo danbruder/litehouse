@@ -5,6 +5,11 @@
 //!
 //! stdout carries ONLY protocol messages; all logging goes to stderr (see
 //! `main.rs`).
+//!
+//! The same request handling also backs the remote Streamable HTTP endpoint
+//! (`POST /mcp` on the admin host, see `crate::mcp_http`), which passes a
+//! [`Mode`] so it can hide tools that only work locally (`create_app`) and
+//! honour a read-only OAuth grant.
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
@@ -15,6 +20,66 @@ use crate::api_client::{ApiClient, LogStream};
 use crate::config::ClientConfig;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Protocol revisions this server can speak. `initialize` echoes the
+/// client's requested version when it is one of these, else the newest.
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+
+/// Who is calling and what they may do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Mode {
+    /// Served over HTTP from inside `litehouse-server` rather than as a local
+    /// `lh mcp serve` process: no git checkout, no GitHub token.
+    pub remote: bool,
+    /// Only tools that change nothing (an OAuth grant with the `mcp:read`
+    /// scope).
+    pub read_only: bool,
+}
+
+impl Mode {
+    pub const LOCAL: Mode = Mode { remote: false, read_only: false };
+}
+
+/// Tools that never change anything.
+const READ_ONLY_TOOLS: &[&str] = &[
+    "agent_guide",
+    "list_apps",
+    "app_status",
+    "list_deploys",
+    "logs",
+    "list_domains",
+    "backup_status",
+];
+
+/// Write tools a client should confirm before running (MCP `destructiveHint`).
+const DESTRUCTIVE_TOOLS: &[&str] = &[
+    "deploy",
+    "env_set",
+    "stop_app",
+    "delete_app",
+    "remove_domain",
+    "create_app",
+];
+
+/// Tools that need the caller's own machine (a GitHub token and git
+/// checkout), so the remote server leaves them out.
+const LOCAL_ONLY_TOOLS: &[&str] = &["create_app"];
+
+/// Longest `list_deploys` wait over remote HTTP. A tool call held open for
+/// ten minutes through a hosted client is likely to be cut off; the agent
+/// calls again if the deploy is still in progress.
+const REMOTE_MAX_WAIT_SECS: u64 = 120;
+
+fn tool_allowed(name: &str, mode: Mode) -> bool {
+    if mode.remote && LOCAL_ONLY_TOOLS.contains(&name) {
+        return false;
+    }
+    if mode.read_only && !READ_ONLY_TOOLS.contains(&name) {
+        return false;
+    }
+    true
+}
 
 #[derive(Debug, Deserialize)]
 struct JsonRpcRequest {
@@ -38,13 +103,52 @@ fn tool_result(text: String, is_error: bool) -> Value {
     json!({ "content": [ { "type": "text", "text": text } ], "isError": is_error })
 }
 
-fn initialize_result() -> Value {
+fn initialize_result(params: &Value, mode: Mode) -> Value {
+    let requested = params.get("protocolVersion").and_then(|v| v.as_str());
+    let version = match requested {
+        Some(v) if SUPPORTED_PROTOCOL_VERSIONS.contains(&v) => v,
+        // A stdio client that sends nothing keeps the version it always got.
+        None if !mode.remote => PROTOCOL_VERSION,
+        _ => SUPPORTED_PROTOCOL_VERSIONS[SUPPORTED_PROTOCOL_VERSIONS.len() - 1],
+    };
+    let instructions = if mode.remote {
+        format!(
+            "{} {}",
+            crate::agent_guide::MCP_INSTRUCTIONS,
+            crate::agent_guide::MCP_REMOTE_INSTRUCTIONS
+        )
+    } else {
+        crate::agent_guide::MCP_INSTRUCTIONS.to_string()
+    };
     json!({
-        "protocolVersion": PROTOCOL_VERSION,
+        "protocolVersion": version,
         "capabilities": { "tools": {} },
         "serverInfo": { "name": "litehouse", "version": env!("CARGO_PKG_VERSION") },
-        "instructions": crate::agent_guide::MCP_INSTRUCTIONS
+        "instructions": instructions
     })
+}
+
+/// The catalog for `mode`: unavailable tools removed, MCP annotations added
+/// so clients can ask before running destructive ones.
+fn tools_for(mode: Mode) -> Value {
+    let Value::Array(tools) = tool_definitions() else {
+        unreachable!("tool_definitions is an array")
+    };
+    let tools: Vec<Value> = tools
+        .into_iter()
+        .filter(|t| tool_allowed(t["name"].as_str().unwrap_or(""), mode))
+        .map(|mut t| {
+            let name = t["name"].as_str().unwrap_or("").to_string();
+            let read_only = READ_ONLY_TOOLS.contains(&name.as_str());
+            t["annotations"] = json!({
+                "readOnlyHint": read_only,
+                "destructiveHint": DESTRUCTIVE_TOOLS.contains(&name.as_str()),
+                "openWorldHint": false,
+            });
+            t
+        })
+        .collect();
+    Value::Array(tools)
 }
 
 /// The tool catalog advertised via `tools/list`.
@@ -123,13 +227,41 @@ async fn handle_request(
     api: &ApiClient,
     config: &ClientConfig,
 ) -> Option<Value> {
+    handle_request_with(req, api, config, Mode::LOCAL).await
+}
+
+/// Handle one raw JSON-RPC message (already parsed as JSON) for the remote
+/// endpoint. Returns `None` for notifications.
+pub async fn handle_message(
+    message: Value,
+    api: &ApiClient,
+    config: &ClientConfig,
+    mode: Mode,
+) -> Option<Value> {
+    match serde_json::from_value::<JsonRpcRequest>(message) {
+        Ok(req) => handle_request_with(req, api, config, mode).await,
+        Err(e) => Some(method_error(
+            Value::Null,
+            -32600,
+            format!("Invalid request: {}", e),
+        )),
+    }
+}
+
+async fn handle_request_with(
+    req: JsonRpcRequest,
+    api: &ApiClient,
+    config: &ClientConfig,
+    mode: Mode,
+) -> Option<Value> {
     // Notifications carry no id and expect no response.
     req.id.as_ref()?;
     let id = req.id.clone().unwrap();
 
     match req.method.as_str() {
-        "initialize" => Some(success(id, initialize_result())),
-        "tools/list" => Some(success(id, json!({ "tools": tool_definitions() }))),
+        "initialize" => Some(success(id, initialize_result(&req.params, mode))),
+        "ping" => Some(success(id, json!({}))),
+        "tools/list" => Some(success(id, json!({ "tools": tools_for(mode) }))),
         "tools/call" => {
             let name = req
                 .params
@@ -142,7 +274,15 @@ async fn handle_request(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = match call_tool(&name, &args, api, config).await {
+            if !tool_allowed(&name, mode) {
+                let why = if mode.remote && LOCAL_ONLY_TOOLS.contains(&name.as_str()) {
+                    format!("'{}' isn't available over remote MCP: run `lh create` from a machine with the repo checked out", name)
+                } else {
+                    format!("'{}' isn't allowed: this connection was granted read-only access", name)
+                };
+                return Some(success(id, tool_result(why, true)));
+            }
+            let result = match call_tool(&name, &args, api, config, mode).await {
                 Ok(text) => tool_result(text, false),
                 Err(e) => tool_result(format!("{:#}", e), true),
             };
@@ -183,6 +323,7 @@ async fn call_tool(
     args: &Value,
     api: &ApiClient,
     config: &ClientConfig,
+    mode: Mode,
 ) -> Result<String> {
     match name {
         "list_apps" => api.get_status_json(None).await,
@@ -202,18 +343,27 @@ async fn call_tool(
             let app = required_str(args, "app_name")?;
             let limit = optional_u64(args, "limit").unwrap_or(20) as u32;
             let wait = optional_bool(args, "wait").unwrap_or(false);
-            let timeout = optional_u64(args, "timeout").unwrap_or(600);
+            let mut timeout = optional_u64(args, "timeout").unwrap_or(600);
+            if mode.remote {
+                timeout = timeout.min(REMOTE_MAX_WAIT_SECS);
+            }
             if !wait {
                 let deploys = api.list_deploys(&app, limit).await?;
                 return Ok(serde_json::to_string_pretty(&deploys)?);
             }
-            let sha = optional_str(args, "sha")
-                .as_deref()
-                .map(crate::deploy_wait::resolve_sha)
-                .transpose()?;
-            let build = match &sha {
-                Some(_) => crate::deploy_wait::BuildWatch::discover(api, &app).await,
+            let sha = match optional_str(args, "sha") {
+                // The server has no git checkout to resolve refs against.
+                Some(s) if mode.remote => Some(crate::deploy_wait::literal_sha(&s)?),
+                Some(s) => Some(crate::deploy_wait::resolve_sha(&s)?),
                 None => None,
+            };
+            // Watching the Actions run needs a GitHub token, which the
+            // server deliberately never holds.
+            let build = match &sha {
+                Some(_) if !mode.remote => {
+                    crate::deploy_wait::BuildWatch::discover(api, &app).await
+                }
+                _ => None,
             };
             let (outcome, deploys) = crate::deploy_wait::wait(
                 api,

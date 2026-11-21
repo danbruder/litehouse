@@ -234,6 +234,8 @@ pub async fn execute(config: ServerConfig) -> Result<()> {
     // Build combined router: API routes under /api, admin UI for everything else
     let app = Router::new()
         .nest("/api", api::create_api_router(state.clone()))
+        // Remote MCP (Streamable HTTP) + the OAuth server that guards it.
+        .merge(crate::mcp_http::router(state.clone()))
         .fallback_service(ui::create_ui_router(state.clone()));
 
     // Parse host and port for server
