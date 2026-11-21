@@ -6,47 +6,101 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "app_id",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "app_id"
+          }
+        }
       },
       {
         "name": "image",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "image"
+          }
+        }
       },
       {
         "name": "git_sha",
         "ordinal": 3,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "git_sha"
+          }
+        }
       },
       {
         "name": "status",
         "ordinal": 4,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "status"
+          }
+        }
       },
       {
         "name": "error",
         "ordinal": 5,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "error"
+          }
+        }
       },
       {
         "name": "created_at",
         "ordinal": 6,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "created_at"
+          }
+        }
       },
       {
         "name": "updated_at",
         "ordinal": 7,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "updated_at"
+          }
+        }
       },
       {
         "name": "log",
         "ordinal": 8,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "deploy",
+            "name": "log"
+          }
+        }
       }
     ],
     "parameters": {

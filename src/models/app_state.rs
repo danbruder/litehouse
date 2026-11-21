@@ -27,7 +27,7 @@ impl Type<Sqlite> for AppState {
 
 impl<'r> Decode<'r, Sqlite> for AppState {
     fn decode(
-        value: <Sqlite as sqlx::database::HasValueRef<'r>>::ValueRef,
+        value: <Sqlite as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         let naive = <String as Decode<Sqlite>>::decode(value)?;
         let parsed = parse_app_state(&naive);
@@ -38,8 +38,8 @@ impl<'r> Decode<'r, Sqlite> for AppState {
 impl<'q> Encode<'q, Sqlite> for AppState {
     fn encode_by_ref(
         &self,
-        buf: &mut <Sqlite as sqlx::database::HasArguments<'q>>::ArgumentBuffer,
-    ) -> sqlx::encode::IsNull {
+        buf: &mut <Sqlite as sqlx::Database>::ArgumentBuffer,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
         let naive = app_state_to_string(self);
         <String as Encode<Sqlite>>::encode_by_ref(&naive, buf)
     }

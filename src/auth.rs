@@ -21,6 +21,26 @@ pub fn generate_token() -> String {
     hex::encode(bytes)
 }
 
+/// A per-process secret the server's own remote MCP endpoint uses to call
+/// the admin API over loopback (see `crate::mcp_http`). Never persisted or
+/// shown: the server stores only the admin token's hash, so it can't reuse
+/// the admin token itself, and OAuth access tokens are deliberately not
+/// accepted on `/api`.
+static INTERNAL_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn internal_token() -> &'static str {
+    INTERNAL_TOKEN.get_or_init(generate_token)
+}
+
+/// Bearer token for `Authorization`, if any.
+pub(crate) fn bearer_token(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|t| t.trim().to_string())
+}
+
 pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -86,7 +106,7 @@ pub(crate) fn same_origin(headers: &axum::http::HeaderMap) -> bool {
 }
 
 /// True when the presented token hashes to the expected (non-empty) hash.
-fn token_authorized(provided: Option<&str>, expected_hash: &str) -> bool {
+pub(crate) fn token_authorized(provided: Option<&str>, expected_hash: &str) -> bool {
     match provided {
         Some(token) if !expected_hash.is_empty() => {
             constant_time_eq(&hash_token(token), expected_hash)
@@ -104,7 +124,8 @@ pub async fn admin_auth_middleware<B>(
     let expected = state.read().await.admin_token_hash.clone();
     let extracted = extract_token(req.headers());
     let token = extracted.as_ref().map(|(t, _)| t.as_str());
-    if !token_authorized(token, &expected) {
+    let internal = matches!(&extracted, Some((t, TokenSource::Bearer)) if constant_time_eq(t, internal_token()));
+    if !internal && !token_authorized(token, &expected) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 

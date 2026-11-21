@@ -1,0 +1,51 @@
+# Dependabot keeps litehouse's own dependencies patched. Merged PRs ship to
+# the server automatically via the push-to-main deploy in release.yml.
+#
+# Version updates are grouped (one PR per ecosystem per week) so the queue
+# stays small; security updates are always raised individually and right
+# away, regardless of this schedule.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  # The admin UI. After merging, the committed bundle in src/ui/spa/ must be
+  # regenerated (`cd frontend && npm run build`); CI's "Committed SPA bundle
+  # is up to date" check fails the PR until that's done.
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  # Base image of the litehouse-server container. Bumps here also need the
+  # matching helper image (volume::UTILITY_IMAGE, install templates, CI)
+  # moved to the same alpine tag.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /examples/hello
+      - /site
+    schedule:
+      interval: weekly
+      day: monday
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]

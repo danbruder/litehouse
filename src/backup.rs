@@ -587,7 +587,7 @@ async fn backup_state_db(
     // harden the SQL literal construction anyway rather than relying on
     // that staying true forever.
     let escaped_path = sql_quote_literal(snapshot_path_str);
-    sqlx::query(&format!("VACUUM INTO '{}'", escaped_path))
+    sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{}'", escaped_path)))
         .execute(pool)
         .await
         .context("failed to VACUUM INTO litehouse state DB snapshot")?;
@@ -850,7 +850,7 @@ async fn restore_blobs(
     Ok(())
 }
 
-/// Run a one-shot `alpine:3.20` container that applies a restore staging
+/// Run a one-shot `alpine:3.24` container that applies a restore staging
 /// directory (bind-mounted read-only at `/restore`, containing `files.tar.gz`
 /// and/or a `dbs/` tree as produced by [`extract_outer_tarball`]) onto the
 /// app's data volume (bind... mounted at `/data`): untar `files.tar.gz` into
@@ -866,6 +866,7 @@ async fn run_restore_container(
     stage_dir: &Path,
     uid_gid: Option<(u32, u32)>,
 ) -> Result<()> {
+    crate::volume::ensure_utility_image(docker).await?;
     let stage_dir_str = stage_dir
         .to_str()
         .context("restore staging dir path is not valid UTF-8")?;
@@ -897,7 +898,7 @@ if [ -d /restore/blobs ]; then mkdir -p /data/blobs && cp -a /restore/blobs/. /d
         .await;
 
     let container_config = ContainerConfig {
-        image: Some("alpine:3.20".to_string()),
+        image: Some(crate::volume::UTILITY_IMAGE.to_string()),
         entrypoint: Some(vec!["sh".to_string()]),
         cmd: Some(vec!["-c".to_string(), script]),
         host_config: Some(HostConfig {
@@ -1781,7 +1782,7 @@ mod integration_tests {
 
         let app_name = "restore-blobs-test-app";
         let mut app = crate::models::App::new(app_name).expect("valid app name");
-        app.image = Some("alpine:3.20".to_string());
+        app.image = Some("alpine:3.24".to_string());
         db::app::save(&pool, &app).await.expect("save app");
 
         let _ = std::process::Command::new("docker")
@@ -1812,7 +1813,7 @@ mod integration_tests {
             .remove_container(read_container, Some(RemoveContainerOptions { force: true, ..Default::default() }))
             .await;
         let verify_config = ContainerConfig {
-            image: Some("alpine:3.20".to_string()),
+            image: Some(crate::volume::UTILITY_IMAGE.to_string()),
             cmd: Some(vec!["cat".to_string(), "/data/blobs/photo.jpg".to_string()]),
             host_config: Some(HostConfig {
                 binds: Some(vec![format!("{}:/data:ro", crate::volume::get_app_volume_name(&app.id))]),

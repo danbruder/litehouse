@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}authorization error - litehouse{% endblock %}
+
+{% block content %}
+<div class="terminal-shell">
+  <div class="login-box">
+    <p class="lede">litehouse://connect</p>
+    <div class="card">
+      <span class="panel-label">authorization error</span>
+      <p class="error">{{ message }}</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

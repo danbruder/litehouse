@@ -159,6 +159,19 @@ pub fn resolve_sha(input: &str) -> Result<String> {
     ))
 }
 
+/// A commit sha given verbatim (no git ref resolution), for callers with no
+/// checkout — the remote MCP endpoint.
+pub fn literal_sha(input: &str) -> Result<String> {
+    let input = input.trim();
+    if is_sha_like(input) {
+        Ok(input.to_lowercase())
+    } else {
+        Err(anyhow::anyhow!(
+            "'{input}' is not a commit sha. Over remote MCP pass the pushed commit's hex sha (git refs like HEAD can't be resolved on the server)"
+        ))
+    }
+}
+
 fn is_sha_like(s: &str) -> bool {
     (4..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }

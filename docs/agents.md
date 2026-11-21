@@ -184,3 +184,22 @@ and `LITEHOUSE_TOKEN`. The tools match the commands above: `create_app`,
 `run_backup`, and `agent_guide`, which returns this guide. After a push,
 call `list_deploys` with `wait: true` and `sha: "HEAD"`. It returns an
 error result unless that commit's deploy succeeded.
+
+### Remote MCP
+
+The server also speaks MCP over HTTP at `https://admin.<domain>/mcp`, for
+clients that can't run `lh` locally: claude.ai, the Claude desktop and
+mobile apps (as a custom connector), and Claude Code cloud sessions. The
+admin UI's settings page has copy-ready snippets.
+
+- Hosted Claude apps sign in with OAuth. The admin approves once on a
+  consent page (full or read-only access) and can revoke the connection
+  from settings. Rotating the admin token revokes every connection.
+- Claude Code can use OAuth too (`claude mcp add --transport http litehouse
+  <url>`, then `/mcp` to sign in), or send the admin token as
+  `--header "Authorization: Bearer $LITEHOUSE_TOKEN"`.
+
+Remote differences: `create_app` isn't available (it needs your GitHub
+token; run `lh create` locally), `sha` must be the full hex commit sha
+(the server can't resolve `HEAD`), and `list_deploys` waits at most 120s
+per call, so call it again while the deploy is still in progress.

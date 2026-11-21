@@ -1,0 +1,11 @@
+# cargo-audit configuration (used by .github/workflows/security.yml).
+# Every ignore needs a reason and a way out; revisit them when upgrading.
+[advisories]
+ignore = [
+    # h2 0.3 "unbounded empty DATA frames" (HTTP/2 DoS). Pulled in by
+    # hyper 0.14 via axum 0.6 and bollard 0.15. litehouse-server only takes
+    # HTTP/1.1 from Caddy on the internal Docker network and talks to Docker
+    # over a Unix socket, so no untrusted HTTP/2 peer reaches it. Goes away
+    # with the axum 0.7 / hyper 1 / bollard upgrade.
+    "RUSTSEC-2026-0258",
+]

@@ -16,3 +16,11 @@ persistent data only under /data) and the exact deploy steps. After every git \
 push, verify with `list_deploys` {wait: true, sha: \"HEAD\"}: without sha you \
 would read the previous deploy's result. Never ask the user to paste the admin \
 token into the chat. Ask before `delete_app` or rotating tokens.";
+
+/// Appended to [`MCP_INSTRUCTIONS`] on the remote HTTP endpoint, which runs
+/// on the server: no git checkout, no GitHub token.
+pub const MCP_REMOTE_INSTRUCTIONS: &str = "This is the remote litehouse MCP \
+endpoint: pass `sha` as the full hex commit sha (refs like HEAD can't be \
+resolved here), `list_deploys` waits at most 120s per call (call again while \
+the deploy is still in progress), and `create_app` isn't available (run \
+`lh create` locally).";

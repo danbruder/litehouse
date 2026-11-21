@@ -104,7 +104,7 @@ pub async fn start(docker: &Docker, config: &ServerConfig) -> Result<()> {
     info!("Ensuring Caddy reverse proxy is running");
 
     let container_name = "caddy-container";
-    let image_name = "caddy";
+    let image_name = "caddy:latest";
     let caddy_data_volume = "caddy_data";
     let caddy_config_volume = "caddy_config";
     let network_name = "litehouse-network";
@@ -141,6 +141,24 @@ pub async fn start(docker: &Docker, config: &ServerConfig) -> Result<()> {
                 restart_container(docker, &id).await?;
             } else if !verify_container_ports(docker, &id, config).await? {
                 info!("Container is running but on wrong ports, removing and recreating");
+                remove_container(docker, &id).await?;
+                create_and_start_container(
+                    docker,
+                    container_name,
+                    image_name,
+                    caddy_data_volume,
+                    caddy_config_volume,
+                    config,
+                )
+                .await?;
+            } else if running_stale_image(docker, &id, image_name).await {
+                // `lh upgrade` pulls a fresh `caddy:latest` before restarting
+                // litehouse-server. Caddy is the internet-facing TLS edge, so
+                // a newer local image means security fixes we should pick up:
+                // recreate the container on it. Certificates and the autosaved
+                // config live in the caddy_data/caddy_config volumes, and
+                // server startup re-syncs the routes right after this.
+                info!("Caddy is running an older image than the local caddy:latest, recreating");
                 remove_container(docker, &id).await?;
                 create_and_start_container(
                     docker,
@@ -381,6 +399,32 @@ async fn verify_container_health(docker: &Docker, container_id: &str) -> Result<
             Ok(false)
         }
     }
+}
+
+/// True when the running container's image differs from the image the
+/// local `image_name` tag points at (i.e. a newer image has been pulled
+/// since the container was created). Any inspect failure counts as "not
+/// stale" so a Docker hiccup never takes the proxy down.
+async fn running_stale_image(docker: &Docker, container_id: &str, image_name: &str) -> bool {
+    let running = match docker.inspect_container(container_id, None).await {
+        Ok(inspect) => inspect.image,
+        Err(e) => {
+            tracing::warn!("Failed to inspect Caddy container image: {}", e);
+            return false;
+        }
+    };
+    let local = match docker.inspect_image(image_name).await {
+        Ok(image) => image.id,
+        Err(e) => {
+            tracing::warn!("Failed to inspect local {} image: {}", image_name, e);
+            return false;
+        }
+    };
+    image_is_stale(running.as_deref(), local.as_deref())
+}
+
+fn image_is_stale(running: Option<&str>, local: Option<&str>) -> bool {
+    matches!((running, local), (Some(r), Some(l)) if !r.is_empty() && !l.is_empty() && r != l)
 }
 
 async fn verify_container_ports(
@@ -871,6 +915,16 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caddy_image_is_stale_only_when_both_ids_known_and_differ() {
+        assert!(image_is_stale(Some("sha256:old"), Some("sha256:new")));
+        assert!(!image_is_stale(Some("sha256:same"), Some("sha256:same")));
+        // Unknown on either side never triggers a recreate.
+        assert!(!image_is_stale(None, Some("sha256:new")));
+        assert!(!image_is_stale(Some("sha256:old"), None));
+        assert!(!image_is_stale(Some(""), Some("sha256:new")));
+    }
 
     fn deployed_app(name: &str, exposed_port: Option<&str>) -> App {
         let mut app = App::new(name).expect("valid app name");
