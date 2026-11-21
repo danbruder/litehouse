@@ -79,6 +79,13 @@ enum Commands {
         image_tag: Option<String>,
     },
 
+    /// Check or enable automatic OS security updates (unattended-upgrades)
+    /// on this server. Run on the litehouse host; `enable` needs root
+    OsUpdates {
+        #[command(subcommand)]
+        command: OsUpdatesCmd,
+    },
+
     /// Create a new app: registers it on the server, commits a deploy
     /// workflow to the GitHub repo, and sets the deploy-token secret — a
     /// `git push` to the repo is all that's needed to deploy from then on.
@@ -297,6 +304,20 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum OsUpdatesCmd {
+    /// Show whether automatic security updates are on, when they next run,
+    /// and whether a reboot is pending. Exits 1 if they aren't enabled
+    Status {
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install and enable unattended-upgrades (idempotent; also applied by
+    /// `lh install` and every `lh upgrade`)
+    Enable,
+}
+
+#[derive(Subcommand)]
 enum McpCmd {
     /// Start the MCP server on stdio (JSON-RPC 2.0).
     Serve,
@@ -473,6 +494,10 @@ pub async fn run() -> Result<()> {
             let config = ServerConfig::load()?;
             server::execute(config).await
         }
+        Commands::OsUpdates { command } => match command {
+            OsUpdatesCmd::Status { json } => crate::commands::os_updates::status(json),
+            OsUpdatesCmd::Enable => crate::commands::os_updates::enable(),
+        },
         Commands::AgentGuide => {
             print!("{}", crate::agent_guide::GUIDE);
             Ok(())
@@ -818,6 +843,7 @@ pub async fn run() -> Result<()> {
                 | Commands::Serve
                 | Commands::Connect { .. }
                 | Commands::AgentGuide
+                | Commands::OsUpdates { .. }
                 | Commands::Mcp { .. } => {
                     unreachable!("Already handled above")
                 }
