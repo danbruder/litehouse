@@ -153,7 +153,7 @@ Manages a Caddy container for reverse proxying to app containers:
 **Configuration generation:**
 - Local dev: Routes `{app-name}.localhost` on ports 9090/9443
 - Production: Routes `{app-name}.s.danbruder.com` on ports 80/443
-- Updates sent to Caddy's admin API at `http://localhost:2019/load`
+- Updates sent to Caddy's admin API over a unix socket (`/run/caddy-admin/admin.sock` in the `caddy_admin` volume, mounted only into caddy-container and litehouse-server, so apps on `litehouse-network` can't reach it). Without that mount (dev on the host) it falls back to TCP 2019 / `CADDY_API_URL`
 
 **Environment detection:** Checks `LITEHOUSE_LOCAL_DEV`, `RUST_LOG`, or `debug_assertions` to determine local vs production mode.
 

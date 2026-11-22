@@ -1967,6 +1967,7 @@ dependencies = [
  "hex",
  "hmac",
  "hyper 0.14.32",
+ "hyperlocal",
  "indicatif",
  "rand",
  "reqwest",

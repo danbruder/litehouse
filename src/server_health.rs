@@ -729,10 +729,16 @@ pub fn evaluate(f: &ServerFacts) -> Vec<Check> {
                 .any(|p| p.host_port == 2019 && (p.host_ip.is_empty() || is_public_addr(&p.host_ip)))
         });
         let guard = host.and_then(|h| h.caddy_admin_guard);
-        let open_to_network = f
-            .caddy_admin_listen
-            .as_deref()
-            .is_some_and(|l| l.starts_with("0.0.0.0") || l.starts_with(':') || l.starts_with("[::]"));
+        let listen = f.caddy_admin_listen.as_deref();
+        let on_socket = listen.is_some_and(|l| l.starts_with("unix/"));
+        // Anything but a unix socket or a loopback address is reachable
+        // from other containers on Caddy's network.
+        let open_to_network = listen.is_some_and(|l| {
+            !(l.starts_with("unix/")
+                || l.starts_with("localhost:")
+                || l.starts_with("127.")
+                || l.starts_with("[::1]"))
+        });
         let guard_note = match guard {
             Some(true) => "The DOCKER-USER firewall guard for port 2019 is in place.",
             Some(false) => "The DOCKER-USER firewall guard for port 2019 is missing (lh upgrade re-adds it).",
@@ -757,7 +763,15 @@ pub fn evaluate(f: &ServerFacts) -> Vec<Check> {
                 "An app could reroute or take over other apps' domains through caddy-container:2019. {guard_note} Apps on the network: {}.",
                 f.apps_on_caddy_network.join(", ")
             ))
-            .fix("Known gap, not fixed yet: Caddy's admin API needs to move off the network apps share.");
+            .fix("Run lh upgrade: the server moves Caddy's admin API onto a unix socket only it can reach.");
+        } else if on_socket {
+            b.push(
+                "caddy_admin",
+                title,
+                Ok,
+                "Only on a unix socket shared with litehouse-server; apps can't reach it.",
+            )
+            .detail(guard_note);
         } else {
             b.push("caddy_admin", title, Ok, "Not published, and no apps share its network.")
                 .detail(guard_note);
@@ -1335,7 +1349,7 @@ tcp   LISTEN 0      511          0.0.0.0:6379         0.0.0.0:*    users:(("redi
                 PublishedPort { container: "caddy-container".into(), host_ip: "0.0.0.0".into(), host_port: 80, proto: "tcp".into() },
                 PublishedPort { container: "litehouse-server".into(), host_ip: "127.0.0.1".into(), host_port: 3030, proto: "tcp".into() },
             ]),
-            caddy_admin_listen: Some("0.0.0.0:2019".into()),
+            caddy_admin_listen: Some("unix//run/caddy-admin/admin.sock".into()),
             apps_on_caddy_network: vec![],
         }
     }
@@ -1447,6 +1461,11 @@ tcp   LISTEN 0      511          0.0.0.0:6379         0.0.0.0:*    users:(("redi
     fn caddy_admin_shared_with_apps_warns_and_published_fails() {
         let mut f = healthy();
         f.apps_on_caddy_network = vec!["hello".into()];
+        // The socket listener is private even with apps on Caddy's network.
+        assert_eq!(status(&evaluate(&f), "caddy_admin"), CheckStatus::Ok);
+        f.caddy_admin_listen = Some("0.0.0.0:2019".into());
+        assert_eq!(status(&evaluate(&f), "caddy_admin"), CheckStatus::Warn);
+        f.caddy_admin_listen = Some("caddy-container:2019".into());
         assert_eq!(status(&evaluate(&f), "caddy_admin"), CheckStatus::Warn);
         f.caddy_admin_listen = Some("localhost:2019".into());
         assert_eq!(status(&evaluate(&f), "caddy_admin"), CheckStatus::Ok);
