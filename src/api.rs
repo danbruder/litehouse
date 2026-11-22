@@ -57,6 +57,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name/health-check", delete(unset_health_check))
         .route("/docker/version", get(get_docker_version))
         .route("/server/info", get(get_server_info))
+        .route("/server/health", get(get_server_health))
         .route("/config/s3", post(set_s3_config))
         .route("/config/s3", get(get_s3_config))
         .route("/config/s3", delete(delete_s3_config))
@@ -1562,6 +1563,69 @@ async fn get_server_info(State(state): State<Arc<RwLock<AppState>>>) -> impl Int
         local_dev: std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions),
     })
     .into_response()
+}
+
+/// `GET /api/server/health` — the server health & security checklist
+/// (admin UI `/health`, `lh server-health`, MCP `server_health`). Host facts
+/// come from the report the host's 15-minute timer writes; the rest is read
+/// live from the DB and Docker. Everything here is read-only. See
+/// `crate::server_health`.
+#[instrument(skip(state))]
+async fn get_server_health(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let (pool, config, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone(), s.docker.clone())
+    };
+    let local_dev = std::env::var("LITEHOUSE_LOCAL_DEV").is_ok() || cfg!(debug_assertions);
+
+    let apps = db::app::get_all(&pool).await.unwrap_or_default();
+    let mut app_facts = Vec::with_capacity(apps.len());
+    let mut served_hosts = Vec::new();
+    if let (Some(domain), false) = (&config.domain, local_dev) {
+        served_hosts.push(format!("{}.{}", config.admin_label(), domain));
+    }
+    for app in &apps {
+        let running = matches!(
+            crate::docker::live_state(&app.name).await,
+            Ok(crate::models::AppState::Running)
+        );
+        app_facts.push(crate::server_health::AppFacts {
+            name: app.name.clone(),
+            desired: app.state.to_string(),
+            running,
+        });
+        // Caddy only routes apps that have been deployed (have a port).
+        if let (Some(domain), false, Some(_)) = (&config.domain, local_dev, app.port) {
+            served_hosts.push(format!("{}.{}", app.name, domain));
+            served_hosts.extend(app.custom_domains_list());
+        }
+    }
+    let app_names: Vec<String> = apps.iter().map(|a| a.name.clone()).collect();
+    let (published_ports, caddy_admin_listen, apps_on_caddy_network) =
+        crate::server_health::docker_facts(&docker, &app_names).await;
+
+    let last_backup_failures = db_system_config::get_last_backup_report(&pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.failed.into_iter().map(|(name, _)| name).collect())
+        .unwrap_or_default();
+    let (host, host_error) = crate::server_health::read_host_report();
+
+    let facts = crate::server_health::ServerFacts {
+        now: chrono::Utc::now(),
+        host,
+        host_error,
+        served_hosts,
+        s3_configured: matches!(db_system_config::get_s3_config(&pool).await, Ok(Some(_))),
+        last_backup_date: db_system_config::get_last_backup_date(&pool).await.ok().flatten(),
+        last_backup_failures,
+        apps: app_facts,
+        published_ports,
+        caddy_admin_listen,
+        apps_on_caddy_network,
+    };
+    Json(crate::server_health::build_report(&facts)).into_response()
 }
 
 #[derive(Debug, serde::Deserialize)]

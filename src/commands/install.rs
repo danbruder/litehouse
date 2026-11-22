@@ -333,6 +333,12 @@ pub async fn execute(
         return Err(e);
     }
 
+    // Phase 16: Host health report timer (the admin UI's Health page).
+    // Best-effort: the page shows "host hasn't reported yet" until it runs.
+    if let Err(e) = phase16_host_health_timer() {
+        tracing::warn!("Installing the host health timer failed: {:#}", e);
+    }
+
     // Phase 11: Verification (optional)
     if !skip_verify {
         pb.set_message("Verifying server is responding...");

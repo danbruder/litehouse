@@ -4,13 +4,13 @@
 //! See docs/superpowers/specs/2026-11-21-os-security-updates-design.md.
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 use crate::install::executor::is_root;
 use crate::install::phases::phase14_os_security_updates;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OsUpdatesStatus {
     /// Automatic security updates are installed, switched on, and scheduled.
     pub enabled: bool,

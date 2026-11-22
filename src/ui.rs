@@ -123,6 +123,7 @@ pub fn create_ui_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/apps/:name", get(spa_shell))
         .route("/apps/:name/deploys/:deploy_id", get(spa_shell))
         .route("/backups", get(spa_shell))
+        .route("/health", get(spa_shell))
         .route("/settings", get(spa_shell))
         .route("/logout", post(logout))
         .layer(axum::middleware::from_fn_with_state(
@@ -168,7 +169,7 @@ async fn serve_spa_css() -> impl IntoResponse {
 }
 
 /// `GET /`, `/apps/:name`, `/apps/:name/deploys/:deploy_id`, `/backups`,
-/// `/settings` —
+/// `/health`, `/settings` —
 /// the React admin SPA's shell (see `frontend/`, built once — never on the
 /// server — and its output committed into `src/ui/spa/` like `htmx.min.js`
 /// and `styles.css` above). Every one of these routes returns the exact
@@ -179,7 +180,7 @@ async fn serve_spa_css() -> impl IntoResponse {
 /// handful of SPA-only endpoints (`/api/apps/summary`,
 /// `/api/apps/:name/summary`, `/api/apps/:name/metrics`,
 /// `/api/apps/:name/restart`, `/api/backups/catalog`,
-/// `/api/metrics/server`, `/api/server/info`).
+/// `/api/metrics/server`, `/api/server/info`, `/api/server/health`).
 async fn spa_shell() -> impl IntoResponse {
     Html(
         r##"<!doctype html>
@@ -337,6 +338,7 @@ mod tests {
             "/apps/whatever",
             "/apps/whatever/deploys/abc",
             "/backups",
+            "/health",
             "/settings",
         ] {
             let response = get(app.clone(), uri, None).await;
@@ -360,6 +362,7 @@ mod tests {
             "/apps/whatever",
             "/apps/whatever/deploys/abc",
             "/backups",
+            "/health",
             "/settings",
         ] {
             let response = get(app.clone(), uri, Some(&cookie)).await;

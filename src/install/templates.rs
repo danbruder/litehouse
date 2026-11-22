@@ -87,6 +87,39 @@ pub fn ci_deploy_wrapper() -> &'static str {
     include_str!("../../scripts/litehouse-ci-deploy.sh")
 }
 
+/// systemd timer for the host health report behind the admin UI's Health
+/// page (`crate::server_health`). Every 15 minutes, plus shortly after boot
+/// so a reboot-pending warning clears soon after the reboot.
+pub fn host_health_timer() -> &'static str {
+    r#"[Unit]
+Description=Refresh the litehouse host health report every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"#
+}
+
+/// systemd service for the host health report. Read-only probes (ufw, ss,
+/// iptables -S, sshd -T, apt list, df, /proc, Caddy's cert files); the only
+/// write is the report itself, which the server container mounts read-only.
+pub fn host_health_service() -> &'static str {
+    r#"[Unit]
+Description=Collect the litehouse host health report
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=120
+ExecStart=/usr/local/bin/lh server-health collect --write /opt/litehouse/health/host.json
+"#
+}
+
 pub fn weekly_reboot_timer() -> &'static str {
     r#"[Unit]
 Description=Weekly host reboot to bound dial-stdio process accumulation
@@ -516,6 +549,14 @@ mkdir -p /opt/litehouse/backups
 chmod 700 /opt/litehouse/backups
 chown root:root /opt/litehouse/backups
 
+# Host health report (written every 15 minutes by litehouse-host-health.timer
+# on the host, read by the server for the admin UI's Health page). Mounted
+# read-only: the server can read host facts but never change them. 0700 for
+# the same reason as backups: it lists listening services and package state.
+mkdir -p /opt/litehouse/health
+chmod 700 /opt/litehouse/health
+chown root:root /opt/litehouse/health
+
 # Seed server-config.toml into the (empty) Docker volume on first boot only.
 # This container is (re)started on every `lh upgrade`/deploy, not just on
 # first install — copying unconditionally here would clobber any change made
@@ -547,11 +588,13 @@ docker run -d \
   -v litehouse_config:/opt/litehouse/config \
   -v litehouse_data:/opt/litehouse/data \
   -v /opt/litehouse/backups:/opt/litehouse/backups \
+  -v /opt/litehouse/health:/opt/litehouse/health:ro \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
   -e LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups \
+  -e LITEHOUSE_HOST_REPORT=/opt/litehouse/health/host.json \
   -e DOCKER_HOST=unix:///var/run/docker.sock \
   -e CADDY_API_URL=http://caddy-container:2019/load \
   -e RUST_LOG=info \
@@ -668,6 +711,7 @@ mod tests {
         let script = start_litehouse_container_script("1000", "1.2.3");
         assert!(script.contains("ghcr.io/danbruder/litehouse"));
         assert!(script.contains("-v /opt/litehouse/backups:/opt/litehouse/backups"));
+        assert!(script.contains("-v /opt/litehouse/health:/opt/litehouse/health:ro"));
         assert!(script.contains("LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups"));
         assert!(!script.to_lowercase().contains("litestream"));
         assert!(!script.contains("docker build"));

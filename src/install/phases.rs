@@ -428,6 +428,31 @@ pub fn phase13_weekly_reboot_timer() -> Result<()> {
     Ok(())
 }
 
+/// Phase 16: Host health report timer (feeds the admin UI's Health page).
+/// Idempotent; re-applied on every `lh upgrade`, after the host binary is
+/// installed so the first report is collected by the new binary right away.
+#[instrument]
+pub fn phase16_host_health_timer() -> Result<()> {
+    info!("Phase 16: Host health report timer");
+
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-host-health.service",
+        templates::host_health_service(),
+    )?;
+    sudo_write_file(
+        "/etc/systemd/system/litehouse-host-health.timer",
+        templates::host_health_timer(),
+    )?;
+
+    run_command("sudo systemctl daemon-reload")?;
+    run_command("sudo systemctl enable --now litehouse-host-health.timer")?;
+    // Don't wait 15 minutes for the first report.
+    run_command("sudo systemctl start --no-block litehouse-host-health.service")?;
+
+    info!("Phase 16 completed successfully");
+    Ok(())
+}
+
 /// Phase 15: Install the CI deploy wrapper used as the forced command of
 /// the CI SSH key. Idempotent; re-applied on every `lh upgrade`.
 /// `sudo_write_file` renames into place, so a running copy of the script

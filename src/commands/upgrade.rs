@@ -5,7 +5,7 @@ use tracing::{info, instrument};
 use crate::install::executor::run_command;
 use crate::install::phases::{
     get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
-    phase14_os_security_updates, phase15_ci_deploy_wrapper,
+    phase14_os_security_updates, phase15_ci_deploy_wrapper, phase16_host_health_timer,
     phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image, phase6b_pull_images,
     phase9b_start_litehouse_container,
 };
@@ -375,6 +375,12 @@ pub async fn execute(
             Some(e.to_string())
         }
     };
+
+    // Phase 4b: Host health report timer, after the binary install so the
+    // first report comes from the new binary. Best-effort, like phase 15.
+    if let Err(e) = phase16_host_health_timer() {
+        tracing::warn!("Installing the host health timer failed: {:#}", e);
+    }
     pb.inc(1);
 
     // Cleanup temp directory (only if we downloaded)

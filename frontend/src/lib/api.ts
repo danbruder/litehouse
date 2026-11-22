@@ -126,6 +126,32 @@ export interface BackupCatalogEntry {
   created_at: string;
 }
 
+// `GET /api/server/health` — the server health & security checklist
+// (src/server_health.rs). Host facts come from a report the host refreshes
+// every 15 minutes; everything else is read live.
+export type CheckStatus = "ok" | "warn" | "fail" | "unknown";
+
+export interface HealthCheck {
+  id: string;
+  group: string;
+  title: string;
+  status: CheckStatus;
+  summary: string;
+  detail: string | null;
+  fix: string | null;
+}
+
+export interface ServerHealth {
+  checked_at: string;
+  host_checked_at: string | null;
+  hostname: string | null;
+  os: string | null;
+  kernel: string | null;
+  uptime_secs: number | null;
+  summary: { ok: number; warn: number; fail: number; unknown: number };
+  checks: HealthCheck[];
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -237,6 +263,7 @@ export const api = {
     request<string>(`/apps/${encodeURIComponent(name)}/health-check`, { method: "DELETE" }),
   deleteApp: (name: string) => request<string>(`/apps/${encodeURIComponent(name)}`, { method: "DELETE" }),
   serverInfo: () => request<ServerInfo>("/server/info"),
+  serverHealth: () => request<ServerHealth>("/server/health"),
   // 404 here means "not configured yet", which is a normal state for a
   // fresh install rather than an error worth surfacing as one.
   s3Config: () =>

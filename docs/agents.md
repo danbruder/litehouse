@@ -181,7 +181,8 @@ It uses the same connection as the CLI: `lh connect` or `LITEHOUSE_URL`
 and `LITEHOUSE_TOKEN`. The tools match the commands above: `create_app`,
 `list_deploys`, `deploy`, `logs`, `env_set`, `app_status`, `list_apps`,
 `start_app`, `stop_app`, `delete_app`, the `*_domain` tools, `backup_status`,
-`run_backup`, and `agent_guide`, which returns this guide. After a push,
+`run_backup`, `server_health` (the server's health & security checklist,
+also `lh server-health`), and `agent_guide`, which returns this guide. After a push,
 call `list_deploys` with `wait: true` and `sha: "HEAD"`. It returns an
 error result unless that commit's deploy succeeded.
 

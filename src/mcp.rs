@@ -50,6 +50,7 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "logs",
     "list_domains",
     "backup_status",
+    "server_health",
 ];
 
 /// Write tools a client should confirm before running (MCP `destructiveHint`).
@@ -208,6 +209,8 @@ fn tool_definitions() -> Value {
               "app_name": { "type": "string" }, "domain": { "type": "string" } },
               "required": ["app_name", "domain"] } },
         { "name": "backup_status", "description": "Show the last backup date and report.",
+          "inputSchema": { "type": "object", "properties": {} } },
+        { "name": "server_health", "description": "Server health & security checklist: firewall, open ports, Caddy admin API exposure, SSH password/root login, fail2ban, automatic security updates, pending security updates, reboot pending, disk, memory, clock, TLS certificate expiry, backups, apps. Each check is ok/warn/fail/unknown with a fix.",
           "inputSchema": { "type": "object", "properties": {} } },
         { "name": "run_backup", "description": "Trigger a backup run now and return the report.",
           "inputSchema": { "type": "object", "properties": {} } },
@@ -444,6 +447,10 @@ async fn call_tool(
                 "last_backup_date": status.last_backup_date,
                 "last_backup_report": status.last_backup_report,
             }))?)
+        }
+        "server_health" => {
+            let report = api.server_health().await?;
+            Ok(serde_json::to_string_pretty(&report)?)
         }
         "run_backup" => {
             let report = api.run_backup().await?;
