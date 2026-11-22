@@ -23,8 +23,8 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 toml = "1.2"
-bollard = {version = "0.15"}
-axum = "0.6"
+bollard = {version = "0.21"}
+axum = "0.8"
 futures-util = "0.3"
 bytes = "1"
 indicatif = "0.18"
@@ -49,8 +49,8 @@ askama = "0.16"
 
 [dev-dependencies]
 # In-process router tests (tower::ServiceExt::oneshot, hyper::body::to_bytes).
-tower = "0.4"
-hyper = "0.14"
+tower = "0.5"
+hyper = "1.12"
 
 [[bin]]
 name = "lh"
