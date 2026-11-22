@@ -1,19 +1,20 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ChevronDown, Copy } from "lucide-react";
 import { api, type S3ConfigInput } from "../lib/api";
 import { Button } from "../components/Button";
 import { ConfirmButton } from "../components/ConfirmButton";
 import { ErrorNote } from "../components/ErrorNote";
 import { relativeTime } from "../lib/format";
+import { Fact, Facts, Hint, Loading, Muted, Page, PageHeader, Section, copyText } from "../components/ui";
 
-// Server-wide settings had no UI at all before this page: S3 credentials and
-// the GHCR read token were reachable only through `lh config ...`, which
-// means a fresh install couldn't be finished — or even audited — from the
-// browser. Both endpoints already redact their secrets server-side
+// S3 credentials and the GHCR read token used to be reachable only through
+// `lh config ...`. Both endpoints redact their secrets server-side
 // (`S3ConfigRedacted`, `redact_token`), so nothing secret is ever rendered
 // back here; saving is always a full replacement.
-function S3Card() {
+
+function S3Section() {
   const qc = useQueryClient();
   const { data, error, isLoading, refetch } = useQuery({
     queryKey: ["s3-config"],
@@ -48,7 +49,7 @@ function S3Card() {
   const remove = useMutation({
     mutationFn: api.deleteS3Config,
     onSuccess: () => {
-      toast.success("S3 configuration removed — backups will stop until it's set again");
+      toast.success("S3 configuration removed. Backups stop until it's set again.");
       qc.invalidateQueries({ queryKey: ["s3-config"] });
     },
     onError: (err: Error) => toast.error("Couldn't remove S3 configuration", { description: err.message }),
@@ -59,72 +60,75 @@ function S3Card() {
     key: keyof S3ConfigInput,
     opts: { type?: string; placeholder?: string; required?: boolean } = {},
   ) => (
-    <label className="block text-xs text-ink-2">
-      {label}
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3">{label}</span>
       <input
         type={opts.type ?? "text"}
         required={opts.required ?? true}
         autoComplete="off"
+        autoCapitalize="none"
+        spellCheck={false}
         placeholder={opts.placeholder}
         value={(form[key] as string | null) ?? ""}
         onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
-        className="mt-1 w-full text-xs"
+        className="w-full text-sm"
       />
     </label>
   );
 
   return (
-    <div className="card">
-      <div className="panel-header">
-        <span className="panel-label">s3 backups</span>
+    <Section
+      title="S3 backups"
+      action={
         <Button variant="ghost" onClick={() => setEditing((v) => !v)}>
           {editing ? "cancel" : data ? "replace" : "configure"}
         </Button>
-      </div>
-
+      }
+    >
       {error ? (
         <ErrorNote error={error} what="S3 configuration" onRetry={() => refetch()} />
       ) : isLoading ? (
-        <p className="muted">loading…</p>
+        <Muted>loading…</Muted>
       ) : !data ? (
-        <p className="muted">
-          not configured — daily backups are not running. <code>lh config s3 set</code> does the same
-          thing from the CLI.
-        </p>
+        <Muted>
+          Not configured, so daily backups aren't running. <code>lh config s3 set</code> does the same from the
+          CLI.
+        </Muted>
       ) : (
-        <>
-          <p>
-            <strong>Bucket:</strong> <code>{data.bucket}</code> <span className="muted">({data.region})</span>
-          </p>
-          <p>
-            <strong>Access key:</strong> <code>{data.access_key_id}</code>
-          </p>
-          {data.endpoint && (
-            <p>
-              <strong>Endpoint:</strong> <code>{data.endpoint}</code>
-            </p>
-          )}
-          {data.path_prefix && (
-            <p>
-              <strong>Prefix:</strong> <code>{data.path_prefix}</code>
-            </p>
-          )}
-          <p>
-            <ConfirmButton
-              variant="ghost"
-              confirmLabel="remove S3 config"
-              disabled={remove.isPending}
-              onConfirm={() => remove.mutate()}
-            >
-              remove
-            </ConfirmButton>
-          </p>
-        </>
+        !editing && (
+          <>
+            <Facts>
+              <Fact label="Bucket">
+                {data.bucket} <span className="text-ink-3">({data.region})</span>
+              </Fact>
+              <Fact label="Access key">
+                <span className="font-mono text-xs">{data.access_key_id}</span>
+              </Fact>
+              {data.endpoint && (
+                <Fact label="Endpoint">
+                  <span className="break-all">{data.endpoint}</span>
+                </Fact>
+              )}
+              {data.path_prefix && <Fact label="Prefix">{data.path_prefix}</Fact>}
+            </Facts>
+            <div className="mt-3">
+              <ConfirmButton
+                variant="ghost"
+                confirmLabel="remove S3 config"
+                disabled={remove.isPending}
+                onConfirm={() => remove.mutate()}
+                className="-ml-2.5 !text-bad"
+              >
+                remove
+              </ConfirmButton>
+            </div>
+          </>
+        )
       )}
 
       {editing && (
         <form
-          className="mt-3 grid grid-cols-1 gap-3 border-t border-rule pt-3 sm:grid-cols-2"
+          className="mt-1 grid grid-cols-1 gap-3 sm:grid-cols-2"
           onSubmit={(e) => {
             e.preventDefault();
             save.mutate();
@@ -136,24 +140,22 @@ function S3Card() {
           {field("Region", "region", { placeholder: "us-east-1" })}
           {field("Endpoint (optional)", "endpoint", {
             required: false,
-            placeholder: "https://... for S3-compatible stores",
+            placeholder: "https://… for S3-compatible stores",
           })}
           {field("Path prefix (optional)", "path_prefix", { required: false })}
           <div className="sm:col-span-2">
-            <Button variant="solid" type="submit" disabled={save.isPending}>
+            <Button variant="solid" size="md" type="submit" disabled={save.isPending} className="w-full sm:w-auto">
               {save.isPending ? "saving…" : "save configuration"}
             </Button>
-            <span className="hint">
-              Saving replaces the whole configuration — the secret key is write-only and never read back.
-            </span>
+            <Hint>Saving replaces the whole configuration. The secret key is write-only and never read back.</Hint>
           </div>
         </form>
       )}
-    </div>
+    </Section>
   );
 }
 
-function GhcrCard() {
+function GhcrSection() {
   const qc = useQueryClient();
   const { data, error, isLoading, refetch } = useQuery({
     queryKey: ["ghcr-config"],
@@ -180,56 +182,61 @@ function GhcrCard() {
   });
 
   return (
-    <div className="card">
-      <span className="panel-label">ghcr read token</span>
-      {error ? (
-        <ErrorNote error={error} what="GHCR configuration" onRetry={() => refetch()} />
-      ) : isLoading ? (
-        <p className="muted">loading…</p>
-      ) : data?.configured ? (
-        <p className="flex flex-wrap items-center gap-3">
-          <span>
-            <strong>Token:</strong> <code>{data.token}</code>
-          </span>
+    <Section
+      title="GHCR read token"
+      action={
+        data?.configured ? (
           <ConfirmButton
             variant="ghost"
-            confirmLabel="remove token"
+            confirmLabel="remove"
             disabled={remove.isPending}
             onConfirm={() => remove.mutate()}
           >
             remove
           </ConfirmButton>
+        ) : undefined
+      }
+    >
+      {error ? (
+        <ErrorNote error={error} what="GHCR configuration" onRetry={() => refetch()} />
+      ) : isLoading ? (
+        <Muted>loading…</Muted>
+      ) : data?.configured ? (
+        <p className="m-0 mb-3 text-sm text-ink-2">
+          Set: <span className="font-mono text-xs text-ink">{data.token}</span>
         </p>
       ) : (
-        <p className="muted">
-          not set — only needed to pull <em>private</em> images from ghcr.io.
-        </p>
+        <Muted className="mb-3">Not set. Only needed to pull private images from ghcr.io.</Muted>
       )}
 
       <form
-        className="env-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (token.trim()) save.mutate();
         }}
       >
-        <input
-          type="password"
-          placeholder={data?.configured ? "replace token" : "ghp_… / github_pat_…"}
-          autoComplete="off"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-        />
-        <button type="submit" disabled={save.isPending || !token.trim()}>
-          save
-        </button>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="password"
+            placeholder={data?.configured ? "New token" : "ghp_… / github_pat_…"}
+            autoComplete="off"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            className="sm:flex-1"
+          />
+          <Button variant="outline" size="md" type="submit" disabled={save.isPending || !token.trim()}>
+            {data?.configured ? "replace" : "save"}
+          </Button>
+        </div>
       </form>
-      <p className="hint">Needs only <code>read:packages</code>. Stored server-side, never shown again.</p>
-    </div>
+      <Hint>
+        Needs only <code>read:packages</code>. Stored server-side, never shown again.
+      </Hint>
+    </Section>
   );
 }
 
-function ServerCard() {
+function ServerSection() {
   const { data, error, isLoading, refetch } = useQuery({
     queryKey: ["server-info"],
     queryFn: api.serverInfo,
@@ -237,37 +244,35 @@ function ServerCard() {
   });
 
   return (
-    <div className="card">
-      <span className="panel-label">server</span>
+    <Section title="Server">
       {error ? (
         <ErrorNote error={error} what="server info" onRetry={() => refetch()} />
       ) : isLoading || !data ? (
-        <p className="muted">loading…</p>
+        <Loading what="server info" />
       ) : (
-        <>
-          <p>
-            <strong>litehouse:</strong> <code>v{data.version}</code>
-            {data.local_dev && <span className="muted"> · local dev</span>}
-          </p>
-          <p>
-            <strong>Domain:</strong>{" "}
-            {data.domain ? <code>*.{data.domain}</code> : <span className="muted">not configured</span>}
-          </p>
+        <Facts>
+          <Fact label="Version">
+            v{data.version}
+            {data.local_dev && <span className="text-ink-3"> · local dev</span>}
+          </Fact>
+          <Fact label="Domain">
+            {data.domain ? <span className="break-all">*.{data.domain}</span> : <span className="text-ink-3">not configured</span>}
+          </Fact>
           {data.admin_host && (
-            <p>
-              <strong>Admin host:</strong> <code>{data.admin_host}</code>
-            </p>
+            <Fact label="Admin host">
+              <span className="break-all">{data.admin_host}</span>
+            </Fact>
           )}
-          <p>
-            <strong>Docker:</strong>{" "}
-            {data.docker_version ? <code>{data.docker_version}</code> : <span className="muted">unknown</span>}
-          </p>
-          <p>
-            <strong>Apps:</strong> {data.apps_running} running of {data.apps_total}
-          </p>
-        </>
+          <Fact label="Docker">
+            {data.docker_version ?? <span className="text-ink-3">unknown</span>}
+            {data.platform && <span className="text-ink-3"> · {data.platform}</span>}
+          </Fact>
+          <Fact label="Apps">
+            {data.apps_running} running of {data.apps_total}
+          </Fact>
+        </Facts>
       )}
-    </div>
+    </Section>
   );
 }
 
@@ -275,35 +280,26 @@ function ServerCard() {
 // Claude Code, .mcp.json), plus the OAuth grants already handed out. The
 // admin token is never shown here: the cookie holding it is HttpOnly and the
 // server only stores its hash, so token-bearing snippets use a placeholder.
-// Prefer the OAuth rows, which need no token at all.
-function CopyRow({ label, hint, value }: { label: string; hint?: string; value: string }) {
+// Prefer the OAuth flows, which need no token at all.
+function Snippet({ label, hint, value }: { label: string; hint?: string; value: string }) {
   return (
-    <div className="mt-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-ink-2">{label}</span>
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(value);
-              toast.success(`Copied ${label.toLowerCase()}`);
-            } catch {
-              toast.error("Couldn't copy to clipboard");
-            }
-          }}
-        >
-          copy
-        </Button>
-      </div>
-      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all border border-rule bg-paper-2 p-2 text-xs">
-        {value}
-      </pre>
-      {hint ? <p className="muted mt-1 text-xs">{hint}</p> : null}
+    <div className="py-3 first:pt-0 last:pb-0">
+      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-3">{label}</div>
+      <button
+        type="button"
+        onClick={() => copyText(value, label.toLowerCase())}
+        title="Tap to copy"
+        className="group flex w-full items-start gap-3 border border-solid border-rule bg-paper-2 p-3 text-left font-mono text-xs normal-case tracking-normal text-ink hover:border-ink hover:bg-paper-2 hover:text-ink"
+      >
+        <span className="min-w-0 flex-1 whitespace-pre-wrap break-all font-normal">{value}</span>
+        <Copy size={14} className="mt-0.5 shrink-0 text-ink-3 group-hover:text-ink" />
+      </button>
+      {hint && <p className="m-0 mt-1.5 text-xs text-ink-3">{hint}</p>}
     </div>
   );
 }
 
-function McpCard() {
+function McpSection() {
   const qc = useQueryClient();
   const url = `${window.location.origin}/mcp`;
   const { data, error, isLoading, refetch } = useQuery({
@@ -334,51 +330,70 @@ function McpCard() {
   );
 
   return (
-    <div className="card">
-      <span className="panel-label">connect claude (mcp)</span>
-      <p className="muted text-xs">
-        Lets Claude deploy and manage apps here. On the web, desktop and mobile apps it signs in with OAuth:
-        you approve it with your admin token once, and can revoke it below.
-      </p>
+    <Section title="Connect Claude" flush>
+      <div className="px-4 py-4 md:px-5">
+        <p className="m-0 mb-4 text-sm text-ink-2">
+          Let Claude deploy and manage apps here. The web, desktop and mobile apps sign in with OAuth: you approve
+          once with your admin token, and can revoke access below.
+        </p>
+        <Snippet
+          label="Connector URL"
+          value={url}
+          hint="claude.ai → Settings → Connectors → Add custom connector. It then works in the mobile app too."
+        />
+      </div>
 
-      <CopyRow
-        label="Connector URL"
-        value={url}
-        hint="claude.ai → Settings → Connectors → Add custom connector. Then it works in the mobile app too."
-      />
-      <CopyRow
-        label="Claude Code (OAuth)"
-        value={`claude mcp add --transport http litehouse ${url}`}
-        hint="Then run /mcp in Claude Code and choose litehouse to sign in."
-      />
-      <CopyRow
-        label="Claude Code (admin token)"
-        value={`claude mcp add --transport http litehouse ${url} --header "Authorization: Bearer $LITEHOUSE_TOKEN"`}
-        hint="Set LITEHOUSE_TOKEN to your admin token first. It's never shown on this page."
-      />
-      <CopyRow
-        label=".mcp.json (Claude Code cloud sessions)"
-        value={mcpJson}
-        hint="Commit this to a repo and add LITEHOUSE_TOKEN as a secret in the cloud environment."
-      />
-      <CopyRow label="Local stdio" value="claude mcp add litehouse -- lh mcp serve" hint="Uses the token from lh connect." />
+      <details className="group border-0 border-t border-solid border-rule">
+        <summary className="flex min-h-[48px] cursor-pointer list-none items-center justify-between px-4 text-xs font-semibold uppercase tracking-wider text-ink-2 hover:text-ink md:px-5 [&::-webkit-details-marker]:hidden">
+          Claude Code and other setups
+          <ChevronDown size={16} className="transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="divide-y divide-rule px-4 pb-4 md:px-5">
+          <Snippet
+            label="Claude Code (OAuth)"
+            value={`claude mcp add --transport http litehouse ${url}`}
+            hint="Then run /mcp in Claude Code and choose litehouse to sign in."
+          />
+          <Snippet
+            label="Claude Code (admin token)"
+            value={`claude mcp add --transport http litehouse ${url} --header "Authorization: Bearer $LITEHOUSE_TOKEN"`}
+            hint="Set LITEHOUSE_TOKEN to your admin token first. It's never shown on this page."
+          />
+          <Snippet
+            label=".mcp.json (cloud sessions)"
+            value={mcpJson}
+            hint="Commit this to a repo and add LITEHOUSE_TOKEN as a secret in the cloud environment."
+          />
+          <Snippet label="Local stdio" value="claude mcp add litehouse -- lh mcp serve" hint="Uses the token from lh connect." />
+        </div>
+      </details>
 
-      <div className="mt-4">
-        <span className="text-xs text-ink-2">Connected clients</span>
+      <div className="border-0 border-t border-solid border-rule">
+        <div className="px-4 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-3 md:px-5">
+          Connected clients
+        </div>
         {error ? (
-          <ErrorNote error={error} what="MCP connections" onRetry={() => refetch()} />
+          <div className="px-4 pb-3">
+            <ErrorNote error={error} what="MCP connections" onRetry={() => refetch()} />
+          </div>
         ) : isLoading ? (
-          <p className="muted">loading…</p>
+          <Muted className="px-4 pb-4 md:px-5">loading…</Muted>
         ) : !data || data.length === 0 ? (
-          <p className="muted text-xs">none yet</p>
+          <Muted className="px-4 pb-4 md:px-5">None yet.</Muted>
         ) : (
-          <ul className="mt-1 space-y-1">
+          <ul className="m-0 list-none p-0">
             {data.map((c) => (
-              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span>
-                  <strong>{c.client_name}</strong> · {c.read_only ? "read-only" : "full access"} · last used{" "}
-                  {c.last_used_at ? relativeTime(c.last_used_at) : "never"}
-                </span>
+              <li
+                key={c.id}
+                className="flex min-h-[56px] items-center justify-between gap-3 border-0 border-b border-solid border-rule px-4 py-2 last:border-b-0 md:px-5"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-ink">{c.client_name}</div>
+                  <div className="text-xs text-ink-3">
+                    {c.read_only ? "read-only" : "full access"} · last used{" "}
+                    {c.last_used_at ? relativeTime(c.last_used_at) : "never"}
+                  </div>
+                </div>
                 <ConfirmButton
                   variant="ghost"
                   confirmLabel="revoke"
@@ -392,29 +407,28 @@ function McpCard() {
           </ul>
         )}
       </div>
-    </div>
+    </Section>
   );
 }
 
 export function Settings() {
   return (
-    <>
-      <h2>Settings</h2>
-      <ServerCard />
-      <S3Card />
-      <GhcrCard />
-      <McpCard />
-      <div className="card">
-        <span className="panel-label">maintenance</span>
-        <p className="muted">
+    <Page>
+      <PageHeader title="Settings" />
+      <ServerSection />
+      <McpSection />
+      <S3Section />
+      <GhcrSection />
+      <Section title="Maintenance">
+        <Muted>
           Every running app is restarted once a night at 3am US Eastern. Opt one out with{" "}
           <code>lh env &lt;app&gt; LITEHOUSE_SKIP_NIGHTLY_RESTART true</code>.
-        </p>
-        <p className="muted">
-          Disaster recovery stays a CLI operation on purpose: <code>lh restore --yes</code> rebuilds
-          every app from GHCR + S3 and is not something to trigger from a browser by accident.
-        </p>
-      </div>
-    </>
+        </Muted>
+        <Muted className="mt-3">
+          Disaster recovery stays a CLI operation on purpose: <code>lh restore --yes</code> rebuilds every app from
+          GHCR + S3 and isn't something to trigger from a browser by accident.
+        </Muted>
+      </Section>
+    </Page>
   );
 }

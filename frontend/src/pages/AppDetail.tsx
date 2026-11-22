@@ -1,55 +1,345 @@
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Play, Square, RotateCw, UploadCloud, Pencil, Copy, Trash2, ExternalLink } from "lucide-react";
-import { api } from "../lib/api";
-import { relativeTime, absoluteTime, formatBytes } from "../lib/format";
-import { StatusBadge, DeployBadge } from "../components/StatusBadge";
+import { ChevronRight, ExternalLink, Play, Plus, RotateCw, Square, Trash2, UploadCloud, X } from "lucide-react";
+import { api, type AppDetailSummary, type Deploy } from "../lib/api";
+import { relativeTime, absoluteTime } from "../lib/format";
+import { useAppAction } from "../lib/actions";
 import { Button } from "../components/Button";
 import { ConfirmButton } from "../components/ConfirmButton";
 import { ErrorNote } from "../components/ErrorNote";
-import { Sparkline } from "../components/Sparkline";
-import { bucketCpu, cpuHeading } from "../lib/metrics";
+import { ResourceStats } from "../components/ResourceStats";
 import { LogTerminal } from "../components/LogTerminal";
+import {
+  CopyButton,
+  Fact,
+  Facts,
+  Hint,
+  Loading,
+  Muted,
+  Page,
+  PageHeader,
+  Section,
+  StatusDot,
+  StatusText,
+  Tabs,
+} from "../components/ui";
 
-function useAppAction(name: string, action: "start" | "stop" | "restart") {
-  const qc = useQueryClient();
-  const fn = { start: api.startApp, stop: api.stopApp, restart: api.restartApp }[action];
-  return useMutation({
-    mutationFn: () => fn(name),
-    onSuccess: () => {
-      toast.success(`${name} ${action === "stop" ? "stopped" : action === "start" ? "started" : "restarted"}`);
-      qc.invalidateQueries({ queryKey: ["app-summary", name] });
-      qc.invalidateQueries({ queryKey: ["apps-summary"] });
-    },
-    onError: (err: Error) => toast.error(`Failed to ${action} ${name}`, { description: err.message }),
-  });
+type Tab = "overview" | "deploys" | "logs" | "settings";
+const TABS: Tab[] = ["overview", "deploys", "logs", "settings"];
+
+const formRow = "flex flex-col gap-2 sm:flex-row sm:items-center";
+
+function shortSha(sha: string | null) {
+  return sha ? sha.slice(0, 7) : null;
 }
 
-function CopyButton({ value, label }: { value: string; label: string }) {
+function CommitLink({ sha, repo }: { sha: string | null; repo: string | null }) {
+  if (!sha) return null;
+  if (!repo) return <span className="font-mono">{shortSha(sha)}</span>;
   return (
-    <button
-      type="button"
-      title={`copy ${label}`}
-      className="ml-1 border-none bg-transparent p-0 align-middle text-ink-3 hover:text-ink"
-      onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
-          toast.success(`Copied ${label}`);
-        } catch {
-          toast.error("Couldn't copy to clipboard");
-        }
-      }}
+    <a
+      href={`https://github.com/${repo}/commit/${sha}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono"
+      onClick={(e) => e.stopPropagation()}
     >
-      <Copy size={11} />
-    </button>
+      {shortSha(sha)}
+    </a>
   );
 }
 
-// Custom domains were add/remove-able over the API and through `lh domain`,
-// but invisible in the browser beyond a read-only list on this page.
-function DomainsCard({ name }: { name: string }) {
+/** One deploy as a tappable row: status, commit, age, and its error if any. */
+function DeployRow({ d, app, current }: { d: Deploy; app: AppDetailSummary; current?: boolean }) {
+  const navigate = useNavigate();
+  const to = `/apps/${encodeURIComponent(app.name)}/deploys/${d.id}`;
+  return (
+    <li
+      className="row-hover flex cursor-pointer items-start gap-3 border-0 border-b border-solid border-rule px-4 py-3 last:border-b-0 md:px-5"
+      onClick={() => navigate(to)}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <StatusText state={d.status} />
+          {current && (
+            <span className="border border-solid border-rule px-1.5 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+              live
+            </span>
+          )}
+          <span className="text-xs text-ink-3" title={absoluteTime(d.created_at)}>
+            <CommitLink sha={d.git_sha} repo={app.repo} />
+            {d.git_sha && " · "}
+            {relativeTime(d.created_at)}
+          </span>
+        </div>
+        <Link to={to} className="row-link mt-1 block truncate text-xs text-ink-3" title={d.image}>
+          {d.image}
+        </Link>
+        {d.error && <p className="m-0 mt-1.5 line-clamp-3 break-words text-xs text-bad">{d.error}</p>}
+      </div>
+      <ChevronRight size={16} className="mt-0.5 shrink-0 text-ink-3" />
+    </li>
+  );
+}
+
+function ActionBar({ app }: { app: AppDetailSummary }) {
+  const qc = useQueryClient();
+  const start = useAppAction("start");
+  const stop = useAppAction("stop");
+  const restart = useAppAction("restart");
+  const busy = start.isPending || stop.isPending || restart.isPending;
+  const isRunning = app.state === "running";
+
+  const redeploy = useMutation({
+    mutationFn: () => {
+      if (!app.image) throw new Error("This app has no deployed image yet. Push to its repo first.");
+      return api.redeploy(app.name, app.image);
+    },
+    onSuccess: (result) => {
+      if (result.status === "succeeded") toast.success(`${app.name} redeployed`);
+      else toast.error("Redeploy failed", { description: result.error ?? result.status });
+      qc.invalidateQueries({ queryKey: ["app-deploys", app.name] });
+      qc.invalidateQueries({ queryKey: ["app-summary", app.name] });
+      qc.invalidateQueries({ queryKey: ["apps-summary"] });
+    },
+    onError: (err: Error) => toast.error("Redeploy failed", { description: err.message }),
+  });
+
+  return (
+    <div className="mb-5 grid grid-cols-3 gap-2 md:mb-6 md:flex md:flex-wrap">
+      <Button
+        size="md"
+        variant="solid"
+        disabled={busy}
+        onClick={() => restart.mutate(app.name)}
+      >
+        <RotateCw size={14} className={restart.isPending ? "animate-spin" : undefined} /> restart
+      </Button>
+      <Button
+        size="md"
+        variant="outline"
+        disabled={redeploy.isPending || !app.image}
+        title={!app.image ? "This app has no deployed image yet. Push to its repo first." : undefined}
+        onClick={() => redeploy.mutate()}
+      >
+        <UploadCloud size={14} /> {redeploy.isPending ? "deploying…" : "redeploy"}
+      </Button>
+      {isRunning ? (
+        <ConfirmButton
+          size="md"
+          variant="outline"
+          confirmLabel="stop"
+          disabled={busy}
+          onConfirm={() => stop.mutate(app.name)}
+        >
+          <Square size={14} /> stop
+        </ConfirmButton>
+      ) : (
+        <Button size="md" variant="outline" disabled={busy} onClick={() => start.mutate(app.name)}>
+          <Play size={14} /> start
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function Overview({ app, deploys }: { app: AppDetailSummary; deploys: Deploy[] | undefined }) {
+  const { data: metrics, error } = useQuery({
+    queryKey: ["app-metrics", app.name],
+    queryFn: () => api.appMetrics(app.name, 24),
+    refetchInterval: 30_000,
+  });
+  const latest = deploys?.[0];
+
+  return (
+    <>
+      <Section title="Latest deploy" flush>
+        {!deploys ? (
+          <Muted className="px-4 py-4">loading…</Muted>
+        ) : !latest ? (
+          <Muted className="px-4 py-4">No deploys yet. Push to the repo to deploy.</Muted>
+        ) : (
+          <ul className="m-0 list-none p-0">
+            <DeployRow d={latest} app={app} />
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Details">
+        <Facts>
+          <Fact label="URL">
+            <span className="flex items-center gap-1">
+              <a href={app.url} target="_blank" rel="noopener noreferrer" className="min-w-0 break-all">
+                {app.url.replace(/^https?:\/\//, "")}
+              </a>
+              <CopyButton value={app.url} label="URL" />
+            </span>
+          </Fact>
+          {app.custom_domains.length > 0 && (
+            <Fact label="Domains">
+              <span className="flex flex-col gap-1">
+                {app.custom_domains.map((d) => (
+                  <a key={d} href={`https://${d}`} target="_blank" rel="noopener noreferrer" className="break-all">
+                    {d}
+                  </a>
+                ))}
+              </span>
+            </Fact>
+          )}
+          {app.repo && (
+            <Fact label="Repo">
+              <a href={`https://github.com/${app.repo}`} target="_blank" rel="noopener noreferrer">
+                {app.repo}
+              </a>
+            </Fact>
+          )}
+          {app.image && (
+            <Fact label="Image">
+              <span className="flex items-start gap-1">
+                <code className="min-w-0 break-all !border-0 !bg-transparent !p-0 text-xs text-ink-2">{app.image}</code>
+                <CopyButton value={app.image} label="image" className="-mt-1.5 md:-mt-1" />
+              </span>
+            </Fact>
+          )}
+          {app.port != null && <Fact label="Port">{app.port}</Fact>}
+        </Facts>
+      </Section>
+
+      <Section title="Resources · 24h" flush>
+        {error ? (
+          <div className="px-4 py-3">
+            <ErrorNote error={error} what="metrics" />
+          </div>
+        ) : (
+          <ResourceStats samples={metrics ?? []} diskLabel="Data" />
+        )}
+      </Section>
+    </>
+  );
+}
+
+function EnvSection({ name }: { name: string }) {
+  const qc = useQueryClient();
+  // Only ever renders `.key` — a saved value never reaches the DOM again.
+  const { data: envVars, error, refetch } = useQuery({
+    queryKey: ["app-env", name],
+    queryFn: () => api.envVars(name),
+  });
+  const [adding, setAdding] = useState(false);
+  const [newKey, setNewKey] = useState("");
+  const [newValue, setNewValue] = useState("");
+
+  const setEnv = useMutation({
+    mutationFn: () => api.setEnv(name, newKey.trim(), newValue),
+    onSuccess: () => {
+      toast.success(`Saved ${newKey.trim()}`, { description: "Applies on next start, restart or redeploy." });
+      setNewKey("");
+      setNewValue("");
+      setAdding(false);
+      qc.invalidateQueries({ queryKey: ["app-env", name] });
+    },
+    onError: (err: Error) => toast.error("Failed to save variable", { description: err.message }),
+  });
+  const deleteEnv = useMutation({
+    mutationFn: (key: string) => api.deleteEnv(name, key),
+    onSuccess: (_data, key) => {
+      toast.success(`Deleted ${key}`);
+      qc.invalidateQueries({ queryKey: ["app-env", name] });
+    },
+    onError: (err: Error) => toast.error("Failed to delete variable", { description: err.message }),
+  });
+
+  return (
+    <Section
+      title="Environment"
+      flush
+      action={
+        !adding && (
+          <Button variant="ghost" onClick={() => setAdding(true)}>
+            <Plus size={13} /> add
+          </Button>
+        )
+      }
+    >
+      {error ? (
+        <div className="px-4 py-3">
+          <ErrorNote error={error} what="environment" onRetry={() => refetch()} />
+        </div>
+      ) : !envVars || envVars.length === 0 ? (
+        !adding && <Muted className="px-4 py-4">No environment variables set.</Muted>
+      ) : (
+        <ul className="m-0 list-none p-0">
+          {envVars.map((e) => (
+            <li
+              key={e.key}
+              className="flex min-h-[48px] items-center justify-between gap-3 border-0 border-b border-solid border-rule px-4 last:border-b-0 md:px-5"
+            >
+              <span className="min-w-0 break-all font-mono text-sm text-ink">{e.key}</span>
+              <span className="flex shrink-0 items-center gap-2">
+                <span className="hidden font-mono text-xs tracking-widest text-ink-3 sm:inline">••••••</span>
+                <ConfirmButton
+                  variant="ghost"
+                  confirmLabel="delete"
+                  disabled={deleteEnv.isPending}
+                  onConfirm={() => deleteEnv.mutate(e.key)}
+                  aria-label={`Delete ${e.key}`}
+                >
+                  <Trash2 size={13} />
+                </ConfirmButton>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {adding && (
+        <form
+          className="border-0 border-t border-solid border-rule px-4 py-4 md:px-5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (newKey.trim()) setEnv.mutate();
+          }}
+        >
+          <div className={formRow}>
+            <input
+              type="text"
+              placeholder="KEY"
+              required
+              autoFocus
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              value={newKey}
+              onChange={(e) => setNewKey(e.target.value)}
+              className="font-mono sm:!w-56"
+            />
+            <input
+              type="password"
+              placeholder="value"
+              required
+              autoComplete="off"
+              value={newValue}
+              onChange={(e) => setNewValue(e.target.value)}
+              className="sm:flex-1"
+            />
+            <div className="grid grid-cols-2 gap-2 sm:flex">
+              <Button size="md" variant="solid" type="submit" disabled={setEnv.isPending}>
+                save
+              </Button>
+              <Button size="md" variant="ghost" onClick={() => setAdding(false)}>
+                cancel
+              </Button>
+            </div>
+          </div>
+          <Hint>Values are write-only. Changes apply on the next start, restart or redeploy.</Hint>
+        </form>
+      )}
+    </Section>
+  );
+}
+
+function DomainsSection({ name }: { name: string }) {
   const qc = useQueryClient();
   const { data: domains, error, refetch } = useQuery({
     queryKey: ["app-domains", name],
@@ -80,59 +370,73 @@ function DomainsCard({ name }: { name: string }) {
   });
 
   return (
-    <div className="card">
-      <span className="panel-label">custom domains</span>
+    <Section title="Custom domains" flush>
       {error ? (
-        <ErrorNote error={error} what="domains" onRetry={() => refetch()} />
-      ) : !domains || domains.length === 0 ? (
-        <p className="muted">none — the app is served on its default subdomain only</p>
+        <div className="px-4 py-3">
+          <ErrorNote error={error} what="domains" onRetry={() => refetch()} />
+        </div>
       ) : (
-        <ul className="env-list">
-          {domains.map((d) => (
-            <li key={d}>
-              <a href={`https://${d}`} target="_blank" rel="noopener noreferrer" className="tag">
-                {d} <ExternalLink size={10} />
-              </a>
-              <ConfirmButton
-                variant="ghost"
-                confirmLabel={`remove ${d}`}
-                disabled={remove.isPending}
-                onConfirm={() => remove.mutate(d)}
+        domains &&
+        domains.length > 0 && (
+          <ul className="m-0 list-none p-0">
+            {domains.map((d) => (
+              <li
+                key={d}
+                className="flex min-h-[48px] items-center justify-between gap-3 border-0 border-b border-solid border-rule px-4 md:px-5"
               >
-                &times;
-              </ConfirmButton>
-            </li>
-          ))}
-        </ul>
+                <a
+                  href={`https://${d}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-w-0 items-center gap-1.5 break-all text-sm"
+                >
+                  {d} <ExternalLink size={12} className="shrink-0" />
+                </a>
+                <ConfirmButton
+                  variant="ghost"
+                  confirmLabel="remove"
+                  disabled={remove.isPending}
+                  onConfirm={() => remove.mutate(d)}
+                  aria-label={`Remove ${d}`}
+                >
+                  <X size={14} />
+                </ConfirmButton>
+              </li>
+            ))}
+          </ul>
+        )
       )}
       <form
-        className="env-form"
+        className="px-4 py-4 md:px-5"
         onSubmit={(e) => {
           e.preventDefault();
           if (adding.trim()) add.mutate();
         }}
       >
-        <input
-          type="text"
-          placeholder="app.example.com"
-          autoComplete="off"
-          value={adding}
-          onChange={(e) => setAdding(e.target.value)}
-        />
-        <button type="submit" disabled={add.isPending || !adding.trim()}>
-          add
-        </button>
+        <div className={formRow}>
+          <input
+            type="text"
+            inputMode="url"
+            placeholder="app.example.com"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={adding}
+            onChange={(e) => setAdding(e.target.value)}
+            className="sm:flex-1"
+          />
+          <Button size="md" variant="outline" type="submit" disabled={add.isPending || !adding.trim()}>
+            add domain
+          </Button>
+        </div>
+        <Hint>Point the domain's DNS at this server first. Caddy issues the certificate on the first request.</Hint>
       </form>
-      <p className="hint">Point the domain's DNS at this server first — Caddy issues the certificate on
-        the first request.</p>
-    </div>
+    </Section>
   );
 }
 
-// The health-check endpoints existed since before the SPA but were never
-// surfaced anywhere in the UI, so an operator couldn't tell whether a deploy
-// was gated on a readiness path or swapped blind.
-function HealthCheckCard({ name }: { name: string }) {
+// Whether a deploy is gated on a readiness path or swapped blind.
+function HealthCheckSection({ name }: { name: string }) {
   const qc = useQueryClient();
   const { data: path, error, refetch } = useQuery({
     queryKey: ["app-health-check", name],
@@ -160,50 +464,58 @@ function HealthCheckCard({ name }: { name: string }) {
   });
 
   return (
-    <div className="card">
-      <span className="panel-label">health check</span>
-      {error ? (
-        <ErrorNote error={error} what="health check" onRetry={() => refetch()} />
-      ) : path ? (
-        <p className="flex flex-wrap items-center gap-3">
-          <code>{path}</code>
+    <Section
+      title="Health check"
+      action={
+        path ? (
           <ConfirmButton
             variant="ghost"
-            confirmLabel="clear health check"
+            confirmLabel="clear"
             disabled={unset.isPending}
             onConfirm={() => unset.mutate()}
           >
             clear
           </ConfirmButton>
+        ) : undefined
+      }
+    >
+      {error ? (
+        <ErrorNote error={error} what="health check" onRetry={() => refetch()} />
+      ) : path ? (
+        <p className="m-0 mb-3 text-sm text-ink-2">
+          Deploys wait for <code>{path}</code> to answer before traffic moves over.
         </p>
       ) : (
-        <p className="muted">none — Caddy routes to the container without probing it first</p>
+        <Muted className="mb-3">None. New containers get traffic without being probed first.</Muted>
       )}
       <form
-        className="env-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (draft.trim()) set.mutate();
         }}
       >
-        <input
-          type="text"
-          placeholder="/healthz"
-          autoComplete="off"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button type="submit" disabled={set.isPending || !draft.trim()}>
-          {path ? "replace" : "set"}
-        </button>
+        <div className={formRow}>
+          <input
+            type="text"
+            placeholder="/healthz"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="font-mono sm:flex-1"
+          />
+          <Button size="md" variant="outline" type="submit" disabled={set.isPending || !draft.trim()}>
+            {path ? "replace" : "set path"}
+          </Button>
+        </div>
       </form>
-    </div>
+    </Section>
   );
 }
 
-// Deleting an app was API- and CLI-only. Typing the name is deliberate: this
-// removes the app record and its container, and the server itself refuses
-// while the app is still running.
+// Typing the name is deliberate: this removes the app record and its
+// container, and the server itself refuses while the app is still running.
 function DangerZone({ name }: { name: string }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -220,39 +532,43 @@ function DangerZone({ name }: { name: string }) {
   });
 
   return (
-    <div className="card" style={{ borderColor: "var(--color-bad)" }}>
-      <span className="panel-label" style={{ color: "var(--color-bad)" }}>
-        danger zone
-      </span>
-      <p className="muted">
-        Deleting removes the app record, its container and its Caddy route. Volumes and S3 backups are
-        left alone. Stop the app first — the server refuses to delete a running one.
-      </p>
+    <Section title="Delete app" tone="danger">
+      <Muted className="mb-3">
+        Removes the app record, its container and its route. Volumes and S3 backups are left alone. Stop the
+        app first: the server refuses to delete a running one.
+      </Muted>
       <form
-        className="env-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (typed === name) del.mutate();
         }}
       >
-        <input
-          type="text"
-          placeholder={`type "${name}" to confirm`}
-          autoComplete="off"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-        />
-        <button type="submit" disabled={typed !== name || del.isPending}>
-          <Trash2 size={12} /> delete app
-        </button>
+        <div className={formRow}>
+          <input
+            type="text"
+            placeholder={`type “${name}” to confirm`}
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            className="sm:flex-1"
+          />
+          <Button size="md" variant="danger" type="submit" disabled={typed !== name || del.isPending}>
+            <Trash2 size={14} /> delete app
+          </Button>
+        </div>
       </form>
-    </div>
+    </Section>
   );
 }
 
 export function AppDetail() {
   const { name = "" } = useParams<{ name: string }>();
-  const qc = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get("tab") as Tab | null;
+  const tab: Tab = tabParam && TABS.includes(tabParam) ? tabParam : "overview";
+  const setTab = (t: Tab) => setParams(t === "overview" ? {} : { tab: t }, { replace: true });
 
   const {
     data: summary,
@@ -268,381 +584,99 @@ export function AppDetail() {
 
   const { data: deploys, error: deploysError } = useQuery({
     queryKey: ["app-deploys", name],
-    queryFn: () => api.deploys(name, 8),
+    queryFn: () => api.deploys(name, 20),
     enabled: !!name,
     refetchInterval: 5_000,
   });
 
-  // Only ever renders `.key` below — matches the old HTMX page's guarantee
-  // that a saved env var's value never reaches the DOM again.
-  const { data: envVars } = useQuery({
-    queryKey: ["app-env", name],
-    queryFn: () => api.envVars(name),
-    enabled: !!name,
-  });
-
-  const { data: metrics } = useQuery({
-    queryKey: ["app-metrics", name],
-    queryFn: () => api.appMetrics(name, 24),
-    enabled: !!name,
-    refetchInterval: 30_000,
-  });
-
-  const start = useAppAction(name, "start");
-  const stop = useAppAction(name, "stop");
-  const restart = useAppAction(name, "restart");
-  const busy = start.isPending || stop.isPending || restart.isPending;
-
-  const redeploy = useMutation({
-    mutationFn: () => {
-      if (!summary?.image) throw new Error("This app has no deployed image yet — push to its repo first.");
-      return api.redeploy(name, summary.image);
-    },
-    onSuccess: (result) => {
-      if (result.status === "succeeded") {
-        toast.success(`${name} redeployed`);
-      } else {
-        toast.error("Redeploy failed", { description: result.error ?? result.status });
-      }
-      qc.invalidateQueries({ queryKey: ["app-deploys", name] });
-      qc.invalidateQueries({ queryKey: ["app-summary", name] });
-      qc.invalidateQueries({ queryKey: ["apps-summary"] });
-    },
-    onError: (err: Error) => toast.error("Redeploy failed", { description: err.message }),
-  });
-
-  // The environment card opens read-only (just the saved keys, no controls)
-  // — editing is an explicit step so the page at rest never shows a delete
-  // button or an open form.
-  const [editingEnv, setEditingEnv] = useState(false);
-  const [newKey, setNewKey] = useState("");
-  const [newValue, setNewValue] = useState("");
-  const setEnv = useMutation({
-    mutationFn: () => api.setEnv(name, newKey.trim(), newValue),
-    onSuccess: () => {
-      toast.success(`Saved ${newKey.trim()}`, { description: "Applies on next start, restart or redeploy." });
-      setNewKey("");
-      setNewValue("");
-      qc.invalidateQueries({ queryKey: ["app-env", name] });
-    },
-    onError: (err: Error) => toast.error("Failed to save variable", { description: err.message }),
-  });
-  const deleteEnv = useMutation({
-    mutationFn: (key: string) => api.deleteEnv(name, key),
-    onSuccess: (_data, key) => {
-      toast.success(`Deleted ${key}`);
-      qc.invalidateQueries({ queryKey: ["app-env", name] });
-    },
-    onError: (err: Error) => toast.error("Failed to delete variable", { description: err.message }),
-  });
-
-  const samples = metrics ?? [];
-  const series = (pick: (s: (typeof samples)[number]) => number | null) =>
-    samples.map((s) => ({ value: pick(s), ts: s.ts }));
-  const latest = (pick: (s: (typeof samples)[number]) => number | null) =>
-    [...samples].reverse().map(pick).find((v) => v != null) ?? null;
-
-  const isRunning = summary?.state === "running";
+  const deploying = deploys?.[0]?.status === "in_progress";
+  // A failed deploy leaves the previous container serving, so the live one
+  // is the newest that succeeded.
+  const liveId = deploys?.find((d) => d.status === "succeeded")?.id;
 
   return (
-    <>
-      <p>
-        <Link to="/">&larr; all apps</Link>
-      </p>
-
+    <Page>
       {summaryError ? (
-        <ErrorNote error={summaryError} what={`app "${name}"`} onRetry={() => refetchSummary()} />
+        <>
+          <PageHeader title={name} back={{ to: "/", label: "Apps" }} />
+          <ErrorNote error={summaryError} what={`app "${name}"`} onRetry={() => refetchSummary()} />
+        </>
       ) : isLoading || !summary ? (
-        <p className="muted">loading…</p>
+        <>
+          <PageHeader title={name} back={{ to: "/", label: "Apps" }} />
+          <Loading what={name} />
+        </>
       ) : (
         <>
-          <h2>
-            {summary.name} <StatusBadge state={summary.state} />
-          </h2>
-
-          <div className="detail-grid">
-            <div className="card">
-              <span className="panel-label">app</span>
-              <p>
-                <strong>URL:</strong>{" "}
-                <a href={summary.url} target="_blank" rel="noopener noreferrer">
-                  {summary.url}
-                </a>
-                <CopyButton value={summary.url} label="URL" />
-              </p>
-              {summary.repo && (
-                <p>
-                  <strong>Repo:</strong>{" "}
-                  <a href={`https://github.com/${summary.repo}`} target="_blank" rel="noopener noreferrer">
-                    {summary.repo}
-                  </a>
-                </p>
-              )}
-              {summary.image && (
-                <p>
-                  <strong>Image:</strong> <code>{summary.image}</code>
-                  <CopyButton value={summary.image} label="image" />
-                </p>
-              )}
-              {summary.port != null && (
-                <p>
-                  <strong>Port:</strong> {summary.port}
-                </p>
-              )}
-              <p className="flex flex-wrap items-center gap-2">
-                {isRunning ? (
-                  <ConfirmButton
-                    variant="outline"
-                    confirmLabel={`stop ${name}`}
-                    disabled={busy}
-                    onConfirm={() => stop.mutate()}
-                  >
-                    <Square size={12} /> stop
-                  </ConfirmButton>
-                ) : (
-                  <Button variant="outline" disabled={busy} onClick={() => start.mutate()}>
-                    <Play size={12} /> start
-                  </Button>
-                )}
-                <Button variant="outline" disabled={busy} onClick={() => restart.mutate()}>
-                  <RotateCw size={12} /> restart
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={redeploy.isPending || !summary.image}
-                  title={!summary.image ? "This app has no deployed image yet — push to its repo first." : undefined}
-                  onClick={() => redeploy.mutate()}
+          <PageHeader
+            back={{ to: "/", label: "Apps" }}
+            title={summary.name}
+            meta={
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <StatusText state={summary.state} />
+                <a
+                  href={summary.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-w-0 items-center gap-1 break-all text-ink-2"
                 >
-                  <UploadCloud size={12} /> {redeploy.isPending ? "redeploying…" : "redeploy"}
-                </Button>
-              </p>
-            </div>
+                  {summary.url.replace(/^https?:\/\//, "")} <ExternalLink size={12} className="shrink-0" />
+                </a>
+              </span>
+            }
+          />
 
-            <div className="card">
-              <div className="panel-header">
-                <span className="panel-label">environment</span>
-                <Button variant="ghost" size="sm" onClick={() => setEditingEnv((v) => !v)}>
-                  <Pencil size={12} /> {editingEnv ? "done" : "edit"}
-                </Button>
-              </div>
-              {!envVars || envVars.length === 0 ? (
-                <p className="muted">no environment variables set</p>
+          <ActionBar app={summary} />
+
+          <Tabs<Tab>
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { id: "overview", label: "Overview" },
+              {
+                id: "deploys",
+                label: "Deploys",
+                badge: deploying ? <StatusDot state="in_progress" /> : undefined,
+              },
+              { id: "logs", label: "Logs" },
+              { id: "settings", label: "Settings" },
+            ]}
+          />
+
+          {tab === "overview" && <Overview app={summary} deploys={deploys} />}
+
+          {tab === "deploys" && (
+            <Section title={`Last ${deploys?.length ?? 0} deploys`} flush>
+              {deploysError ? (
+                <div className="px-4 py-3">
+                  <ErrorNote error={deploysError} what="deploys" />
+                </div>
+              ) : !deploys ? (
+                <Muted className="px-4 py-4">loading…</Muted>
+              ) : deploys.length === 0 ? (
+                <Muted className="px-4 py-4">No deploys yet.</Muted>
               ) : (
-                <ul className="env-list">
-                  {envVars.map((e) => (
-                    <li key={e.key}>
-                      <span className="tag">{e.key}</span>
-                      {editingEnv && (
-                        <ConfirmButton
-                          variant="ghost"
-                          confirmLabel={`delete ${e.key}`}
-                          disabled={deleteEnv.isPending}
-                          onConfirm={() => deleteEnv.mutate(e.key)}
-                        >
-                          &times;
-                        </ConfirmButton>
-                      )}
-                    </li>
+                <ul className="m-0 list-none p-0">
+                  {deploys.map((d) => (
+                    <DeployRow key={d.id} d={d} app={summary} current={d.id === liveId} />
                   ))}
                 </ul>
               )}
-              {editingEnv && (
-                <>
-                  <form
-                    className="env-form"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (newKey.trim()) setEnv.mutate();
-                    }}
-                  >
-                    <input
-                      type="text"
-                      name="key"
-                      placeholder="KEY"
-                      required
-                      autoComplete="off"
-                      value={newKey}
-                      onChange={(e) => setNewKey(e.target.value)}
-                    />
-                    <input
-                      type="password"
-                      name="value"
-                      placeholder="value"
-                      required
-                      autoComplete="off"
-                      value={newValue}
-                      onChange={(e) => setNewValue(e.target.value)}
-                    />
-                    <button type="submit" disabled={setEnv.isPending}>
-                      set
-                    </button>
-                  </form>
-                  <p className="hint">
-                    values are never shown once saved — changes apply on next start, restart, or redeploy
-                  </p>
-                </>
-              )}
-            </div>
+            </Section>
+          )}
 
-            <DomainsCard name={name} />
-            <HealthCheckCard name={name} />
-          </div>
+          {tab === "logs" && <LogTerminal appName={name} />}
 
-          <h3>Resources</h3>
-          <div className="metrics-grid">
-            <div>
-              <h4>
-                CPU{" "}
-                <span className="muted">{cpuHeading(samples)}</span>
-              </h4>
-              <Sparkline
-                data={bucketCpu(samples)}
-                color="var(--color-signal)"
-                max={100}
-                height={70}
-                format={(v) => `${v.toFixed(1)}%`}
-              />
-            </div>
-            <div>
-              <h4>
-                Memory
-                {latest((s) => s.mem_bytes) != null && (
-                  <span className="muted"> of {formatBytes(latest((s) => s.mem_bytes))}</span>
-                )}
-              </h4>
-              <Sparkline
-                data={series((s) => s.mem_bytes)}
-                color="var(--color-warn)"
-                height={70}
-                format={formatBytes}
-              />
-            </div>
-            <div>
-              <h4>
-                Data size
-                {latest((s) => s.disk_bytes) != null && (
-                  <span className="muted"> of {formatBytes(latest((s) => s.disk_bytes))}</span>
-                )}
-              </h4>
-              <Sparkline
-                data={series((s) => s.disk_bytes)}
-                color="var(--color-good)"
-                height={70}
-                format={formatBytes}
-              />
-            </div>
-          </div>
-
-          <h3>
-            Deploys <span className="muted">last {deploys?.length ?? 0}</span>
-          </h3>
-          {deploysError && <ErrorNote error={deploysError} what="deploys" />}
-          {/* At phone width the five-column table only fits by scrolling
-              sideways, and its status column still clips "succeeded" — so
-              phones get one stacked row per deploy instead. */}
-          <ul className="m-0 list-none p-0 sm:hidden">
-            {!deploys || deploys.length === 0 ? (
-              <li className="muted">no deploys yet</li>
-            ) : (
-              deploys.map((d) => (
-                <li key={d.id} className="border-0 border-b border-solid border-rule py-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <Link to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}>
-                      <DeployBadge status={d.status} />
-                    </Link>
-                    <span className="text-xs text-ink-3" title={absoluteTime(d.created_at)}>
-                      {d.git_sha && summary.repo ? (
-                        <a
-                          href={`https://github.com/${summary.repo}/commit/${d.git_sha}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {d.git_sha.slice(0, 7)}
-                        </a>
-                      ) : (
-                        d.git_sha?.slice(0, 7)
-                      )}{" "}
-                      · {relativeTime(d.created_at)}
-                    </span>
-                  </div>
-                  <Link
-                    to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}
-                    className="mt-1 block truncate text-xs text-ink-2"
-                    title={d.image}
-                  >
-                    {d.image}
-                  </Link>
-                  {d.error && <div className="deploy-error-body mt-1 text-xs text-bad">{d.error}</div>}
-                </li>
-              ))
-            )}
-          </ul>
-          <div className="hidden overflow-x-auto sm:block">
-          <table className="deploys" style={{ minWidth: "38rem" }}>
-            <colgroup>
-              <col className="col-status" />
-              <col className="col-image" />
-              <col className="col-sha" />
-              <col className="col-when" />
-              <col className="col-error" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Status</th>
-                <th>Image</th>
-                <th>SHA</th>
-                <th>When</th>
-                <th>Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!deploys || deploys.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="muted">
-                    no deploys yet
-                  </td>
-                </tr>
-              ) : (
-                deploys.map((d) => (
-                  <tr key={d.id}>
-                    <td>
-                      <Link to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}>
-                        <DeployBadge status={d.status} />
-                      </Link>
-                    </td>
-                    <td className="deploy-image" title={d.image}>
-                      <Link to={`/apps/${encodeURIComponent(name)}/deploys/${d.id}`}>{d.image}</Link>
-                    </td>
-                    <td>
-                      {d.git_sha && summary.repo ? (
-                        <a
-                          href={`https://github.com/${summary.repo}/commit/${d.git_sha}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {d.git_sha.slice(0, 7)}
-                        </a>
-                      ) : (
-                        d.git_sha?.slice(0, 7) ?? "-"
-                      )}
-                    </td>
-                    <td title={absoluteTime(d.created_at)}>{relativeTime(d.created_at)}</td>
-                    <td className="deploy-error">
-                      {d.error ? <div className="deploy-error-body">{d.error}</div> : <span className="muted">—</span>}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-          </div>
-
-          <h3>Logs</h3>
-          <LogTerminal appName={name} />
-
-          <DangerZone name={name} />
+          {tab === "settings" && (
+            <>
+              <EnvSection name={name} />
+              <DomainsSection name={name} />
+              <HealthCheckSection name={name} />
+              <DangerZone name={name} />
+            </>
+          )}
         </>
       )}
-    </>
+    </Page>
   );
 }
