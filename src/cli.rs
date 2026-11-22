@@ -103,6 +103,13 @@ enum Commands {
         #[arg(long)]
         rotate_token: bool,
 
+        /// Build the app from this subdirectory of the repo (its own
+        /// Dockerfile) instead of the root. Lets one repo deploy several
+        /// apps: each gets its own workflow file, deploy-token secret and
+        /// image, and only redeploys when that directory changes.
+        #[arg(long)]
+        context: Option<String>,
+
         /// Print a single machine-readable JSON object instead of human
         /// text, and never fall back to interactive GitHub device-flow
         /// login.
@@ -568,8 +575,11 @@ pub async fn run() -> Result<()> {
                     app_name,
                     repo,
                     rotate_token,
+                    context,
                     json,
-                } => run_create(&api_client, &config, &app_name, repo, rotate_token, json).await,
+                } => {
+                    run_create(&api_client, &config, &app_name, repo, rotate_token, context, json).await
+                }
                 Commands::Start { app_name } => {
                     api_client.start_app(&app_name).await?;
                     println!("App '{}' started successfully", app_name);
@@ -959,6 +969,7 @@ async fn run_create(
     app_name: &str,
     repo: Option<String>,
     rotate_token: bool,
+    context: Option<String>,
     json: bool,
 ) -> Result<()> {
     // --json implies non-interactive: never block on a device-flow prompt
@@ -972,6 +983,7 @@ async fn run_create(
         repo,
         rotate_token,
         allow_interactive,
+        context.as_deref(),
     )
     .await
     {

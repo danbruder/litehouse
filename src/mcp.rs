@@ -215,7 +215,8 @@ fn tool_definitions() -> Value {
           "inputSchema": { "type": "object", "properties": {
               "app_name": { "type": "string" },
               "repo": { "type": "string", "description": "owner/name; inferred from the origin git remote if omitted" },
-              "rotate_token": { "type": "boolean", "default": false } },
+              "rotate_token": { "type": "boolean", "default": false },
+              "context": { "type": "string", "description": "Build the app from this repo subdirectory instead of the root (several apps per repo)" } },
               "required": ["app_name"] } }
     ])
 }
@@ -453,11 +454,13 @@ async fn call_tool(
             let app = required_str(args, "app_name")?;
             let repo = optional_str(args, "repo");
             let rotate = optional_bool(args, "rotate_token").unwrap_or(false);
+            let context = optional_str(args, "context");
             // allow_interactive = false: an agent cannot complete GitHub
             // device-flow login, so provision_app returns a descriptive error
             // if no token is already available.
             let outcome =
-                crate::provision::provision_app(api, config, &app, repo, rotate, false).await?;
+                crate::provision::provision_app(api, config, &app, repo, rotate, false, context.as_deref())
+                    .await?;
             Ok(serde_json::to_string_pretty(&outcome)?)
         }
         other => Err(anyhow!("unknown tool '{}'", other)),
