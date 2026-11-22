@@ -33,12 +33,12 @@ jobs:
     name: Rust advisories (cargo-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Compiling cargo-audit takes ~3 minutes; cache the binary so it's
       # rebuilt only when the pinned version changes.
       - name: Cache cargo-audit
         id: cache-audit
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-audit
           key: cargo-audit-${{ runner.os }}-0.23
@@ -58,7 +58,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Only runtime deps end up in the embedded bundle served to admins;
       # dev tooling (vite, esbuild, tsc) never runs on the server.
       - name: npm audit (runtime deps, high+)
