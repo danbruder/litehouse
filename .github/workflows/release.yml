@@ -21,8 +21,8 @@ jobs:
   # linux/x86_64) is built, for every kind of run including tags: no arm64,
   # no macOS. To bring a platform back, add a matrix entry (arm64 needs
   # `ubuntu-24.04-arm`, a `docker_arch: arm64` image context, and
-  # `linux/arm64` in publish-image's platforms; aws-lc-sys doesn't
-  # cross-compile to musl, so build natively).
+  # `linux/arm64` in publish-image's platforms; ring's C/assembly makes
+  # cross-compiling to musl painful, so build natively).
   build:
     strategy:
       matrix:
@@ -54,18 +54,14 @@ jobs:
 
       - name: Install musl-tools
         if: matrix.os == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
+      # Registry + compiled dependencies per target (rust-cache adds the
+      # Cargo.lock and toolchain hashes to the key).
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ matrix.os }}-${{ matrix.arch }}-cargo-
+          key: ${{ matrix.target }}
 
       - name: Build release binary
         run: |
