@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { Boxes, DatabaseBackup, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { Boxes, DatabaseBackup, LogOut, Moon, Settings, ShieldCheck, Sun } from "lucide-react";
 import { cn } from "../lib/cn";
 
 // The SPA's chrome. Phones get a compact sticky top bar plus a bottom tab
@@ -12,6 +12,7 @@ import { cn } from "../lib/cn";
 const links = [
   { to: "/", label: "Apps", icon: Boxes, end: false, match: (p: string) => p === "/" || p.startsWith("/apps") },
   { to: "/backups", label: "Backups", icon: DatabaseBackup, end: false, match: (p: string) => p.startsWith("/backups") },
+  { to: "/health", label: "Health", icon: ShieldCheck, end: false, match: (p: string) => p.startsWith("/health") },
   { to: "/settings", label: "Settings", icon: Settings, end: false, match: (p: string) => p.startsWith("/settings") },
 ];
 
@@ -107,7 +108,7 @@ export function Shell({ children, pathname }: { children: ReactNode; pathname: s
 
       <nav
         aria-label="Main"
-        className="pb-safe fixed inset-x-0 bottom-0 z-30 grid grid-cols-3 border-0 border-t border-solid border-ink bg-paper md:hidden"
+        className="pb-safe fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-0 border-t border-solid border-ink bg-paper md:hidden"
       >
         {links.map((l) => {
           const active = l.match(pathname);

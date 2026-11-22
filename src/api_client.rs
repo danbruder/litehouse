@@ -472,6 +472,19 @@ impl ApiClient {
         }).await
     }
 
+    /// `GET /server/health` — the server health & security checklist.
+    pub async fn server_health(&self) -> Result<crate::server_health::HealthReport> {
+        let url = format!("{}/server/health", self.config.base_url);
+        self.execute_request(|client, auth_header| {
+            let mut req = client.get(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await
+    }
+
     /// The server's Docker host platform (e.g. "linux/arm64"). `None` for
     /// servers too old to report it.
     pub async fn get_server_platform(&self) -> Result<Option<String>> {

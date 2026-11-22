@@ -2,7 +2,7 @@
 
 The whole admin UI — the dashboard at `/`, an app's detail page
 (`/apps/:name`), its deploy detail (`/apps/:name/deploys/:id`),
-`/backups`, and `/settings` — is a React SPA that talks to litehouse's existing JSON API
+`/backups`, `/health` and `/settings` — is a React SPA that talks to litehouse's existing JSON API
 (`src/api.rs` — the same one the `lh` CLI and MCP server use), routed
 client-side with `react-router-dom`. Only `/login` is still server-rendered
 Askama HTML (see `src/ui.rs`). Every one of the SPA routes above is served
@@ -118,6 +118,11 @@ contract can evolve independently:
   `/api/backups/status`'s today-only pass/fail summary.
 - `GET /api/metrics/server?hours=24` — raw CPU/mem/disk samples for the
   dashboard's server resource sparklines.
+- `GET /api/server/health` — the server health & security checklist for
+  `/health` (and the dashboard's Health card): grouped checks, each
+  `ok`/`warn`/`fail`/`unknown` with a one-line summary, optional detail and
+  fix. Also used by `lh server-health` and MCP `server_health`. See
+  `src/server_health.rs`.
 - `GET /api/server/info` — litehouse version, configured wildcard domain,
   admin host, Docker version and a running/total app census, for
   `/settings`'s server card. Nothing secret; the S3/GHCR endpoints below

@@ -19,6 +19,7 @@ pub mod models;
 pub mod oauth;
 pub mod provision;
 pub mod restart;
+pub mod server_health;
 pub mod storage;
 pub mod docker;
 pub mod ui;

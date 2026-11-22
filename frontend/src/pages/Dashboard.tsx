@@ -10,6 +10,7 @@ import { ResourceStats } from "../components/ResourceStats";
 import { Button } from "../components/Button";
 import { ErrorNote } from "../components/ErrorNote";
 import { Loading, Muted, Page, PageHeader, Section, StatusDot } from "../components/ui";
+import { StatusIcon } from "./Health";
 
 function BackupsSection() {
   const { data, error, refetch } = useQuery({
@@ -89,6 +90,53 @@ function BackupsSection() {
           haven't.
         </p>
       )}
+    </Section>
+  );
+}
+
+// One line from the Health page: green when every check passes, otherwise
+// the count and the first few things to fix.
+function HealthSection() {
+  const { data, error } = useQuery({
+    queryKey: ["server-health"],
+    queryFn: api.serverHealth,
+    refetchInterval: 60_000,
+  });
+  if (error || !data) return null;
+  const { ok, warn, fail, unknown } = data.summary;
+  const attention = data.checks.filter((c) => c.status === "fail" || c.status === "warn");
+  const overall = fail > 0 ? "fail" : warn > 0 ? "warn" : unknown > 0 ? "unknown" : "ok";
+  return (
+    <Section
+      title="Health"
+      action={
+        <Link to="/health" className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-ink-3">
+          all checks <ArrowRight size={12} />
+        </Link>
+      }
+    >
+      <Link to="/health" className="flex items-start gap-2.5 text-sm text-ink no-underline">
+        <StatusIcon status={overall} size={18} />
+        <span className="min-w-0">
+          {attention.length === 0 ? (
+            <>
+              {ok} of {ok + unknown} checks pass
+              {unknown > 0 && <span className="text-ink-3"> · {unknown} not checked yet</span>}
+            </>
+          ) : (
+            <>
+              {attention.length} {attention.length === 1 ? "thing needs" : "things need"} attention
+              <span className="block text-xs text-ink-3">
+                {attention
+                  .slice(0, 3)
+                  .map((c) => c.title)
+                  .join(" · ")}
+                {attention.length > 3 && ` · +${attention.length - 3} more`}
+              </span>
+            </>
+          )}
+        </span>
+      </Link>
     </Section>
   );
 }
@@ -222,6 +270,7 @@ export function Dashboard() {
       )}
 
       <div className="mt-6 grid grid-cols-1 gap-0 md:mt-8">
+        <HealthSection />
         <BackupsSection />
         <ServerSection />
       </div>

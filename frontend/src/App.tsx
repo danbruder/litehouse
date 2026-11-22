@@ -7,6 +7,7 @@ import { AppDetail } from "./pages/AppDetail";
 import { DeployDetail } from "./pages/DeployDetail";
 import { Backups } from "./pages/Backups";
 import { Settings } from "./pages/Settings";
+import { Health } from "./pages/Health";
 import { Shell } from "./components/Shell";
 import { Page, PageHeader, Muted } from "./components/ui";
 
@@ -62,6 +63,7 @@ function Routed() {
           <Route path="/apps/:name" element={<AppDetail />} />
           <Route path="/apps/:name/deploys/:deployId" element={<DeployDetail />} />
           <Route path="/backups" element={<Backups />} />
+          <Route path="/health" element={<Health />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

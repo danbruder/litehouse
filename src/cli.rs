@@ -86,6 +86,18 @@ enum Commands {
         command: OsUpdatesCmd,
     },
 
+    /// Server health & security checklist (firewall, open ports, SSH,
+    /// updates, reboot, disk, TLS, backups, apps). Exits 1 if any check
+    /// fails. `collect` runs on the host (as root) and is what the
+    /// litehouse-host-health timer calls
+    ServerHealth {
+        #[command(subcommand)]
+        command: Option<ServerHealthCmd>,
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Create a new app: registers it on the server, commits a deploy
     /// workflow to the GitHub repo, and sets the deploy-token secret — a
     /// `git push` to the repo is all that's needed to deploy from then on.
@@ -304,6 +316,17 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum ServerHealthCmd {
+    /// Collect the host's facts (firewall, listening ports, sshd, apt,
+    /// disk, certificates). Read-only. Prints JSON, or writes it atomically
+    /// to --write (what the 15-minute systemd timer does)
+    Collect {
+        #[arg(long)]
+        write: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum OsUpdatesCmd {
     /// Show whether automatic security updates are on, when they next run,
     /// and whether a reboot is pending. Exits 1 if they aren't enabled
@@ -494,6 +517,10 @@ pub async fn run() -> Result<()> {
             let config = ServerConfig::load()?;
             server::execute(config).await
         }
+        Commands::ServerHealth {
+            command: Some(ServerHealthCmd::Collect { write }),
+            ..
+        } => crate::server_health::collect_command(write),
         Commands::OsUpdates { command } => match command {
             OsUpdatesCmd::Status { json } => crate::commands::os_updates::status(json),
             OsUpdatesCmd::Enable => crate::commands::os_updates::enable(),
@@ -716,6 +743,18 @@ pub async fn run() -> Result<()> {
                 Commands::Github { command } => match command {
                     GithubCmd::Login => crate::commands::github_login::execute().await,
                 },
+                Commands::ServerHealth { json, .. } => {
+                    let report = api_client.server_health().await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&report)?);
+                    } else {
+                        crate::server_health::print_report(&report);
+                    }
+                    if report.summary.fail > 0 {
+                        std::process::exit(1);
+                    }
+                    Ok(())
+                }
                 Commands::Backup { command } => match command {
                     BackupCmd::Run => {
                         let report = api_client.run_backup().await?;
