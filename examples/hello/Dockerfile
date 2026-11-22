@@ -1,4 +1,4 @@
-FROM busybox:1.36
+FROM busybox:1.38
 WORKDIR /www
 COPY index.html .
 EXPOSE 8080
