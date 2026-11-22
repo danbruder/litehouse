@@ -1,20 +1,25 @@
 # Dependabot keeps litehouse's own dependencies patched. Merged PRs ship to
 # the server automatically via the push-to-main deploy in release.yml.
 #
-# Version updates are grouped (one PR per ecosystem per week) so the queue
-# stays small; security updates are always raised individually and right
-# away, regardless of this schedule.
+# Kept deliberately quiet to save CI time: every ecosystem gets ONE grouped
+# PR per month for version updates (majors included, so a breaking bump shows
+# up as a red CI run on that one PR instead of its own PR), and ONE grouped PR
+# for security fixes, which Dependabot raises as soon as an advisory lands.
+# Each PR runs CI once; pushes to an open PR cancel the previous run.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
-      cargo-minor-patch:
-        update-types: [minor, patch]
+      cargo-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      cargo:
+        applies-to: version-updates
+        patterns: ["*"]
 
   # The admin UI. After merging, the committed bundle in src/ui/spa/ must be
   # regenerated (`cd frontend && npm run build`); CI's "Committed SPA bundle
@@ -22,30 +27,37 @@ updates:
   - package-ecosystem: npm
     directory: /frontend
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
-      npm-minor-patch:
-        update-types: [minor, patch]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      npm:
+        applies-to: version-updates
+        patterns: ["*"]
 
-  # Base image of the litehouse-server container. Bumps here also need the
-  # matching helper image (volume::UTILITY_IMAGE, install templates, CI)
-  # moved to the same alpine tag.
+  # Base images: the litehouse-server Dockerfile plus the two example/site
+  # images, grouped into one PR. A bump to the root Dockerfile's alpine also
+  # needs volume::UTILITY_IMAGE, the install templates and ci.yml moved to the
+  # same tag.
   - package-ecosystem: docker
     directories:
       - /
       - /examples/hello
       - /site
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      docker:
+        patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
+    open-pull-requests-limit: 1
     groups:
       actions:
         patterns: ["*"]

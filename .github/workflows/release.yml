@@ -17,10 +17,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Each Linux architecture builds natively on its own runner: ring (rustls's
-  # crypto) compiles C and assembly, which is painful to cross-compile to
-  # musl. macOS builds are CLI-only (for `lh` on laptops, via install-cli.sh);
-  # both come from the Apple Silicon runner, whose toolchain targets Intel too.
+  # Only the platform the server runs on (DigitalOcean droplets are
+  # linux/x86_64) is built, for every kind of run including tags: no arm64,
+  # no macOS. To bring a platform back, add a matrix entry (arm64 needs
+  # `ubuntu-24.04-arm`, a `docker_arch: arm64` image context, and
+  # `linux/arm64` in publish-image's platforms; ring's C/assembly makes
+  # cross-compiling to musl painful, so build natively).
   build:
     strategy:
       matrix:
@@ -30,19 +32,13 @@ jobs:
             docker_arch: amd64
             target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
-          - os: linux
-            arch: aarch64
-            docker_arch: arm64
-            target: aarch64-unknown-linux-musl
-            runner: ubuntu-24.04-arm
-          - os: darwin
-            arch: aarch64
-            target: aarch64-apple-darwin
-            runner: macos-latest
-          - os: darwin
-            arch: x86_64
-            target: x86_64-apple-darwin
-            runner: macos-latest
+    # Back-to-back merges to main: a newer commit's build cancels the older
+    # one still in flight (its publish/deploy jobs then skip). Tag builds are
+    # never cancelled, and the deploy jobs have their own non-cancelling
+    # concurrency group, so a running `lh upgrade` is never interrupted.
+    concurrency:
+      group: release-build-${{ github.ref }}-${{ matrix.os }}-${{ matrix.arch }}
+      cancel-in-progress: ${{ github.ref_type != 'tag' }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -177,11 +173,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The image only runs `apk add` on top of the prebuilt binaries, so
-      # emulating arm64 here is cheap.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -189,7 +180,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: image-context
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.version.outputs.tags }}
 
@@ -204,19 +195,38 @@ jobs:
       cancel-in-progress: false
 
     steps:
+      # The CI key's forced command is /usr/local/bin/litehouse-ci-deploy
+      # (scripts/litehouse-ci-deploy.sh); any request other than
+      # `deploy-commit <sha>` runs `lh upgrade` to the latest release.
       - name: SSH and upgrade litehouse on the server
+        id: ssh
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.LITEHOUSE_SERVER_HOST }}
           username: ${{ secrets.LITEHOUSE_SERVER_USER }}
           key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
-          script: sudo /usr/local/bin/lh upgrade
+          capture_stdout: true
+          script: upgrade
 
-  # Pushes to main and manual runs: deploy exactly this commit. The container
-  # runs the `sha-<short>` image pushed above, not the image named by
-  # Cargo.toml's version (between releases that's the previous release). The
-  # host `lh` binary comes out of that same image, so nothing needs copying
-  # over SSH (scp-action misdetected the server as Windows and failed).
+      - name: Verify the server runs this release
+        env:
+          SSH_STDOUT: ${{ steps.ssh.outputs.stdout }}
+        run: |
+          RAW_TAG="${GITHUB_REF#refs/tags/}"
+          EXPECTED="ghcr.io/danbruder/litehouse:${RAW_TAG#v}"
+          GOT="$(printf '%s\n' "$SSH_STDOUT" | sed -n 's/^LITEHOUSE_DEPLOYED_IMAGE=//p' | tail -1)"
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "::error::Server reports litehouse-server image '${GOT:-<none>}', expected '$EXPECTED'. If <none>, the CI key's authorized_keys command= is not /usr/local/bin/litehouse-ci-deploy."
+            exit 1
+          fi
+          echo "Server is running $GOT"
+
+  # Pushes to main and manual runs: deploy exactly this commit. The CI key's
+  # forced command (/usr/local/bin/litehouse-ci-deploy, from
+  # scripts/litehouse-ci-deploy.sh) does the work on the server: pull
+  # `sha-<short>`, take `lh` out of that image, `lh upgrade --from-path ...
+  # --image-tag sha-<short>`, then report the running image. The next step
+  # fails the job unless that is this commit's image.
   deploy-commit:
     needs: publish-image
     runs-on: ubuntu-latest
@@ -226,21 +236,24 @@ jobs:
       cancel-in-progress: false
 
     steps:
-      - name: SSH and upgrade litehouse to this commit
+      - name: SSH and deploy this commit
+        id: ssh
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.LITEHOUSE_SERVER_HOST }}
           username: ${{ secrets.LITEHOUSE_SERVER_USER }}
           key: ${{ secrets.LITEHOUSE_SERVER_SSH_KEY }}
-          script: |
-            set -e
-            TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
-            IMAGE="ghcr.io/danbruder/litehouse:$TAG"
-            BIN=/tmp/lh-$TAG
-            sudo docker pull "$IMAGE"
-            CID="$(sudo docker create "$IMAGE")"
-            sudo docker cp "$CID:/usr/local/bin/lh" "$BIN"
-            sudo docker rm "$CID" >/dev/null
-            sudo chmod +x "$BIN"
-            sudo "$BIN" upgrade --from-path "$BIN" --image-tag "$TAG"
-            sudo rm -f "$BIN"
+          capture_stdout: true
+          script: deploy-commit ${{ github.sha }}
+
+      - name: Verify the server runs this commit
+        env:
+          SSH_STDOUT: ${{ steps.ssh.outputs.stdout }}
+        run: |
+          EXPECTED="ghcr.io/danbruder/litehouse:sha-${GITHUB_SHA::7}"
+          GOT="$(printf '%s\n' "$SSH_STDOUT" | sed -n 's/^LITEHOUSE_DEPLOYED_IMAGE=//p' | tail -1)"
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "::error::Server reports litehouse-server image '${GOT:-<none>}', expected '$EXPECTED'. If <none>, the CI key's authorized_keys command= is not /usr/local/bin/litehouse-ci-deploy."
+            exit 1
+          fi
+          echo "Server is running $GOT"

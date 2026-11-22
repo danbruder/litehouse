@@ -3,24 +3,27 @@ name: Security audit
 # Checks litehouse's own dependencies against published advisories:
 #   - Rust crates (RustSec advisory DB) via cargo-audit
 #   - Admin UI runtime npm packages (what ships in the embedded bundle)
-#   - The published litehouse-server and caddy images (OS packages) via Trivy
+#   - The deployed litehouse-server and caddy images (OS packages) via Trivy
 #
-# Runs on PRs that touch a lockfile/Dockerfile, on main, and weekly so new
-# advisories against unchanged code are caught too.
+# Runs on PRs that change a lockfile, and weekly on Wednesday, the day after
+# scheduled-rebuild.yml refreshes the deployed image, so new advisories
+# against unchanged code are still caught. Not on every push to main: the PR
+# already ran it, and scanning `:edge` right after a merge races the image
+# build in release.yml.
 on:
   pull_request:
     paths:
       - Cargo.lock
-      - Cargo.toml
-      - frontend/package.json
       - frontend/package-lock.json
-      - Dockerfile
+      - .cargo/audit.toml
       - .github/workflows/security.yml
-  push:
-    branches: [main]
   schedule:
-    - cron: "17 13 * * 1" # Mondays 13:17 UTC
+    - cron: "17 13 * * 3" # Wednesdays 13:17 UTC
   workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -31,9 +34,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Compiling cargo-audit takes ~3 minutes; cache the binary so it's
+      # rebuilt only when the pinned version changes.
+      - name: Cache cargo-audit
+        id: cache-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-0.23
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        if: steps.cache-audit.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --locked --version ^0.23
       # Fails on vulnerabilities. Unmaintained/yanked crates are reported as
       # warnings only. To accept a specific advisory, add it to
       # .cargo/audit.toml's [advisories] ignore list with a reason.
@@ -48,9 +59,6 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       # Only runtime deps end up in the embedded bundle served to admins;
       # dev tooling (vite, esbuild, tsc) never runs on the server.
       - name: npm audit (runtime deps, high+)
@@ -60,20 +68,25 @@ jobs:
 
   image-scan:
     name: Image scan (Trivy)
-    # Scans what is actually deployed, so it only makes sense off PRs.
+    # Scans what is actually deployed, so only on the schedule or by hand.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - ghcr.io/danbruder/litehouse:edge
-          - caddy:latest
+        include:
+          # Ours: fixable here (rebuild / bump alpine), so findings fail.
+          - image: ghcr.io/danbruder/litehouse:edge
+            exit_code: "1"
+          # Upstream: we can only wait for a new caddy:latest, which the
+          # weekly rebuild then picks up. Report, don't fail.
+          - image: caddy:latest
+            exit_code: "0"
     steps:
       # Trivy runs from its pinned release image rather than a third-party
       # action, so a compromised action tag can't run in this job.
       - name: Scan ${{ matrix.image }}
         run: |
           docker run --rm aquasec/trivy:0.76.2 image \
-            --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 \
+            --severity CRITICAL,HIGH --ignore-unfixed --exit-code ${{ matrix.exit_code }} \
             --no-progress "${{ matrix.image }}"

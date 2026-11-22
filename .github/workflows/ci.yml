@@ -1,9 +1,9 @@
 name: CI
 
+# PRs only. A merge to main is already built and deployed by release.yml, and
+# re-running the full suite on the exact tree the PR just tested buys nothing.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,8 +18,43 @@ env:
   SQLX_OFFLINE: "true"
 
 jobs:
+  # Decide which jobs this PR needs, so e.g. an npm-only Dependabot PR doesn't
+  # pay for a 5-minute Rust build and test run. Plain git, no extra action.
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          files="$(git diff --name-only "$BASE"...HEAD)"
+          printf '%s\n' "$files"
+          # Rust: anything that isn't purely the frontend sources, the static
+          # site/examples, or prose. docs/agents.md is compiled into the
+          # binary, so it still counts.
+          if printf '%s\n' "$files" | grep -vE '^(frontend/|site/|examples/|design/|e2e/)|\.md$' | grep -q . \
+             || printf '%s\n' "$files" | grep -qx 'docs/agents.md'; then
+            echo rust=true >> "$GITHUB_OUTPUT"
+          else
+            echo rust=false >> "$GITHUB_OUTPUT"
+          fi
+          if printf '%s\n' "$files" | grep -qE '^(frontend/|src/ui/spa/|\.github/workflows/ci\.yml$)'; then
+            echo frontend=true >> "$GITHUB_OUTPUT"
+          else
+            echo frontend=false >> "$GITHUB_OUTPUT"
+          fi
+
   rust:
     name: Rust (clippy + tests)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +90,8 @@ jobs:
 
   frontend:
     name: Admin UI (typecheck + committed build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

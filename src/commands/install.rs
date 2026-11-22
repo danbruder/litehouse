@@ -326,6 +326,13 @@ pub async fn execute(
     }
     pb.inc(1);
 
+    // Phase 15: CI deploy wrapper (forced command for the CI SSH key)
+    if let Err(e) = phase15_ci_deploy_wrapper() {
+        pb.finish_with_message("❌ CI deploy wrapper install failed");
+        error!("Phase 15 failed: {}", e);
+        return Err(e);
+    }
+
     // Phase 11: Verification (optional)
     if !skip_verify {
         pb.set_message("Verifying server is responding...");

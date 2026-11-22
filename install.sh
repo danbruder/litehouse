@@ -264,11 +264,8 @@ case "$ARCH" in
     x86_64|amd64)
         ARCH="x86_64"
         ;;
-    aarch64|arm64)
-        ARCH="aarch64"
-        ;;
     *)
-        die "Unsupported architecture: $ARCH. Only x86_64 and aarch64 are supported."
+        die "Unsupported architecture: $ARCH. Releases only ship linux/x86_64 (arm64 builds were dropped to save CI time)."
         ;;
 esac
 

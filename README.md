@@ -21,7 +21,7 @@ Install on a fresh Linux host with wildcard DNS already pointed at it (`*.lh.exa
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install.sh | sudo sh -s -- --domain lh.example.com
 ```
 
-This prints an admin token once — save it. On your laptop, install the CLI (Linux or macOS, no root) and point it at the server:
+This prints an admin token once — save it. On your laptop, install the CLI (no root) and point it at the server. Releases ship a linux/x86_64 binary only; on macOS or ARM, `install-cli.sh` prints the `cargo install --locked --git https://github.com/danbruder/litehouse litehouse` command to build it instead:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh
@@ -138,6 +138,19 @@ That job needs these repo secrets (Settings → Secrets and variables → Action
 | `LITEHOUSE_SERVER_SSH_KEY` | Private key for a keypair authorized on the server, dedicated to CI |
 
 **Deploying without a tag:** every push (or PR merge) to `main` deploys that commit to the server automatically. To deploy another branch, run the same workflow by hand from the Actions tab ("Build and Release Binary" → "Run workflow", pick a branch) or with `gh workflow run release.yml --ref <branch>`. Either way it builds that commit, pushes `ghcr.io/danbruder/litehouse:sha-<short>` and `:edge` (`:latest` stays on the newest tagged release), has the server pull that image, take the matching `lh` binary out of it, and run `lh upgrade --from-path <binary> --image-tag sha-<short>`. No version bump, tag, or GitHub Release. It uses the same three secrets as the tag deploy. `lh --version` keeps reporting the last `Cargo.toml` version; the running image tag (`docker inspect litehouse-server --format '{{.Config.Image}}'`) shows the commit.
+
+**CI deploy key.** Both deploy jobs reach the server through one SSH key whose `authorized_keys` entry is pinned to a forced command, so the key can only deploy:
+
+```
+command="/usr/local/bin/litehouse-ci-deploy",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ssh-ed25519 AAAA... litehouse-ci
+```
+
+`litehouse-ci-deploy` (source: `scripts/litehouse-ci-deploy.sh`, installed by `lh install` and refreshed by every `lh upgrade`) accepts `deploy-commit <sha>` (deploy that commit's `sha-<short>` image and binary) and treats anything else as `lh upgrade` to the latest release. It ends by printing `LITEHOUSE_DEPLOYED_IMAGE=<running image>`, and both jobs fail unless that matches what they deployed, so a deploy that didn't land can't pass green. On a server installed before the wrapper existed, install it once by hand:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/scripts/litehouse-ci-deploy.sh \
+  -o /usr/local/bin/litehouse-ci-deploy && chmod 755 /usr/local/bin/litehouse-ci-deploy
+```
 
 `dev-deploy.sh` remains for local iteration: it builds the binary on your machine and runs `lh upgrade --from-path` over SSH, without waiting on a tagged release.
 

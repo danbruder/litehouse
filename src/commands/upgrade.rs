@@ -5,7 +5,7 @@ use tracing::{info, instrument};
 use crate::install::executor::run_command;
 use crate::install::phases::{
     get_litehouse_uid, phase12_dial_stdio_cleanup_timer, phase13_weekly_reboot_timer,
-    phase14_os_security_updates,
+    phase14_os_security_updates, phase15_ci_deploy_wrapper,
     phase6a_pull_exact_litehouse_image, phase6a_pull_litehouse_image, phase6b_pull_images,
     phase9b_start_litehouse_container,
 };
@@ -28,8 +28,12 @@ fn download_binary(version: Option<&str>, log_window: Option<&ProgressBar>) -> R
     let arch_output = run_command("uname -m")?;
     let arch = match arch_output.trim() {
         "x86_64" | "amd64" => "x86_64",
-        "aarch64" | "arm64" => "aarch64",
-        other => anyhow::bail!("Unsupported architecture: {}", other),
+        // Releases only ship linux/x86_64. On another arch, build a binary
+        // and use `lh upgrade --from-path` (see dev-deploy.sh).
+        other => anyhow::bail!(
+            "Unsupported architecture: {} (releases only ship linux/x86_64; build lh yourself and use `lh upgrade --from-path`)",
+            other
+        ),
     };
 
     // Determine download URL
@@ -350,6 +354,12 @@ pub async fn execute(
             Some(format!("{:#}", e))
         }
     };
+
+    // Phase 3d: Refresh the CI deploy wrapper. Best-effort: the container is
+    // already upgraded, and the next upgrade retries it.
+    if let Err(e) = phase15_ci_deploy_wrapper() {
+        tracing::warn!("Installing the CI deploy wrapper failed: {:#}", e);
+    }
 
     // Phase 4: Install the new host binary. The container is already
     // running the new image at this point, so a failure here is logged as
