@@ -1,6 +1,8 @@
 #!/bin/sh
 # Install the litehouse CLI (`lh`) on a laptop, CI runner, or agent sandbox.
 # Client only: no root, no Docker, no server setup (that's install.sh).
+# Releases only ship linux/x86_64; elsewhere (e.g. macOS) it prints the
+# `cargo install` command to build lh from source.
 #
 #   curl -fsSL https://raw.githubusercontent.com/danbruder/litehouse/main/install-cli.sh | sh
 #
@@ -29,6 +31,13 @@ case "$(uname -m)" in
     aarch64 | arm64) ARCH=aarch64 ;;
     *) die "unsupported CPU $(uname -m): litehouse ships lh for x86_64 and aarch64" ;;
 esac
+
+# Releases ship only linux/x86_64 (the server's platform). Anywhere else,
+# build from source rather than failing on a missing download.
+if [ "$OS/$ARCH" != "linux/x86_64" ]; then
+    die "releases only include a linux/x86_64 binary. On $OS/$ARCH, build it from source:
+    cargo install --locked --git https://github.com/${REPO} litehouse"
+fi
 
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v tar >/dev/null 2>&1 || die "tar is required"

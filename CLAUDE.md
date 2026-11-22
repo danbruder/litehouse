@@ -35,15 +35,19 @@ cargo run -- serve
 # Run tests (includes comprehensive Docker integration tests)
 cargo test
 
-# CI (.github/workflows/ci.yml) runs on every PR: clippy with -D warnings,
+# CI (.github/workflows/ci.yml) runs on PRs: clippy with -D warnings,
 # cargo test, and a check that src/ui/spa/ matches a fresh `npm run build`.
 # Keep clippy clean.
 
-# Security maintenance (see .github/): Dependabot opens weekly grouped PRs for
-# cargo, npm (frontend/), Docker base images, and Actions; security.yml runs
-# cargo-audit, npm audit, and a Trivy scan of the deployed images on PRs and
-# weekly; scheduled-rebuild.yml redeploys main weekly so alpine/Caddy patches
-# land without a code change. Accepted advisories live in .cargo/audit.toml,
+# Security maintenance (see .github/): Dependabot opens ONE grouped PR per
+# ecosystem per month (cargo, npm in frontend/, Docker, Actions), plus one
+# grouped security PR per ecosystem when an advisory lands; security.yml runs
+# cargo-audit and npm audit on lockfile PRs and weekly (Wed), plus a Trivy
+# scan of the deployed images; scheduled-rebuild.yml redeploys main on Tuesday
+# unless a merge already did in the last 6 days. CI is PR-only and a
+# "changes" job skips the Rust or frontend job when a PR doesn't touch it;
+# release.yml builds only linux/x86_64 (the droplet's platform), tags included. Keep CI minutes in mind
+# when adding workflows. Accepted advisories live in .cargo/audit.toml,
 # each with a reason. `lh upgrade` re-pulls caddy:latest + helper images and
 # the server recreates Caddy when its image changed. When bumping alpine,
 # move Dockerfile, volume::UTILITY_IMAGE, install templates, and ci.yml together.
@@ -84,7 +88,7 @@ The v2 refactor (external builds via GHCR, push-to-deploy, daily S3 backups, sin
 - Automatic OS security updates: `lh install` and every `lh upgrade` enable unattended-upgrades on the host (distro security origins only, daily at 02:00 US Eastern, no auto-reboot — the existing weekly Sunday 3am Eastern reboot timer activates kernel patches). `lh os-updates status [--json]` checks it on the host (exit 1 if off); `lh os-updates enable` (root) turns it on. See `docs/superpowers/specs/2026-11-21-os-security-updates-design.md`.
 - Disaster recovery: `lh install --domain ...` on a fresh node → `lh connect` → `lh restore --yes` rebuilds state, apps, and volumes from GHCR + S3
 - Admin UI served from the same binary, cookie-authenticated with the admin token. It is a React SPA (`frontend/`) — the dashboard (`/`), app detail (`/apps/:name`), deploy detail, `/backups` and `/settings` — built once (never on the server) and its output committed into `src/ui/spa/`, embedded with `include_str!` like `htmx.min.js`/`styles.css`. Only `/login` is still server-rendered Askama HTML (`templates/`). Read `frontend/README.md` before touching the UI or the SPA-only API endpoints (`/api/apps/summary`, `/api/apps/:name/summary`, `/api/apps/:name/metrics`, `/api/apps/:name/restart`, `/api/backups/catalog`, `/api/metrics/server`, `/api/server/info`). **Changing anything under `frontend/src` requires `npm run build` and committing the regenerated `src/ui/spa/` output** — `cargo build` never runs npm.
-- ARM (aarch64) servers are supported alongside x86_64. The release workflow builds a static musl binary per arch on native runners (`ubuntu-latest` / `ubuntu-24.04-arm` — cross-compiling `aws-lc-sys` is painful) and pushes a multi-arch `litehouse-server` image (the Dockerfile picks `${TARGETARCH}/lh`). `GET /api/server/info` reports the Docker host `platform`; `lh create` renders the app's deploy workflow for it (arm64 builds under QEMU on GitHub's amd64 runners). The deploy engine rejects a pulled image whose architecture doesn't match the host *before* replacing the running container. Moving an app to a server of a different arch: re-run `lh create <app> --rotate-token` to regenerate its workflow, then push.
+- Release artifacts are **linux/x86_64 only** (the DigitalOcean droplet's platform; arm64 and macOS builds were dropped on 2026-11-21 to save CI time — `install-cli.sh` points other platforms at `cargo install --git`, and `lh upgrade` on another arch needs `--from-path`). The code still handles aarch64 servers if a release build is added back. Historically the release workflow built a static musl binary per arch on native runners (`ubuntu-latest` / `ubuntu-24.04-arm` — cross-compiling `aws-lc-sys` is painful) and pushes a multi-arch `litehouse-server` image (the Dockerfile picks `${TARGETARCH}/lh`). `GET /api/server/info` reports the Docker host `platform`; `lh create` renders the app's deploy workflow for it (arm64 builds under QEMU on GitHub's amd64 runners). The deploy engine rejects a pulled image whose architecture doesn't match the host *before* replacing the running container. Moving an app to a server of a different arch: re-run `lh create <app> --rotate-token` to regenerate its workflow, then push.
 - `e2e/acceptance.sh` and `e2e/dr-drill.sh` automate the full push-to-deploy and disaster-recovery flows against a real droplet; `examples/hello` is the reference app used by both
 
 ### Key Components
@@ -195,7 +199,7 @@ Deploy, backup, and restore logic lives in top-level modules (`src/deploy.rs`, `
 - `lh deploys <app> --wait --sha <ref>` (`src/deploy_wait.rs`, shared with MCP `list_deploys`) waits for the deploy of a specific commit. Without `--sha` it waits on the newest deploy, which right after a push is still the previous one. With `--sha`, it also polls that commit's `litehouse-deploy.yml` GitHub Actions run and fails fast (exit 1) if the build failed.
 - `lh doctor [--app] [--json]` (`src/commands/doctor.rs`) preflights server connection, GitHub token `repo`+`workflow` scopes, GitHub origin, Dockerfile, and EXPOSEd port.
 - `LITEHOUSE_URL` / `LITEHOUSE_TOKEN` override the client config (`ClientConfig::load_effective`; never `save()` its result). `lh connect` verifies URL + token via `/api/server/info` before saving.
-- `install-cli.sh` installs just the CLI (no root) on Linux/macOS; the release workflow builds `litehouse-darwin-{aarch64,x86_64}` for it.
+- `install-cli.sh` installs just the CLI (no root) on linux/x86_64; on other platforms it prints a `cargo install --git` command (releases no longer include macOS binaries).
 - Client commands log at `warn` by default (only `serve`/`install`/`upgrade` default to `info`) so stdout/stderr carry just results.
 - New app names must be DNS labels (lowercase letters, digits, hyphens, ≤63, not `admin`/the admin label) — validated in `api::create_app`.
 

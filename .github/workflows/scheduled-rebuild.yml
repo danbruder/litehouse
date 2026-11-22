@@ -3,7 +3,8 @@ name: Scheduled rebuild
 # The litehouse-server image is `alpine` + `apk add ca-certificates git` on
 # top of the prebuilt binary, and Caddy is pulled as `caddy:latest`. Neither
 # picks up upstream security patches unless something rebuilds/redeploys.
-# This kicks off the normal main deploy (release.yml) once a week, which
+# This kicks off the normal main deploy (release.yml) once a week (unless a
+# merge already deployed main in the last 6 days), which
 # rebuilds the image on the current alpine packages and runs `lh upgrade`,
 # which also re-pulls Caddy and the helper images and recreates Caddy when
 # its image changed.
@@ -13,15 +14,33 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write # dispatch release.yml
+  actions: write # read recent runs, dispatch release.yml
 
 jobs:
   rebuild:
     runs-on: ubuntu-latest
     steps:
+      # Skip when main already deployed within the last 6 days: every merge
+      # to main runs release.yml, which rebuilds the image on fresh alpine
+      # packages and re-pulls Caddy, so a busy week needs no extra rebuild.
+      - name: Check for a recent main deploy
+        id: recent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          last="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml \
+            --branch main --status success --limit 1 --json createdAt --jq '.[0].createdAt // empty')"
+          echo "Last successful main deploy: ${last:-never}"
+          if [ -n "$last" ] && [ "$(date -d "$last" +%s)" -gt "$(date -d '6 days ago' +%s)" ]; then
+            echo skip=true >> "$GITHUB_OUTPUT"
+          else
+            echo skip=false >> "$GITHUB_OUTPUT"
+          fi
+
       # A GITHUB_TOKEN-dispatched workflow_dispatch event is allowed to start
       # another workflow (unlike most GITHUB_TOKEN-triggered events).
       - name: Redeploy main
+        if: steps.recent.outputs.skip != 'true' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main
