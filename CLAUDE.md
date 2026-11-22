@@ -61,7 +61,8 @@ TARGET_CC=x86_64-linux-musl-gcc cargo build --release --target x86_64-unknown-li
 # Merging to main deploys that commit to the server automatically.
 # Deploy another branch without tagging a release
 # (builds in Actions, pushes ghcr.io/danbruder/litehouse:sha-<short>, runs
-# `lh upgrade --from-path ... --image-tag sha-<short>` over SSH)
+# `lh upgrade --from-path ... --image-tag sha-<short>` on the server via the
+# CI key's forced command, scripts/litehouse-ci-deploy.sh)
 gh workflow run release.yml --ref <branch>
 
 # Deploy a locally built binary (note: the container still runs the GHCR

@@ -80,6 +80,13 @@ SuccessExitStatus=0 1
 /// feature; systemd resolves the trailing timezone against tzdata
 /// (DST-safe) without changing the host's system timezone. See
 /// docs/superpowers/specs/2026-07-16-server-hardening-design.md §3.
+/// Forced command for the CI deploy SSH key (see the script's header and
+/// the README's release section). Installed to
+/// `/usr/local/bin/litehouse-ci-deploy` on every install and upgrade.
+pub fn ci_deploy_wrapper() -> &'static str {
+    include_str!("../../scripts/litehouse-ci-deploy.sh")
+}
+
 pub fn weekly_reboot_timer() -> &'static str {
     r#"[Unit]
 Description=Weekly host reboot to bound dial-stdio process accumulation
@@ -738,6 +745,17 @@ mod tests {
         let service = dial_stdio_cleanup_service();
         assert!(service.contains("Type=oneshot"));
         assert!(service.contains("ExecStart=/usr/bin/pkill -f 'docker system dial-stdio'"));
+    }
+
+    #[test]
+    fn ci_deploy_wrapper_only_runs_known_requests() {
+        let script = ci_deploy_wrapper();
+        assert!(script.contains("deploy-commit[[:space:]]+([0-9a-f]{40})"));
+        assert!(script.contains("--image-tag \"$TAG\""));
+        assert!(script.contains("LITEHOUSE_DEPLOYED_IMAGE="));
+        // Never evaluates the client's command.
+        assert!(!script.contains("eval"));
+        assert!(!script.contains("bash -c \"$REQUEST"));
     }
 
     #[test]
