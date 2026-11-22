@@ -17,27 +17,27 @@ serde_yaml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
-thiserror = "1.0"
+thiserror = "2.0"
 tempfile = "3.9"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.9"
-toml = "0.8"
+chrono-tz = "0.10"
+toml = "1.2"
 bollard = {version = "0.15"}
 axum = "0.6"
 futures-util = "0.3"
 bytes = "1"
-indicatif = "0.17"
-rand = "0.8"
-sha2 = "0.10"
+indicatif = "0.18"
+rand = "0.10"
+sha2 = "0.11"
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 urlencoding = "2.1"
 tar = "0.4"
 flate2 = "1.0"
 walkdir = "2.4"
 crypto_box = { version = "0.9", features = ["seal"] }
-base64 = "0.22"
+base64 = "0.23"
 # S3 SDK without its default HTTPS client: that one is rustls on aws-lc-rs,
 # whose C build (aws-lc-sys, cmake) dominated clean builds. backup::s3_client
 # plugs in a rustls-on-ring client instead — the same ring reqwest already
@@ -45,7 +45,7 @@ base64 = "0.22"
 aws-sdk-s3 = { version = "1", default-features = false, features = ["rt-tokio", "http-1x"] }
 aws-smithy-http-client = { version = "1", features = ["rustls-ring"] }
 aws-credential-types = "1"
-askama = "0.12"
+askama = "0.16"
 
 [dev-dependencies]
 # In-process router tests (tower::ServiceExt::oneshot, hyper::body::to_bytes).
