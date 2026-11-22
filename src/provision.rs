@@ -33,7 +33,6 @@ pub async fn provision_app(
     repo: Option<String>,
     rotate_token: bool,
     allow_interactive: bool,
-    context: Option<&str>,
 ) -> Result<ProvisionOutcome> {
     let repo = match repo {
         Some(r) => r,
@@ -69,8 +68,6 @@ pub async fn provision_app(
         .flatten()
         .unwrap_or_else(|| crate::workflow::DEFAULT_PLATFORM.to_string());
 
-    let layout = crate::workflow::DeployLayout::new(owner, repo_name, app_name, context);
-
     let setup = async {
         let token =
             crate::commands::github_login::resolve_github_token(allow_interactive).await?;
@@ -78,24 +75,26 @@ pub async fn provision_app(
             &token,
             owner,
             repo_name,
-            &layout.secret_name,
+            "LITEHOUSE_DEPLOY_TOKEN",
             &create_result.deploy_token,
         )
         .await
-        .with_context(|| format!("setting {} secret", layout.secret_name))?;
+        .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
 
         let workflow =
-            crate::workflow::render_deploy_workflow_for(&layout, app_name, &hook_url, &platform);
+            crate::workflow::render_deploy_workflow(
+            owner, repo_name, app_name, &hook_url, &platform,
+        );
         crate::github::actions::put_file(
             &token,
             owner,
             repo_name,
-            &layout.workflow_path,
+            ".github/workflows/litehouse-deploy.yml",
             &workflow,
-            &format!("Add litehouse deploy workflow for {}", app_name),
+            "Add litehouse deploy workflow",
         )
         .await
-        .with_context(|| format!("committing {}", layout.workflow_path))?;
+        .context("committing .github/workflows/litehouse-deploy.yml")?;
 
         Ok::<(), anyhow::Error>(())
     }

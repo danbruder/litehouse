@@ -13,11 +13,11 @@
 //! full of literal `${{ ... }}` GitHub Actions expression syntax that would
 //! otherwise have to be escaped as `{{{{ ... }}}}`.
 
-const TEMPLATE: &str = r#"name: __NAME__
+const TEMPLATE: &str = r#"name: litehouse deploy
 on:
   push:
     branches: [main, master]
-__PATHS__jobs:
+jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
@@ -32,18 +32,18 @@ __PATHS__jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 __EMULATION_STEPS__      - uses: docker/build-push-action@v6
         with:
-          context: __CONTEXT__
+          context: .
           platforms: __PLATFORM__
           push: true
           tags: |
-            __IMAGE__:latest
-            __IMAGE__:${{ github.sha }}
+            ghcr.io/__OWNER__/__REPO__:latest
+            ghcr.io/__OWNER__/__REPO__:${{ github.sha }}
       - name: notify litehouse
         run: |
           curl -fsS -X POST "__HOOK_URL__" \
-            -H "Authorization: Bearer ${{ secrets.__SECRET__ }}" \
+            -H "Authorization: Bearer ${{ secrets.LITEHOUSE_DEPLOY_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d "{\"app\":\"__APP__\",\"image\":\"__IMAGE__:${{ github.sha }}\",\"sha\":\"${{ github.sha }}\"}"
+            -d "{\"app\":\"__APP__\",\"image\":\"ghcr.io/__OWNER__/__REPO__:${{ github.sha }}\",\"sha\":\"${{ github.sha }}\"}"
 "#;
 
 /// Extra steps for building a non-amd64 image on GitHub's amd64 runners.
@@ -70,82 +70,15 @@ pub fn render_deploy_workflow(
     hook_url: &str,
     platform: &str,
 ) -> String {
-    render_deploy_workflow_for(&DeployLayout::new(owner, repo, app, None), app, hook_url, platform)
-}
-
-/// Where an app's deploy wiring lives in its repo. An app built from the repo
-/// root (the default) uses the classic single-app names; an app built from a
-/// subdirectory (`lh create --context <dir>`) gets names of its own, so one
-/// repo can deploy several apps side by side.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeployLayout {
-    /// Docker build context, relative to the repo root.
-    pub context: String,
-    /// Repo path of the workflow file.
-    pub workflow_path: String,
-    /// GitHub Actions secret holding the app's deploy token.
-    pub secret_name: String,
-    /// GHCR image (lowercase, no tag).
-    pub image: String,
-    /// Only rebuild when these paths change (`None`: every push).
-    pub paths: Option<Vec<String>>,
-}
-
-impl DeployLayout {
-    pub fn new(owner: &str, repo: &str, app: &str, context: Option<&str>) -> Self {
-        let owner = owner.to_lowercase();
-        match context.map(|c| c.trim_matches('/')).filter(|c| !c.is_empty() && *c != ".") {
-            None => DeployLayout {
-                context: ".".into(),
-                workflow_path: ".github/workflows/litehouse-deploy.yml".into(),
-                secret_name: "LITEHOUSE_DEPLOY_TOKEN".into(),
-                image: format!("ghcr.io/{}/{}", owner, repo.to_lowercase()),
-                paths: None,
-            },
-            Some(dir) => {
-                let workflow_path = format!(".github/workflows/litehouse-deploy-{}.yml", app);
-                DeployLayout {
-                    context: dir.to_string(),
-                    secret_name: format!(
-                        "LITEHOUSE_DEPLOY_TOKEN_{}",
-                        app.to_uppercase().replace('-', "_")
-                    ),
-                    image: format!("ghcr.io/{}/{}", owner, app.to_lowercase()),
-                    paths: Some(vec![format!("{}/**", dir), workflow_path.clone()]),
-                    workflow_path,
-                }
-            }
-        }
-    }
-}
-
-/// Render the deploy workflow for `app` with an explicit layout.
-pub fn render_deploy_workflow_for(
-    layout: &DeployLayout,
-    app: &str,
-    hook_url: &str,
-    platform: &str,
-) -> String {
+    let owner = owner.to_lowercase();
+    let repo = repo.to_lowercase();
     let emulation = if platform == DEFAULT_PLATFORM { "" } else { EMULATION_STEPS };
-    let (name, paths) = match &layout.paths {
-        None => ("litehouse deploy".to_string(), String::new()),
-        Some(ps) => (
-            format!("litehouse deploy {}", app),
-            format!(
-                "    paths:\n{}",
-                ps.iter().map(|p| format!("      - \"{}\"\n", p)).collect::<String>()
-            ),
-        ),
-    };
 
     TEMPLATE
-        .replace("__NAME__", &name)
-        .replace("__PATHS__", &paths)
         .replace("__EMULATION_STEPS__", emulation)
         .replace("__PLATFORM__", platform)
-        .replace("__CONTEXT__", &layout.context)
-        .replace("__IMAGE__", &layout.image)
-        .replace("__SECRET__", &layout.secret_name)
+        .replace("__OWNER__", &owner)
+        .replace("__REPO__", &repo)
         .replace("__APP__", app)
         .replace("__HOOK_URL__", hook_url)
 }
@@ -185,36 +118,6 @@ mod tests {
         assert!(yml.contains("ghcr.io/danbruder/hello:${{ github.sha }}"));
         assert!(!yml.contains("ghcr.io/DanBruder"));
         assert!(!yml.contains("ghcr.io/danbruder/Hello"));
-    }
-
-    #[test]
-    fn subdirectory_app_gets_its_own_workflow_secret_image_and_path_filter() {
-        let layout = DeployLayout::new("DanBruder", "piper", "piper-media", Some("livekit/"));
-        assert_eq!(layout.workflow_path, ".github/workflows/litehouse-deploy-piper-media.yml");
-        assert_eq!(layout.secret_name, "LITEHOUSE_DEPLOY_TOKEN_PIPER_MEDIA");
-        assert_eq!(layout.image, "ghcr.io/danbruder/piper-media");
-
-        let yml = render_deploy_workflow_for(&layout, "piper-media", "https://e.com/hooks/deploy", DEFAULT_PLATFORM);
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&yml).expect("valid yaml");
-        let paths = parsed["on"]["push"]["paths"].as_sequence().expect("paths filter");
-        assert_eq!(paths[0].as_str(), Some("livekit/**"));
-        assert!(yml.contains("context: livekit\n"));
-        assert!(yml.contains("secrets.LITEHOUSE_DEPLOY_TOKEN_PIPER_MEDIA"));
-        assert!(yml.contains(r#"\"image\":\"ghcr.io/danbruder/piper-media:${{ github.sha }}\""#));
-        assert!(!yml.contains("__"));
-    }
-
-    #[test]
-    fn root_context_keeps_the_classic_single_app_layout() {
-        for ctx in [None, Some("."), Some("")] {
-            let layout = DeployLayout::new("o", "Repo", "app", ctx);
-            assert_eq!(layout.workflow_path, ".github/workflows/litehouse-deploy.yml");
-            assert_eq!(layout.secret_name, "LITEHOUSE_DEPLOY_TOKEN");
-            assert_eq!(layout.image, "ghcr.io/o/repo");
-            assert_eq!(layout.paths, None);
-        }
-        let yml = render_deploy_workflow("o", "r", "a", "https://e.com/hooks/deploy", DEFAULT_PLATFORM);
-        assert!(yml.starts_with("name: litehouse deploy\non:\n  push:\n    branches: [main, master]\njobs:"));
     }
 
     #[test]
