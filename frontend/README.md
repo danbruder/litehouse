@@ -61,9 +61,23 @@ change just to update the include path.
 - Vite + React + TypeScript
 - Tailwind, with `preflight` disabled and its color tokens mapped onto the
   existing `--color-*` CSS custom properties from `../src/ui/styles.css`
-  (the "Ink & Lime" design system) — the SPA links that stylesheet before
-  its own, and reuses its `.card`/`.badge`/`.btn-outline` classes directly
-  rather than re-implementing them.
+  (the "Ink & Lime" design system: hairlines, no radius, lime only on
+  hover/selection). The SPA links that stylesheet before its own for the
+  tokens, fonts and base type; `src/index.css` adds a zero-specificity
+  border reset scoped to `#root` so Tailwind's `border-*` utilities work
+  without preflight.
+- The SPA owns all of its chrome. The server's shell (`spa_shell` in
+  `src/ui.rs`) is just `<div id="root">`; `src/components/Shell.tsx`
+  renders the top bar (brand, theme toggle, sign-out form POSTing to
+  `/logout`) and the nav: inline in the top bar on desktop, a fixed
+  bottom tab bar on phones (safe-area aware, since the page is often
+  opened from the home screen).
+- Mobile first. Layout primitives live in `src/components/ui.tsx`
+  (`Page`, `PageHeader`, `Section`, `Facts`/`Fact`, `Tabs`, `StatusText`,
+  `CopyButton`). Tap targets are 44px on phones and shrink at `md`;
+  inputs are forced to 16px under `md` so iOS doesn't zoom on focus. The
+  app page is tabbed (`?tab=overview|deploys|logs|settings`) rather than
+  one long scroll. Check new UI at 390px wide as well as desktop.
 - `react-router-dom` for client-side routing between the four pages (a
   `BrowserRouter` + `Routes` in `src/App.tsx`) — the server just serves the
   same shell for every SPA path (see `spa_shell` in `src/ui.rs`).

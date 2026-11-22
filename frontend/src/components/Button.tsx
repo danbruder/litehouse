@@ -2,27 +2,27 @@ import { type ButtonHTMLAttributes, forwardRef } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../lib/cn";
 
-// Deliberately thin: reuses the existing .btn-outline look from
-// styles.css (transparent, lime fill on hover, hairline border via the
-// button's own default browser border — no radius, no shadow, matching the
-// rest of the admin UI's "paper, not chrome" system) rather than
-// introducing a second button language.
+// Same "paper, not chrome" language as styles.css (hairlines, no radius,
+// lime on hover), sized for thumbs: `md` is a 44px target on phones and
+// shrinks to 36px once there's a pointer. styles.css gives every bare
+// <button> a solid ink fill, so each variant sets its own background.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-1.5 border font-medium uppercase tracking-wide transition-colors disabled:opacity-40 disabled:pointer-events-none",
+  "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border font-semibold uppercase tracking-wide transition-colors disabled:pointer-events-none disabled:opacity-40",
   {
     variants: {
       variant: {
-        outline: "btn-outline border-ink text-[0.65rem] px-3 py-1.5",
-        // styles.css gives every bare <button> a solid ink fill, so a ghost
-        // button has to opt out of it explicitly or it renders as a second
-        // solid block next to the outline ones.
+        outline: "btn-outline border-ink bg-transparent text-ink",
         ghost:
-          "border-transparent bg-transparent text-ink-2 hover:bg-transparent hover:text-ink text-[0.65rem] px-2 py-1",
-        solid: "bg-lime border-lime text-on-lime hover:opacity-90 text-[0.65rem] px-3 py-1.5",
+          "border-transparent bg-transparent text-ink-2 hover:border-transparent hover:bg-paper-3 hover:text-ink",
+        solid: "border-ink bg-ink text-paper hover:border-lime hover:bg-lime hover:text-on-lime",
+        lime: "border-lime bg-lime text-on-lime hover:opacity-90",
+        danger:
+          "border-bad bg-transparent text-bad hover:border-bad hover:bg-bad hover:text-paper",
       },
       size: {
-        sm: "text-[0.65rem] px-2.5 py-1",
-        md: "text-xs px-3 py-1.5",
+        sm: "min-h-[32px] px-2.5 text-[0.65rem]",
+        md: "min-h-[44px] px-3.5 text-[0.7rem] md:min-h-[36px]",
+        icon: "h-11 w-11 p-0 md:h-9 md:w-9",
       },
     },
     defaultVariants: { variant: "outline", size: "sm" },
@@ -34,8 +34,8 @@ export interface ButtonProps
     VariantProps<typeof buttonVariants> {}
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
-    <button ref={ref} className={cn(buttonVariants({ variant, size }), className)} {...props} />
+  ({ className, variant, size, type = "button", ...props }, ref) => (
+    <button ref={ref} type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />
   ),
 );
 Button.displayName = "Button";

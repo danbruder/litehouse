@@ -1,12 +1,14 @@
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { Dashboard } from "./pages/Dashboard";
 import { AppDetail } from "./pages/AppDetail";
 import { DeployDetail } from "./pages/DeployDetail";
 import { Backups } from "./pages/Backups";
 import { Settings } from "./pages/Settings";
-import { Nav } from "./components/Nav";
+import { Shell } from "./components/Shell";
+import { Page, PageHeader, Muted } from "./components/ui";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,21 +27,36 @@ const queryClient = new QueryClient({
 // the known SPA paths and 404s the rest (see `create_ui_router`).
 function NotFound() {
   return (
-    <div className="card">
-      <span className="panel-label">not found</span>
-      <p className="muted">That page doesn't exist.</p>
-      <p>
-        <Link to="/">&larr; all apps</Link>
-      </p>
-    </div>
+    <Page>
+      <PageHeader title="Not found" />
+      <Muted>
+        That page doesn't exist. <Link to="/">Back to apps</Link>
+      </Muted>
+    </Page>
   );
 }
 
-export function App() {
+function useIsPhone() {
+  const query = "(max-width: 767px)";
+  const [phone, setPhone] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const on = () => setPhone(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return phone;
+}
+
+function Routed() {
+  const { pathname } = useLocation();
+  const phone = useIsPhone();
+  // Each page starts at the top, as a full page load would.
+  useEffect(() => window.scrollTo(0, 0), [pathname]);
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Nav />
+    <>
+      <Shell pathname={pathname}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/apps/:name" element={<AppDetail />} />
@@ -48,18 +65,30 @@ export function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
-      </BrowserRouter>
+      </Shell>
       <Toaster
-        position="bottom-right"
+        position={phone ? "top-center" : "bottom-right"}
         theme={(document.documentElement.dataset.theme as "light" | "dark") ?? "light"}
         toastOptions={{
           style: {
             background: "var(--color-paper)",
             color: "var(--color-ink)",
             border: "1px solid var(--color-ink)",
+            borderRadius: 0,
+            fontFamily: "var(--font-sans)",
           },
         }}
       />
+    </>
+  );
+}
+
+export function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routed />
+      </BrowserRouter>
     </QueryClientProvider>
   );
 }

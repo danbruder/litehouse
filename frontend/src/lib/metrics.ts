@@ -42,11 +42,3 @@ export function peakCpu(samples: MetricSample[]): number | null {
   const vals = samples.filter((s) => s.cpu_pct != null).map((s) => s.cpu_pct as number);
   return vals.length ? Math.max(...vals) : null;
 }
-
-/** "12.3% · 15m avg · 24h peak 98%" — the CPU chart's heading. */
-export function cpuHeading(samples: MetricSample[]): string {
-  const avg = recentCpuAvg(samples);
-  const peak = peakCpu(samples);
-  const parts = [avg != null ? `${avg.toFixed(1)}% · ${CPU_BUCKET_MINUTES}m avg` : null, peak != null ? `24h peak ${peak.toFixed(0)}%` : "24h"];
-  return parts.filter(Boolean).join(" · ");
-}

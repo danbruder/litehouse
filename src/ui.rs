@@ -186,7 +186,13 @@ async fn spa_shell() -> impl IntoResponse {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8fa" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16191f" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="litehouse">
   <title>litehouse</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><polygon points=%2260,24 96,6 96,22%22 fill=%22%23ffd54a%22/><polygon points=%2228,94 72,94 62,84 38,84%22 fill=%22%234a4a4a%22/><polygon points=%2240,84 60,84 55,30 45,30%22 fill=%22%23f4f1e8%22/><polygon points=%2242.5,62 57.5,62 56,50 44,50%22 fill=%22%23d94f4f%22/><rect x=%2242%22 y=%2218%22 width=%2216%22 height=%2212%22 fill=%22%232b2b2b%22/><polygon points=%2240,18 60,18 50,6%22 fill=%22%23d94f4f%22/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -203,34 +209,7 @@ async fn spa_shell() -> impl IntoResponse {
   </script>
 </head>
 <body>
-  <header>
-    <a class="brand" href="/"><h1><svg class="brand-icon" viewBox="0 0 100 100" aria-hidden="true"><polygon points="60,24 96,6 96,22" fill="#ffd54a"/><polygon points="28,94 72,94 62,84 38,84" fill="#4a4a4a"/><polygon points="40,84 60,84 55,30 45,30" fill="#f4f1e8"/><polygon points="42.5,62 57.5,62 56,50 44,50" fill="#d94f4f"/><rect x="42" y="18" width="16" height="12" fill="#2b2b2b"/><polygon points="40,18 60,18 50,6" fill="#d94f4f"/></svg> litehouse</h1><span class="cursor">_</span></a>
-    <div class="header-actions">
-      <button id="theme-toggle" type="button" class="btn-outline btn-small"></button>
-      <form class="inline" method="post" action="/logout">
-        <button type="submit" class="btn-outline btn-small">sign out</button>
-      </form>
-    </div>
-  </header>
-  <main>
-    <div id="root"></div>
-  </main>
-  <script>
-    (function () {
-      var btn = document.getElementById("theme-toggle");
-      if (!btn) return;
-      var sync = function () {
-        btn.textContent = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-      };
-      sync();
-      btn.addEventListener("click", function () {
-        var next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = next;
-        localStorage.theme = next;
-        sync();
-      });
-    })();
-  </script>
+  <div id="root"></div>
   <script type="module" src="/assets/spa.js"></script>
 </body>
 </html>"##,

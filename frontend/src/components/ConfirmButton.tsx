@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, type ButtonProps } from "./Button";
 
-// Inline two-step confirmation instead of a modal: clicking once swaps the
-// button for "<label>? yes / no", which matches the rest of the admin UI's
-// flat, paper-not-chrome language and keeps destructive actions (stop,
-// remove domain, clear health check) one deliberate step away from a stray
-// click. Resets itself after a few seconds so a half-confirmed button never
-// lingers.
+// Inline two-step confirmation instead of a modal: the first tap swaps the
+// button for "<label>? [yes] [no]", keeping destructive actions (stop,
+// remove domain, revoke) one deliberate step from a stray tap. Resets after
+// a few seconds so a half-confirmed button never lingers.
 export function ConfirmButton({
   onConfirm,
   confirmLabel = "sure",
   children,
+  size,
   ...props
 }: ButtonProps & { onConfirm: () => void; confirmLabel?: string }) {
   const [armed, setArmed] = useState(false);
@@ -24,18 +23,19 @@ export function ConfirmButton({
 
   if (!armed) {
     return (
-      <Button {...props} onClick={() => setArmed(true)}>
+      <Button {...props} size={size} onClick={() => setArmed(true)}>
         {children}
       </Button>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-1 text-[0.65rem] uppercase tracking-wide text-ink-2">
-      {confirmLabel}?
+    <span className="inline-flex flex-wrap items-center gap-1.5 text-[0.7rem] font-semibold uppercase tracking-wide text-ink-2">
+      <span className="mr-0.5">{confirmLabel}?</span>
       <Button
-        {...props}
-        variant="solid"
+        size={size}
+        variant="danger"
+        disabled={props.disabled}
         onClick={() => {
           setArmed(false);
           onConfirm();
@@ -43,7 +43,7 @@ export function ConfirmButton({
       >
         yes
       </Button>
-      <Button variant="ghost" onClick={() => setArmed(false)}>
+      <Button size={size} variant="ghost" onClick={() => setArmed(false)}>
         no
       </Button>
     </span>

@@ -1,133 +1,114 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { toast } from "sonner";
-import { Search } from "lucide-react";
+import { AlertTriangle, ArrowRight, Search } from "lucide-react";
 import { api } from "../lib/api";
-import { relativeTime, absoluteTime, formatBytes } from "../lib/format";
-import { AppCard } from "../components/AppCard";
-import { Sparkline } from "../components/Sparkline";
-import { bucketCpu, cpuHeading } from "../lib/metrics";
+import { relativeTime, absoluteTime } from "../lib/format";
+import { useRunBackup } from "../lib/actions";
+import { AppRow } from "../components/AppRow";
+import { ResourceStats } from "../components/ResourceStats";
 import { Button } from "../components/Button";
 import { ErrorNote } from "../components/ErrorNote";
+import { Loading, Muted, Page, PageHeader, Section, StatusDot } from "../components/ui";
 
-function BackupsCard() {
-  const qc = useQueryClient();
+function BackupsSection() {
   const { data, error, refetch } = useQuery({
     queryKey: ["backup-status"],
     queryFn: api.backupStatus,
     refetchInterval: 30_000,
   });
-  const runBackup = useMutation({
-    mutationFn: api.runBackup,
-    onSuccess: (report) => {
-      if (report.failed.length > 0) {
-        toast.error(`Backup finished with ${report.failed.length} failure(s)`, {
-          description: report.failed.map(([name]) => name).join(", "),
-        });
-      } else {
-        toast.success(`Backup finished — ${report.succeeded.length} app(s)`);
-      }
-      qc.invalidateQueries({ queryKey: ["backup-status"] });
-      qc.invalidateQueries({ queryKey: ["backups-catalog"] });
-    },
-    onError: (err: Error) => toast.error("Backup failed", { description: err.message }),
-  });
+  const runBackup = useRunBackup();
 
   const report = data?.last_backup_report;
-  const line = report
-    ? `${report.succeeded.length} succeeded, ${report.failed.length} failed (last run ${relativeTime(report.ran_at)})`
-    : "no backup has run yet";
   // A backup day is only stamped when every app backs up cleanly, so a
   // stale date is the signal worth calling out rather than burying.
   const staleDays = data?.last_backup_date
     ? Math.floor((Date.now() - Date.parse(`${data.last_backup_date}T00:00:00Z`)) / 86_400_000)
     : null;
+  const failed = report?.failed ?? [];
+  const tone = !report ? "created" : failed.length > 0 ? "failed" : "succeeded";
 
   return (
-    <div className="card">
-      <span className="panel-label">backups</span>
+    <Section
+      title="Backups"
+      action={
+        <Link to="/backups" className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-ink-3">
+          all <ArrowRight size={12} />
+        </Link>
+      }
+    >
       {error ? (
         <ErrorNote error={error} what="backup status" onRetry={() => refetch()} />
       ) : (
-        <p className="flex flex-wrap items-center gap-3">
-          <span className="muted" title={absoluteTime(report?.ran_at)}>
-            {line}
-          </span>
-          <Link to="/backups">view all</Link>
-          <Button variant="outline" disabled={runBackup.isPending} onClick={() => runBackup.mutate()}>
-            {runBackup.isPending ? "running…" : "run now"}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm text-ink">
+              <StatusDot state={tone} />
+              {report ? (
+                <span title={absoluteTime(report.ran_at)}>
+                  {report.succeeded.length} backed up
+                  {failed.length > 0 && <span className="text-bad">, {failed.length} failed</span>}
+                  <span className="text-ink-3"> · {relativeTime(report.ran_at)}</span>
+                </span>
+              ) : (
+                <span className="text-ink-3">No backup has run yet</span>
+              )}
+            </div>
+            {failed.length > 0 && (
+              <ul className="m-0 mt-2 list-none space-y-1 p-0 text-xs">
+                {failed.map(([name, err]) => (
+                  <li key={name} className="break-words text-ink-3">
+                    <Link to={`/apps/${encodeURIComponent(name)}`} className="font-semibold text-ink">
+                      {name}
+                    </Link>
+                    : {err}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <Button
+            variant="outline"
+            size="md"
+            className="w-full sm:w-auto"
+            disabled={runBackup.isPending}
+            onClick={() => runBackup.mutate()}
+          >
+            {runBackup.isPending ? "running…" : "run backup now"}
           </Button>
-        </p>
+        </div>
       )}
       {staleDays != null && staleDays >= 2 && (
-        <p className="text-xs text-warn">
-          Last clean backup was {staleDays} days ago — check <code>lh backup status</code>.
+        <p className="m-0 mt-3 text-xs text-warn">
+          Last clean backup was {staleDays} days ago. Check <code>lh backup status</code>.
         </p>
       )}
       {data && data.last_backup_date == null && !error && (
-        <p className="hint">
-          No clean backup day recorded yet. Configure S3 under <Link to="/settings">settings</Link> if
-          you haven't.
+        <p className="m-0 mt-3 text-xs text-ink-3">
+          No clean backup day recorded yet. Configure S3 under <Link to="/settings">settings</Link> if you
+          haven't.
         </p>
       )}
-      {report && report.failed.length > 0 && (
-        <ul>
-          {report.failed.map(([name, err]) => (
-            <li key={name}>
-              <strong>{name}</strong>: <span className="muted">{err}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </Section>
   );
 }
 
-function ServerResourcesCard() {
+function ServerSection() {
   const { data, error, refetch } = useQuery({
     queryKey: ["server-metrics"],
     queryFn: () => api.serverMetrics(24),
     refetchInterval: 30_000,
   });
-  const samples = data ?? [];
-  const series = (pick: (s: (typeof samples)[number]) => number | null) =>
-    samples.map((s) => ({ value: pick(s), ts: s.ts }));
-  const latest = (pick: (s: (typeof samples)[number]) => number | null) =>
-    [...samples].reverse().map(pick).find((v) => v != null) ?? null;
-  const latestMem = latest((s) => s.mem_bytes);
-  const latestDisk = latest((s) => s.disk_bytes);
-
   return (
-    <div className="card">
-      <span className="panel-label">server resources</span>
-      {error && <ErrorNote error={error} what="server metrics" onRetry={() => refetch()} />}
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-        <div>
-          <h4 className="mb-1 text-xs text-ink-2">
-            CPU <span className="muted">{cpuHeading(samples)}</span>
-          </h4>
-          <Sparkline
-            data={bucketCpu(samples)}
-            color="var(--color-signal)"
-            max={100}
-            format={(v) => `${v.toFixed(1)}%`}
-          />
+    <Section title="Server" flush>
+      {error ? (
+        <div className="px-4 py-3">
+          <ErrorNote error={error} what="server metrics" onRetry={() => refetch()} />
         </div>
-        <div>
-          <h4 className="mb-1 text-xs text-ink-2">
-            Memory {latestMem != null && <span className="muted">of {formatBytes(latestMem)}</span>}
-          </h4>
-          <Sparkline data={series((s) => s.mem_bytes)} color="var(--color-warn)" format={formatBytes} />
-        </div>
-        <div>
-          <h4 className="mb-1 text-xs text-ink-2">
-            Disk {latestDisk != null && <span className="muted">of {formatBytes(latestDisk)}</span>}
-          </h4>
-          <Sparkline data={series((s) => s.disk_bytes)} color="var(--color-good)" format={formatBytes} />
-        </div>
-      </div>
-    </div>
+      ) : (
+        <ResourceStats samples={data ?? []} />
+      )}
+    </Section>
   );
 }
 
@@ -148,75 +129,102 @@ export function Dashboard() {
     if (!apps) return [];
     const needle = filter.trim().toLowerCase();
     if (!needle) return apps;
-    return apps.filter(
-      (a) => a.name.toLowerCase().includes(needle) || a.state.toLowerCase().includes(needle),
-    );
+    return apps.filter((a) => a.name.toLowerCase().includes(needle) || a.state.toLowerCase().includes(needle));
   }, [apps, filter]);
 
-  // A census across the top: on a host with a dozen apps, "is anything
-  // down right now?" shouldn't require reading every card.
-  const counts = useMemo(() => {
-    const c = { running: 0, stopped: 0, unhealthy: 0 };
-    for (const a of apps ?? []) {
-      if (a.state === "running") c.running += 1;
-      else if (a.state === "failed" || a.state === "crashed") c.unhealthy += 1;
-      else c.stopped += 1;
-    }
-    return c;
-  }, [apps]);
+  const unhealthy = (apps ?? []).filter((a) => a.state === "failed" || a.state === "crashed");
+  const running = (apps ?? []).filter((a) => a.state === "running").length;
+  const stopped = (apps?.length ?? 0) - running - unhealthy.length;
 
   return (
-    <>
-      <BackupsCard />
-      <ServerResourcesCard />
+    <Page>
+      <PageHeader
+        title="Apps"
+        meta={
+          apps && apps.length > 0 ? (
+            <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot state="running" /> {running} running
+              </span>
+              {stopped > 0 && (
+                <span className="inline-flex items-center gap-1.5">
+                  <StatusDot state="stopped" /> {stopped} stopped
+                </span>
+              )}
+              {unhealthy.length > 0 && (
+                <span className="inline-flex items-center gap-1.5 text-bad">
+                  <StatusDot state="failed" /> {unhealthy.length} down
+                </span>
+              )}
+            </span>
+          ) : undefined
+        }
+      />
+
+      {unhealthy.length > 0 && (
+        <div className="mb-4 flex items-start gap-3 border border-solid border-bad bg-paper px-4 py-3 text-sm md:mb-5">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-bad" />
+          <div className="min-w-0">
+            {unhealthy.map((a, i) => (
+              <span key={a.id}>
+                {i > 0 && ", "}
+                <Link to={`/apps/${encodeURIComponent(a.name)}`} className="font-semibold">
+                  {a.name}
+                </Link>
+              </span>
+            ))}{" "}
+            <span className="text-ink-2">{unhealthy.length === 1 ? "is" : "are"} down. Open it for logs and deploys.</span>
+          </div>
+        </div>
+      )}
 
       {error ? (
         <ErrorNote error={error} what="apps" onRetry={() => refetch()} />
       ) : isLoading ? (
-        <p className="muted">loading apps…</p>
+        <Loading what="apps" />
       ) : !apps || apps.length === 0 ? (
-        <div className="card">
-          <span className="panel-label">getting started</span>
-          <p>No apps yet.</p>
-          <p className="muted">
+        <Section title="Getting started">
+          <p className="m-0 text-sm text-ink">No apps yet.</p>
+          <Muted className="mt-2">
             Run <code>lh create &lt;app&gt; --repo owner/name</code>, then <code>git push</code> to deploy.
-          </p>
-        </div>
+          </Muted>
+        </Section>
       ) : (
-        <>
-          <div className="mt-7 flex flex-wrap items-center justify-between gap-3">
-            <p className="m-0 flex items-center gap-3 text-xs">
-              <span className="badge badge-running">{counts.running} running</span>
-              {counts.stopped > 0 && <span className="badge badge-stopped">{counts.stopped} stopped</span>}
-              {counts.unhealthy > 0 && (
-                <span className="badge badge-failed">{counts.unhealthy} unhealthy</span>
-              )}
-            </p>
-            {apps.length > 3 && (
-              <label className="flex items-center gap-2 text-xs text-ink-3">
-                <Search size={12} />
+        <Section
+          flush
+          title={`${apps.length} app${apps.length === 1 ? "" : "s"}`}
+          action={
+            apps.length > 4 ? (
+              <label className="flex min-w-0 items-center gap-2 text-ink-3">
+                <Search size={14} className="shrink-0" />
                 <input
                   type="text"
-                  placeholder="filter apps…"
+                  placeholder="Filter"
+                  aria-label="Filter apps"
                   value={filter}
                   onChange={(e) => setFilter(e.target.value)}
-                  className="text-xs"
+                  className="!w-32 !border-0 !bg-transparent !px-0 !py-1 text-sm sm:!w-48"
                 />
               </label>
-            )}
-          </div>
-
+            ) : undefined
+          }
+        >
           {visible.length === 0 ? (
-            <p className="muted">no apps match “{filter}”</p>
+            <Muted className="px-4 py-4">No apps match “{filter}”.</Muted>
           ) : (
-            <div className="my-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="m-0 list-none p-0">
               {visible.map((app) => (
-                <AppCard key={app.id} app={app} />
+                <AppRow key={app.id} app={app} />
               ))}
-            </div>
+            </ul>
           )}
-        </>
+        </Section>
       )}
-    </>
+
+      <div className="mt-6 grid grid-cols-1 gap-0 md:mt-8">
+        <BackupsSection />
+        <ServerSection />
+      </div>
+    </Page>
   );
 }

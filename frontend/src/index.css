@@ -2,19 +2,124 @@
 @tailwind components;
 @tailwind utilities;
 
-/* A handful of small additions the existing styles.css doesn't have yet,
-   because nothing server-rendered needed them: a hover-lift for the app
-   cards and the two extra badge tones the dashboard's live state can be in
-   that the HTMX dashboard's `badge-{state}` classes don't cover. Kept tiny
-   and additive — everything else reuses styles.css as-is. */
-.site-card {
-  transition: border-color 150ms ease, background 150ms ease;
+/* The SPA owns its own chrome (header, nav, page layout) — the shell in
+   src/ui.rs is just <div id="root">. styles.css still provides the tokens,
+   base typography, badges and the login page's look; everything here is
+   additive and scoped to the SPA. */
+
+/* A scoped stand-in for Tailwind's preflight border reset (preflight is off
+   so it can't fight styles.css): zero specificity, so any class wins. */
+:where(#root) *,
+:where(#root) *::before,
+:where(#root) *::after {
+  border-width: 0;
+  border-style: solid;
+  border-color: var(--color-rule);
 }
-.site-card:hover {
-  border-color: var(--color-ink);
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  /* Room for the fixed bottom tab bar on phones (plus the home indicator). */
+  padding-bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (min-width: 768px) {
+  body {
+    padding-bottom: 0;
+  }
+}
+
+/* iOS zooms the page when a focused input's font is under 16px. Every input
+   in the SPA gets 16px on touch-sized screens, whatever its utility class. */
+@media (max-width: 767px) {
+  #root input[type="text"],
+  #root input[type="password"],
+  #root select {
+    font-size: 16px !important;
+  }
+}
+
+#root input[type="text"],
+#root input[type="password"] {
+  max-width: none;
+}
+
+#root select {
+  font-family: var(--font-sans);
+  border: 1px solid var(--color-rule);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+/* Links inside rows/cards that are whole tap targets shouldn't flash the
+   global lime link-hover fill — the row has its own hover state. */
+a.row-link,
+a.row-link:hover {
+  background: transparent;
+  color: inherit;
+}
+
+.row-hover {
+  transition: background-color 120ms ease;
+}
+.row-hover:hover,
+.row-hover:active {
   background: var(--color-paper-2);
 }
 
-.badge-stopped {
+.badge-stopped,
+.badge-created {
   color: var(--color-ink-3);
+}
+
+/* A status dot that pulses for in-flight states, so "deploying" reads as
+   motion even at a glance on a phone. */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: none;
+  background: currentColor;
+}
+.dot-pulse {
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+pre.log {
+  max-height: min(70vh, 640px);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 0.75rem 1rem;
+}
+
+@media (min-width: 768px) {
+  pre.log {
+    font-size: 13px;
+  }
 }
