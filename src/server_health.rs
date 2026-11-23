@@ -694,22 +694,43 @@ pub fn evaluate(f: &ServerFacts) -> Vec<Check> {
             b.push("container_ports", "Containers publish only 80 and 443", Unknown, "Couldn't list containers from Docker.");
         }
         Some(ports) => {
-            let mut public: Vec<String> = ports
+            let label = |p: &PublishedPort| format!("{} → {}/{}", p.container, p.host_port, p.proto);
+            let exposed: Vec<&PublishedPort> = ports
                 .iter()
                 .filter(|p| p.host_ip.is_empty() || is_public_addr(&p.host_ip))
                 .filter(|p| !(p.container == "caddy-container" && (p.host_port == 80 || p.host_port == 443)))
-                .map(|p| format!("{} → {}/{}", p.container, p.host_port, p.proto))
                 .collect();
+            // litehouse publishes an app's EXPOSEd UDP ports 1:1 on purpose
+            // (docker::udp_port_bindings): Caddy can't proxy UDP, and media
+            // servers (WebRTC) need direct reachability. Those are expected.
+            let is_app_udp = |p: &PublishedPort| {
+                p.proto == "udp"
+                    && p.container
+                        .strip_suffix("-container")
+                        .is_some_and(|app| f.apps.iter().any(|a| a.name == app))
+            };
+            let mut public: Vec<String> = exposed.iter().filter(|p| !is_app_udp(p)).map(|p| label(p)).collect();
             public.sort();
             public.dedup();
+            let mut app_udp: Vec<String> = exposed.iter().filter(|p| is_app_udp(p)).map(|p| label(p)).collect();
+            app_udp.sort();
+            app_udp.dedup();
             if public.is_empty() {
-                b.push(
-                    "container_ports",
-                    "Containers publish only 80 and 443",
-                    Ok,
-                    "Only Caddy publishes ports; apps are reached through it.",
-                )
-                .detail("Docker's port forwarding skips the firewall, so this is checked separately.");
+                let (summary, detail) = if app_udp.is_empty() {
+                    (
+                        "Only Caddy publishes ports; apps are reached through it.".to_string(),
+                        "Docker's port forwarding skips the firewall, so this is checked separately.".to_string(),
+                    )
+                } else {
+                    (
+                        "Only Caddy publishes TCP ports; apps are reached through it.".to_string(),
+                        format!(
+                            "UDP ports apps EXPOSE are published on purpose, since Caddy can't proxy UDP: {}. Drop the EXPOSE from the app's Dockerfile to close one.",
+                            app_udp.join(", ")
+                        ),
+                    )
+                };
+                b.push("container_ports", "Containers publish only 80 and 443", Ok, summary).detail(detail);
             } else {
                 b.push(
                     "container_ports",
@@ -1448,6 +1469,31 @@ tcp   LISTEN 0      511          0.0.0.0:6379         0.0.0.0:*    users:(("redi
         // UDP 68 on the private interface also counts with the firewall off.
         assert!(open.summary.contains("68/udp"));
         assert_eq!(status(&checks, "container_ports"), CheckStatus::Warn);
+    }
+
+    #[test]
+    fn app_udp_ports_are_expected_but_other_udp_warns() {
+        let mut f = healthy();
+        let app = f.apps[0].name.clone();
+        f.published_ports.as_mut().unwrap().push(PublishedPort {
+            container: format!("{app}-container"),
+            host_ip: "0.0.0.0".into(),
+            host_port: 7882,
+            proto: "udp".into(),
+        });
+        let checks = evaluate(&f);
+        let c = checks.iter().find(|c| c.id == "container_ports").unwrap();
+        assert_eq!(c.status, CheckStatus::Ok);
+        assert!(c.detail.as_deref().unwrap().contains("7882/udp"), "{:?}", c.detail);
+
+        // A UDP port on a container that isn't a litehouse app still warns.
+        f.published_ports.as_mut().unwrap().push(PublishedPort {
+            container: "stray".into(),
+            host_ip: "0.0.0.0".into(),
+            host_port: 5353,
+            proto: "udp".into(),
+        });
+        assert_eq!(status(&evaluate(&f), "container_ports"), CheckStatus::Warn);
     }
 
     #[test]
