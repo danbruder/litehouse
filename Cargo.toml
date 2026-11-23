@@ -23,8 +23,8 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 toml = "1.2"
-bollard = {version = "0.15"}
-axum = "0.6"
+bollard = {version = "0.21"}
+axum = "0.8"
 futures-util = "0.3"
 bytes = "1"
 indicatif = "0.18"
@@ -48,12 +48,12 @@ aws-credential-types = "1"
 askama = "0.16"
 # Both already in the tree (axum, bollard); caddy.rs uses them to reach
 # Caddy's admin API over its unix socket.
-hyper = "0.14"
-hyperlocal = "0.8"
+hyper = "1.12"
+hyperlocal = "0.9"
 
 [dev-dependencies]
 # In-process router tests (tower::ServiceExt::oneshot; hyper is a normal dep).
-tower = "0.4"
+tower = "0.5"
 
 [[bin]]
 name = "lh"
