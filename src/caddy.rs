@@ -24,6 +24,30 @@ pub enum DockerError {
     LogError(String),
 }
 
+// Caddy's admin API is unauthenticated: whoever can reach it can rewrite
+// every route on the edge. It listens on a unix socket in the `caddy_admin`
+// volume, which only caddy-container and litehouse-server mount. App
+// containers share `litehouse-network` with Caddy (it has to reach them), so
+// any TCP listener there, even one that isn't published, is reachable by apps.
+pub const ADMIN_SOCKET_VOLUME: &str = "caddy_admin";
+pub const ADMIN_SOCKET_DIR: &str = "/run/caddy-admin";
+pub const ADMIN_SOCKET_PATH: &str = "/run/caddy-admin/admin.sock";
+/// `CADDY_ADMIN` for the socket (Caddy's `unix/` network prefix + the path).
+pub const ADMIN_LISTEN_SOCKET: &str = "unix//run/caddy-admin/admin.sock";
+/// Legacy listener, used only when litehouse-server has no `caddy_admin`
+/// mount (an old start script, or `cargo run` on a dev host).
+const ADMIN_LISTEN_TCP: &str = "0.0.0.0:2019";
+
+/// The admin listen address litehouse-server can actually talk to: the socket
+/// when its directory is mounted into this process's filesystem, else TCP.
+fn admin_listen() -> &'static str {
+    if std::path::Path::new(ADMIN_SOCKET_DIR).is_dir() {
+        ADMIN_LISTEN_SOCKET
+    } else {
+        ADMIN_LISTEN_TCP
+    }
+}
+
 // Caddy JSON Configuration Structures
 #[derive(Serialize, Deserialize)]
 struct CaddyConfig {
@@ -141,6 +165,22 @@ pub async fn start(docker: &Docker, config: &ServerConfig) -> Result<()> {
                 restart_container(docker, &id).await?;
             } else if !verify_container_ports(docker, &id, config).await? {
                 info!("Container is running but on wrong ports, removing and recreating");
+                remove_container(docker, &id).await?;
+                create_and_start_container(
+                    docker,
+                    container_name,
+                    image_name,
+                    caddy_data_volume,
+                    caddy_config_volume,
+                    config,
+                )
+                .await?;
+            } else if !admin_listen_is_current(docker, &id).await {
+                // Older installs had Caddy's admin API on 0.0.0.0:2019, which
+                // every app on litehouse-network could reach. Move it to the
+                // socket. Certificates and routes survive (volumes, and the
+                // re-sync right after this).
+                info!("Caddy's admin API isn't on {}, recreating", admin_listen());
                 remove_container(docker, &id).await?;
                 create_and_start_container(
                     docker,
@@ -273,7 +313,7 @@ async fn ensure_volumes_exist(
         .map(|v| v.name)
         .collect();
 
-    for volume_name in [caddy_data_volume, caddy_config_volume] {
+    for volume_name in [caddy_data_volume, caddy_config_volume, ADMIN_SOCKET_VOLUME] {
         if !existing_volumes.contains(volume_name) {
             info!("Creating volume: {}", volume_name);
             docker
@@ -423,6 +463,31 @@ async fn running_stale_image(docker: &Docker, container_id: &str, image_name: &s
     image_is_stale(running.as_deref(), local.as_deref())
 }
 
+/// Whether the running Caddy's `CADDY_ADMIN` is the listener this server
+/// expects (see `admin_listen`). Inspect errors count as current: never
+/// recreate the edge on a guess.
+async fn admin_listen_is_current(docker: &Docker, container_id: &str) -> bool {
+    match docker.inspect_container(container_id, None).await {
+        Ok(inspect) => {
+            let env = inspect.config.and_then(|c| c.env).unwrap_or_default();
+            admin_env_matches(&env, admin_listen())
+        }
+        Err(e) => {
+            tracing::warn!("Failed to inspect Caddy container env: {}", e);
+            true
+        }
+    }
+}
+
+fn admin_env_matches(env: &[String], expected: &str) -> bool {
+    // Caddy's default with no CADDY_ADMIN is localhost:2019.
+    let actual = env
+        .iter()
+        .find_map(|e| e.strip_prefix("CADDY_ADMIN="))
+        .unwrap_or("localhost:2019");
+    actual == expected
+}
+
 fn image_is_stale(running: Option<&str>, local: Option<&str>) -> bool {
     matches!((running, local), (Some(r), Some(l)) if !r.is_empty() && !l.is_empty() && r != l)
 }
@@ -538,36 +603,43 @@ async fn create_and_start_container(
         }]),
     );
 
-    // Caddy's admin API (2019) is deliberately NOT published to a host port.
-    // litehouse-server reaches it over the internal `litehouse-network` bridge
-    // as `caddy-container:2019` (see the CADDY_ADMIN env below, which makes
-    // Caddy listen on 0.0.0.0 *inside* the container so sibling containers can
-    // connect). Publishing 2019 to the host previously exposed the fully
-    // unauthenticated admin API to the internet — anyone could rewrite the
-    // proxy config or take the edge down. Keep it bridge-only.
+    // Caddy's admin API is never published to a host port, and (when
+    // litehouse-server has the `caddy_admin` volume) not on any network at
+    // all: it listens on a unix socket in that volume. See ADMIN_SOCKET_*.
+    let admin = admin_listen();
+    let cmd = if admin == ADMIN_LISTEN_SOCKET {
+        // A socket file left in the volume by a previous run (crash, host
+        // reboot) would make the listen fail; clear it first.
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("rm -f {ADMIN_SOCKET_PATH} && exec caddy run --resume"),
+        ]
+    } else {
+        vec!["caddy".to_string(), "run".to_string(), "--resume".to_string()]
+    };
+    let mut binds = vec![
+        format!("{}:/data", caddy_data_volume),
+        format!("{}:/config", caddy_config_volume),
+    ];
+    if admin == ADMIN_LISTEN_SOCKET {
+        binds.push(format!("{ADMIN_SOCKET_VOLUME}:{ADMIN_SOCKET_DIR}"));
+    }
 
     // Create container config with proper port bindings
     let container_config = Config {
         image: Some(image_name.to_string()),
         hostname: Some(container_name.to_string()),
         // Start Caddy in API-only mode for dynamic configuration
-        cmd: Some(vec![
-            "caddy".to_string(),
-            "run".to_string(),
-            "--resume".to_string(),
-        ]),
-        // Configure Caddy admin API to listen on 0.0.0.0 instead of localhost
-        env: Some(vec!["CADDY_ADMIN=0.0.0.0:2019".to_string()]),
+        cmd: Some(cmd),
+        env: Some(vec![format!("CADDY_ADMIN={admin}")]),
         host_config: Some(HostConfig {
             port_bindings: Some(port_bindings),
             restart_policy: Some(RestartPolicy {
                 name: Some(RestartPolicyNameEnum::UNLESS_STOPPED),
                 maximum_retry_count: None,
             }),
-            binds: Some(vec![
-                format!("{}:/data", caddy_data_volume),
-                format!("{}:/config", caddy_config_volume),
-            ]),
+            binds: Some(binds),
             // Connect to the litehouse network for inter-container communication
             network_mode: Some("litehouse-network".to_string()),
             ..Default::default()
@@ -843,35 +915,45 @@ async fn build_caddy_config(
 
 /// Update Caddy configuration via API
 async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()> {
-    // Use native HTTP client instead of docker exec to avoid dependency on curl in container
-    let client = reqwest::Client::new();
-    // The litehouse server runs on the host, so use localhost to reach Caddy's admin API.
-    // Use CADDY_API_URL env var to override if needed.
-    let caddy_api_url = std::env::var("CADDY_API_URL")
-        .unwrap_or_else(|_| "http://localhost:2019/load".to_string());
+    let body = serde_json::to_vec(&config)?;
+    let (status, error_body) = if admin_listen() == ADMIN_LISTEN_SOCKET {
+        info!("Sending configuration to Caddy API at {}", ADMIN_SOCKET_PATH);
+        // A just-(re)created Caddy may not have bound its socket yet.
+        let mut attempt = 0;
+        loop {
+            match post_admin_socket(ADMIN_SOCKET_PATH, "/load", body.clone()).await {
+                Ok(r) => break r,
+                Err(e) if attempt < 10 => {
+                    attempt += 1;
+                    tracing::debug!("Caddy admin socket not ready ({e:#}), retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    } else {
+        // No socket mount: the legacy TCP listener. CADDY_API_URL overrides
+        // it (e.g. a dev server running on the host).
+        let caddy_api_url = std::env::var("CADDY_API_URL")
+            .unwrap_or_else(|_| "http://localhost:2019/load".to_string());
+        info!("Sending configuration to Caddy API at {}", caddy_api_url);
+        let response = reqwest::Client::new()
+            .post(caddy_api_url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        (status, response.text().await.unwrap_or_default())
+    };
 
-    info!("Sending configuration to Caddy API at {}", caddy_api_url);
-
-    let response = client
-        .post(caddy_api_url)
-        .header("Content-Type", "application/json")
-        .json(&config)
-        .send()
-        .await?;
-
-    let status = response.status();
-
-    if status.is_success() {
+    if (200..300).contains(&status) {
         info!(
             "Caddy configuration updated successfully (status: {})",
             status
         );
         Ok(())
     } else {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unable to read response body".to_string());
         error!("Caddy API returned error status {}: {}", status, error_body);
         Err(anyhow::anyhow!(
             "Caddy configuration update failed with status {}: {}",
@@ -879,6 +961,25 @@ async fn update_caddy_config(_docker: &Docker, config: CaddyConfig) -> Result<()
             error_body
         ))
     }
+}
+
+/// POST JSON to Caddy's admin API over its unix socket. Returns the status
+/// and the response body.
+async fn post_admin_socket(socket: &str, path: &str, body: Vec<u8>) -> Result<(u16, String)> {
+    use hyperlocal::UnixClientExt;
+    let request = hyper::Request::post(hyperlocal::Uri::new(socket, path))
+        // Over a unix socket Caddy only accepts an empty Host or a loopback
+        // IP (its DNS-rebinding guard), not hyperlocal's hex-encoded path.
+        .header(hyper::header::HOST, "127.0.0.1")
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(hyper::Body::from(body))?;
+    let response = hyper::Client::unix()
+        .request(request)
+        .await
+        .map_err(|e| anyhow::anyhow!("Caddy admin socket {socket}: {e}"))?;
+    let status = response.status().as_u16();
+    let bytes = hyper::body::to_bytes(response.into_body()).await?;
+    Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 /// Synchronize Caddy configuration with database apps
@@ -915,6 +1016,47 @@ pub async fn sync_configuration(docker: &Docker, db_pool: &Pool<Sqlite>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_env_mismatch_triggers_recreate() {
+        let tcp = vec!["PATH=/usr/bin".to_string(), "CADDY_ADMIN=0.0.0.0:2019".to_string()];
+        assert!(!admin_env_matches(&tcp, ADMIN_LISTEN_SOCKET));
+        assert!(admin_env_matches(&tcp, ADMIN_LISTEN_TCP));
+        let sock = vec![format!("CADDY_ADMIN={ADMIN_LISTEN_SOCKET}")];
+        assert!(admin_env_matches(&sock, ADMIN_LISTEN_SOCKET));
+        // No CADDY_ADMIN at all is Caddy's localhost default: not the socket.
+        assert!(!admin_env_matches(&[], ADMIN_LISTEN_SOCKET));
+        assert_eq!(ADMIN_LISTEN_SOCKET, format!("unix/{ADMIN_SOCKET_PATH}"));
+    }
+
+    #[tokio::test]
+    async fn posts_to_admin_socket_with_loopback_host() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("admin.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut req = Vec::new();
+            loop {
+                let n = conn.read(&mut buf).await.unwrap();
+                req.extend_from_slice(&buf[..n]);
+                if n == 0 || req.ends_with(b"{}") {
+                    break;
+                }
+            }
+            conn.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n").await.unwrap();
+            String::from_utf8(req).unwrap()
+        });
+        let (status, _) = post_admin_socket(path.to_str().unwrap(), "/load", b"{}".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(status, 200);
+        let req = server.await.unwrap().to_lowercase();
+        assert!(req.starts_with("post /load http/1.1"), "{req}");
+        assert!(req.contains("host: 127.0.0.1\r\n"), "{req}");
+    }
 
     #[test]
     fn caddy_image_is_stale_only_when_both_ids_known_and_differ() {

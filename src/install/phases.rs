@@ -241,6 +241,11 @@ pub fn phase8_log_rotation() -> Result<()> {
     Ok(())
 }
 
+/// curl prefix for Caddy's admin API from the host: its unix socket, found
+/// through the `caddy_admin` volume's mountpoint. Over a socket Caddy only
+/// accepts a loopback-IP Host, hence `http://127.0.0.1`.
+const CADDY_ADMIN_CURL: &str = "--unix-socket \"$(docker volume inspect -f '{{ .Mountpoint }}' caddy_admin)/admin.sock\" http://127.0.0.1";
+
 /// Phase 9a: Start Caddy Container
 #[instrument]
 pub fn phase9a_start_caddy_container(
@@ -281,8 +286,8 @@ pub fn phase9a_start_caddy_container(
 
     while retries < max_retries {
         // Check if admin API is responding
-        let check_cmd = "curl -s -o /dev/null -w '%{http_code}' http://localhost:2019/config/ || echo '000'";
-        match run_command(check_cmd) {
+        let check_cmd = format!("curl -s -o /dev/null -w '%{{http_code}}' {CADDY_ADMIN_CURL}/config/ || echo '000'");
+        match run_command(&check_cmd) {
             Ok(output) => {
                 let status = output.trim();
                 if status == "200" || status == "404" {
@@ -316,7 +321,7 @@ pub fn phase9a_start_caddy_container(
 
     // Send config to Caddy API
     let load_cmd = format!(
-        "curl -s -X POST -H 'Content-Type: application/json' -d @{} http://localhost:2019/load",
+        "curl -s -X POST -H 'Content-Type: application/json' -d @{} {CADDY_ADMIN_CURL}/load",
         config_file
     );
     

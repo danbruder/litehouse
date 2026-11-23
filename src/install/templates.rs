@@ -408,7 +408,8 @@ echo "Docker configuration completed successfully"
 # to 0.0.0.0 is reachable from the internet regardless of the ufw rules set in
 # the security-hardening phase (which only allow 22/80/443). In the litehouse
 # model the ONLY port that must be public is Caddy's 80/443; the Caddy admin
-# API (2019) and all app containers are reached over the internal bridge only.
+# API is a unix socket (older installs: TCP 2019) and all app containers are
+# reached over the internal bridge only.
 #
 # Defense-in-depth: explicitly drop WAN access to the Caddy admin API at the
 # DOCKER-USER hook, so even a stray/legacy port publish can never expose it.
@@ -590,13 +591,13 @@ docker run -d \
   -v /opt/litehouse/backups:/opt/litehouse/backups \
   -v /opt/litehouse/health:/opt/litehouse/health:ro \
   -v /var/run/docker.sock:/var/run/docker.sock \
+  -v caddy_admin:/run/caddy-admin \
   --group-add "$DOCKER_GID" \
   -e DATABASE_URL=/opt/litehouse/config/litehouse.db \
   -e LITEHOUSE_DIR=/opt/litehouse \
   -e LITEHOUSE_BACKUPS_DIR=/opt/litehouse/backups \
   -e LITEHOUSE_HOST_REPORT=/opt/litehouse/health/host.json \
   -e DOCKER_HOST=unix:///var/run/docker.sock \
-  -e CADDY_API_URL=http://caddy-container:2019/load \
   -e RUST_LOG=info \
   "$IMAGE"
 
@@ -620,6 +621,10 @@ docker rm caddy-container 2>/dev/null || true
 # Create volumes if they do not exist
 docker volume create caddy_data 2>/dev/null || true
 docker volume create caddy_config 2>/dev/null || true
+# Caddy's admin API listens on a unix socket in this volume, which only
+# caddy-container and litehouse-server mount: apps share litehouse-network
+# with Caddy, so a TCP admin listener there would be reachable by every app.
+docker volume create caddy_admin 2>/dev/null || true
 
 # Create the litehouse network if it doesn't exist
 docker network create litehouse-network 2>/dev/null || true
@@ -633,9 +638,10 @@ docker run -d \
   -p 443:443 \
   -v caddy_data:/data \
   -v caddy_config:/config \
-  -e CADDY_ADMIN=0.0.0.0:2019 \
+  -v caddy_admin:/run/caddy-admin \
+  -e CADDY_ADMIN=unix//run/caddy-admin/admin.sock \
   caddy:latest \
-  caddy run --resume
+  sh -c 'rm -f /run/caddy-admin/admin.sock && exec caddy run --resume'
 
 echo "Caddy container started"
 "#
