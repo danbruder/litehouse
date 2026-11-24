@@ -205,9 +205,10 @@ can't resolve `HEAD`), and `list_deploys` waits at most 120s per call, so
 call it again while the deploy is still in progress.
 
 `create_app` works remotely with the **server's** GitHub token instead of
-yours: the admin sets it once with `lh config github set --token <PAT>`
-(classic PAT with `repo` + `workflow`, or a fine-grained token with
-Contents, Secrets and Workflows read/write on the repos). Pass `app_name`
+yours: `lh config github set --token <PAT>` (classic PAT with `repo` +
+`workflow`, or a fine-grained token with Contents, Secrets and Workflows
+read/write on the repos). Without one, the server reuses the GHCR token
+(`lh config ghcr set`) if it has those scopes too. Pass `app_name`
 and `repo` (`owner/name` or a github.com URL). The server checks the repo
 exists and has a root `Dockerfile` (a missing one is a `warnings` entry),
 sets `LITEHOUSE_DEPLOY_TOKEN`, and commits the deploy workflow to the

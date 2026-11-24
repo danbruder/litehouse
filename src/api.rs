@@ -1272,20 +1272,53 @@ async fn launch_app(
     let github_token = if payload.manual {
         None
     } else {
-        match db_system_config::get_github_token(&pool).await {
-            Ok(Some(t)) => Some(t),
-            Ok(None) => {
-                return (
-                    StatusCode::PRECONDITION_FAILED,
-                    "No GitHub token is configured on the server, so it can't set up the repo. \
-                     Add one under Settings > GitHub token (needs `repo` and `workflow` scopes) \
-                     or `lh config github set --token ...`, or create the app with manual setup."
-                        .to_string(),
-                )
-                    .into_response();
-            }
+        // A dedicated GitHub token wins; otherwise reuse the GHCR token,
+        // which is often a classic PAT that already has `repo` + `workflow`.
+        let dedicated = match db_system_config::get_github_token(&pool).await {
+            Ok(t) => t,
             Err(e) => return internal(e).into_response(),
+        };
+        let token = match dedicated {
+            Some(t) => Some(t),
+            None => match db_system_config::get_ghcr_token(&pool).await {
+                Ok(t) => t,
+                Err(e) => return internal(e).into_response(),
+            },
+        };
+        let Some(token) = token else {
+            return (
+                StatusCode::PRECONDITION_FAILED,
+                "No GitHub token is configured on the server, so it can't set up the repo. \
+                 Set one with `lh config github set --token ...` (needs `repo` and `workflow` \
+                 scopes), or give the GHCR token those scopes too."
+                    .to_string(),
+            )
+                .into_response();
+        };
+        // Check scopes up front so a read:packages-only GHCR token fails
+        // with a clear message instead of a 403 halfway through.
+        match crate::github::actions::token_identity(&token).await {
+            Ok(identity) => {
+                let missing = missing_github_scopes(&identity.scopes);
+                if !missing.is_empty() {
+                    return (
+                        StatusCode::PRECONDITION_FAILED,
+                        format!(
+                            "The server's GitHub token (for {}) is missing the {} scope: it \
+                             needs `repo` and `workflow` to set the deploy secret and commit \
+                             the workflow. Regenerate it with those scopes (plus \
+                             `read:packages` if it's also the GHCR token) and save it with \
+                             `lh config github set --token ...` or `lh config ghcr set --token ...`.",
+                            identity.login,
+                            missing.join(" and ")
+                        ),
+                    )
+                        .into_response();
+                }
+            }
+            Err(e) => return (StatusCode::PRECONDITION_FAILED, format!("{e:#}")).into_response(),
         }
+        Some(token)
     };
 
     let mut warnings = Vec::new();
