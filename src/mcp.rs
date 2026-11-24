@@ -77,10 +77,7 @@ its root (see agent_guide). Read `warnings` in the result.";
 const REMOTE_MAX_WAIT_SECS: u64 = 120;
 
 fn tool_allowed(name: &str, mode: Mode) -> bool {
-    if mode.read_only && !READ_ONLY_TOOLS.contains(&name) {
-        return false;
-    }
-    true
+    !mode.read_only || READ_ONLY_TOOLS.contains(&name)
 }
 
 #[derive(Debug, Deserialize)]
