@@ -52,8 +52,13 @@ function useIsPhone() {
 function Routed() {
   const { pathname } = useLocation();
   const phone = useIsPhone();
-  // Each page starts at the top, as a full page load would.
-  useEffect(() => window.scrollTo(0, 0), [pathname]);
+  // Each page starts at the top, as a full page load would. The braces
+  // matter: newer browsers return a Promise from scrollTo, and an effect
+  // that returns anything but a function makes React throw on the next
+  // route change (it calls the "cleanup"), unmounting the whole app.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
 
   return (
     <>
