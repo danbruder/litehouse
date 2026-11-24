@@ -83,8 +83,30 @@ pub fn render_deploy_workflow(
         .replace("__HOOK_URL__", hook_url)
 }
 
+/// Make the workflow also run on pushes to `branch` (the repo's default
+/// branch) when that isn't `main` or `master`. The template only listens on
+/// those two, so a repo whose default is e.g. `trunk` would never deploy.
+pub fn with_default_branch(workflow: &str, branch: &str) -> String {
+    if branch == "main" || branch == "master" || branch.is_empty() {
+        return workflow.to_string();
+    }
+    workflow.replacen(
+        "branches: [main, master]",
+        &format!("branches: [main, master, \"{}\"]", branch.replace('"', "")),
+        1,
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_branch_is_added_to_trigger() {
+        let yml = render_deploy_workflow("o", "r", "a", "https://h/hooks/deploy", DEFAULT_PLATFORM);
+        assert_eq!(with_default_branch(&yml, "main"), yml);
+        let trunk = with_default_branch(&yml, "trunk");
+        assert!(trunk.contains(r#"branches: [main, master, "trunk"]"#), "{trunk}");
+    }
+
     use super::*;
 
     #[test]

@@ -144,7 +144,7 @@ pub async fn put_file(
     path: &str,
     content: &str,
     message: &str,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let http = client(token)?;
 
     let contents_url = format!("{}/repos/{}/{}/contents/{}", API, owner, repo, path);
@@ -205,7 +205,125 @@ pub async fn put_file(
         ));
     }
 
-    Ok(())
+    // The new commit's sha: the deploy it triggers is keyed by it.
+    let written: serde_json::Value = resp.json().await.unwrap_or_default();
+    Ok(written["commit"]["sha"].as_str().map(str::to_string))
+}
+
+/// What the server needs to know about a repo before wiring it up.
+#[derive(Debug, Clone)]
+pub struct RepoCheck {
+    /// Canonical "owner/name" as GitHub spells it.
+    pub full_name: String,
+    pub default_branch: String,
+    pub private: bool,
+    /// The token can manage Actions secrets (needs admin on the repo).
+    /// `None` when GitHub didn't report permissions.
+    pub admin: Option<bool>,
+    /// A `Dockerfile` exists at the repo root on the default branch.
+    pub has_dockerfile: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct RepoResponse {
+    full_name: String,
+    default_branch: String,
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    permissions: Option<RepoPermissions>,
+}
+
+#[derive(serde::Deserialize)]
+struct RepoPermissions {
+    #[serde(default)]
+    admin: bool,
+}
+
+/// GET /repos/{owner}/{repo} plus a Dockerfile probe. Fails with a readable
+/// message when the token can't see the repo, so nothing gets created for a
+/// typo'd or inaccessible repo.
+pub async fn check_repo(token: &str, owner: &str, repo: &str) -> Result<RepoCheck> {
+    let http = client(token)?;
+    let resp = http
+        .get(format!("{}/repos/{}/{}", API, owner, repo))
+        .send()
+        .await
+        .with_context(|| format!("looking up {}/{} on GitHub", owner, repo))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(anyhow!(
+            "GitHub repo {}/{} wasn't found, or the server's GitHub token can't see it",
+            owner,
+            repo
+        ));
+    }
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(anyhow!("the server's GitHub token was rejected (401): replace it in Settings"));
+    }
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("looking up {}/{} failed ({}): {}", owner, repo, status, body));
+    }
+    let info: RepoResponse = resp
+        .json()
+        .await
+        .with_context(|| format!("parsing repo response for {}/{}", owner, repo))?;
+
+    let dockerfile = http
+        .get(format!(
+            "{}/repos/{}/{}/contents/Dockerfile?ref={}",
+            API, owner, repo, info.default_branch
+        ))
+        .send()
+        .await
+        .with_context(|| format!("checking for a Dockerfile in {}/{}", owner, repo))?;
+
+    Ok(RepoCheck {
+        full_name: info.full_name,
+        default_branch: info.default_branch,
+        private: info.private,
+        admin: info.permissions.map(|p| p.admin),
+        has_dockerfile: dockerfile.status().is_success(),
+    })
+}
+
+/// Who a token belongs to, and its classic-token scopes (`None` for
+/// fine-grained tokens, which don't report scopes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TokenIdentity {
+    pub login: String,
+    pub scopes: Option<Vec<String>>,
+}
+
+/// GET /user: proves the token works and reads `X-OAuth-Scopes`.
+pub async fn token_identity(token: &str) -> Result<TokenIdentity> {
+    #[derive(serde::Deserialize)]
+    struct User {
+        login: String,
+    }
+    let resp = client(token)?
+        .get(format!("{}/user", API))
+        .send()
+        .await
+        .context("calling GitHub /user")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("GitHub rejected the token ({}): {}", status, body));
+    }
+    let scopes = resp
+        .headers()
+        .get("x-oauth-scopes")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        });
+    let user: User = resp.json().await.context("parsing GitHub /user")?;
+    Ok(TokenIdentity { login: user.login, scopes })
 }
 
 #[cfg(test)]

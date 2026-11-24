@@ -422,6 +422,27 @@ enum ConfigCmd {
         #[command(subcommand)]
         command: GhcrCmd,
     },
+
+    /// Configure the GitHub token the server uses to set up new apps' repos
+    /// from the admin UI and remote MCP (`lh create` uses your own token)
+    Github {
+        #[command(subcommand)]
+        command: GithubTokenCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum GithubTokenCmd {
+    /// Set the token (classic PAT with `repo` + `workflow`, or a fine-grained
+    /// token with Contents, Secrets and Workflows read/write)
+    Set {
+        #[arg(long)]
+        token: String,
+    },
+    /// Show the configured token (redacted), its account and scopes
+    Get,
+    /// Delete the configured token
+    Delete,
 }
 
 #[derive(Subcommand)]
@@ -715,6 +736,11 @@ pub async fn run() -> Result<()> {
                             GhcrCmd::Set { token } => api_client.set_ghcr_token(&token).await,
                             GhcrCmd::Get => api_client.get_ghcr_token().await,
                             GhcrCmd::Delete => api_client.delete_ghcr_token().await,
+                        },
+                        Some(ConfigCmd::Github { command }) => match command {
+                            GithubTokenCmd::Set { token } => api_client.set_github_token(&token).await,
+                            GithubTokenCmd::Get => api_client.get_github_token().await,
+                            GithubTokenCmd::Delete => api_client.delete_github_token().await,
                         },
                         None => {
                             // Default behavior: show client config

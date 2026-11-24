@@ -421,7 +421,7 @@ mod tests {
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter()
             .map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"deploy"));
-        assert!(!names.contains(&"create_app"), "create_app is local-only");
+        assert!(names.contains(&"create_app"), "remote create_app uses the server's GitHub token");
 
         // backup_status goes MCP -> ApiClient -> loopback /api with the
         // internal token -> DB.

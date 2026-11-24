@@ -8,8 +8,8 @@
 //!
 //! The same request handling also backs the remote Streamable HTTP endpoint
 //! (`POST /mcp` on the admin host, see `crate::mcp_http`), which passes a
-//! [`Mode`] so it can hide tools that only work locally (`create_app`) and
-//! honour a read-only OAuth grant.
+//! [`Mode`] so tools can behave as fits the caller (`create_app` uses the
+//! server's own GitHub token remotely) and honour a read-only OAuth grant.
 
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
@@ -63,9 +63,13 @@ const DESTRUCTIVE_TOOLS: &[&str] = &[
     "create_app",
 ];
 
-/// Tools that need the caller's own machine (a GitHub token and git
-/// checkout), so the remote server leaves them out.
-const LOCAL_ONLY_TOOLS: &[&str] = &["create_app"];
+/// `create_app` over remote MCP: the server does the GitHub side itself.
+const REMOTE_CREATE_APP_DESCRIPTION: &str = "Create a new app from an existing GitHub repo. \
+The server uses its own GitHub token (set in the admin UI's Settings) to check the repo, \
+set the LITEHOUSE_DEPLOY_TOKEN Actions secret and commit .github/workflows/litehouse-deploy.yml \
+to the default branch. That commit starts the first build and deploy: wait on it with \
+list_deploys {wait: true, sha: <commit_sha from the result>}. The repo needs a Dockerfile at \
+its root (see agent_guide). Read `warnings` in the result.";
 
 /// Longest `list_deploys` wait over remote HTTP. A tool call held open for
 /// ten minutes through a hosted client is likely to be cut off; the agent
@@ -73,13 +77,7 @@ const LOCAL_ONLY_TOOLS: &[&str] = &["create_app"];
 const REMOTE_MAX_WAIT_SECS: u64 = 120;
 
 fn tool_allowed(name: &str, mode: Mode) -> bool {
-    if mode.remote && LOCAL_ONLY_TOOLS.contains(&name) {
-        return false;
-    }
-    if mode.read_only && !READ_ONLY_TOOLS.contains(&name) {
-        return false;
-    }
-    true
+    !mode.read_only || READ_ONLY_TOOLS.contains(&name)
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,6 +138,12 @@ fn tools_for(mode: Mode) -> Value {
         .filter(|t| tool_allowed(t["name"].as_str().unwrap_or(""), mode))
         .map(|mut t| {
             let name = t["name"].as_str().unwrap_or("").to_string();
+            if mode.remote && name == "create_app" {
+                t["description"] = json!(REMOTE_CREATE_APP_DESCRIPTION);
+                t["inputSchema"]["properties"]["repo"]["description"] =
+                    json!("The GitHub repo: owner/name or https://github.com/owner/name");
+                t["inputSchema"]["required"] = json!(["app_name", "repo"]);
+            }
             let read_only = READ_ONLY_TOOLS.contains(&name.as_str());
             t["annotations"] = json!({
                 "readOnlyHint": read_only,
@@ -278,11 +282,8 @@ async fn handle_request_with(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             if !tool_allowed(&name, mode) {
-                let why = if mode.remote && LOCAL_ONLY_TOOLS.contains(&name.as_str()) {
-                    format!("'{}' isn't available over remote MCP: run `lh create` from a machine with the repo checked out", name)
-                } else {
-                    format!("'{}' isn't allowed: this connection was granted read-only access", name)
-                };
+                let why =
+                    format!("'{}' isn't allowed: this connection was granted read-only access", name);
                 return Some(success(id, tool_result(why, true)));
             }
             let result = match call_tool(&name, &args, api, config, mode).await {
@@ -456,6 +457,14 @@ async fn call_tool(
             let report = api.run_backup().await?;
             Ok(serde_json::to_string_pretty(&report)?)
         }
+        "create_app" if mode.remote => {
+            let app = required_str(args, "app_name")?;
+            let repo = required_str(args, "repo")?;
+            let rotate = optional_bool(args, "rotate_token").unwrap_or(false);
+            let mut outcome = api.launch_app(&app, &repo, rotate).await?;
+            remote_create_summary(&mut outcome);
+            Ok(serde_json::to_string_pretty(&outcome)?)
+        }
         "create_app" => {
             let app = required_str(args, "app_name")?;
             let repo = optional_str(args, "repo");
@@ -469,6 +478,36 @@ async fn call_tool(
         }
         other => Err(anyhow!("unknown tool '{}'", other)),
     }
+}
+
+/// Shape `POST /api/apps/launch`'s result for an agent: never hand it the
+/// app's deploy token (it would land in a hosted chat transcript), and say
+/// what to do next.
+fn remote_create_summary(outcome: &mut Value) {
+    let Some(obj) = outcome.as_object_mut() else { return };
+    let had_token = obj.remove("deploy_token").is_some();
+    let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let next = if obj.get("workflow_committed").and_then(|v| v.as_bool()) == Some(true) {
+        match obj.get("commit_sha").and_then(|v| v.as_str()) {
+            Some(sha) => format!(
+                "GitHub Actions is building the first deploy. Wait with list_deploys \
+                 {{app_name: \"{name}\", wait: true, sha: \"{sha}\"}}."
+            ),
+            None => format!(
+                "GitHub Actions is building the first deploy. Wait with list_deploys \
+                 {{app_name: \"{name}\", wait: true}}."
+            ),
+        }
+    } else {
+        // The workflow text is fine to keep; the token isn't.
+        obj.remove("workflow");
+        let token_note = if had_token { " The deploy token was withheld from this chat." } else { "" };
+        format!(
+            "The app exists but its repo isn't wired up.{token_note} Fix the GitHub token \
+             (admin UI Settings), then call create_app again with rotate_token: true."
+        )
+    };
+    obj.insert("next".to_string(), json!(next));
 }
 
 /// The stdio serve loop, generic over reader/writer so tests can drive it
@@ -671,4 +710,39 @@ mod tests {
             .unwrap()
             .contains("app_name"));
     }
+
+    #[test]
+    fn remote_create_app_requires_repo_and_is_hidden_read_only() {
+        let remote = Mode { remote: true, read_only: false };
+        let tools = tools_for(remote);
+        let create = tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "create_app")
+            .expect("create_app over remote MCP");
+        assert_eq!(create["inputSchema"]["required"], json!(["app_name", "repo"]));
+        assert!(create["description"].as_str().unwrap().contains("server uses its own GitHub token"));
+
+        let ro = tools_for(Mode { remote: true, read_only: true });
+        assert!(!ro.as_array().unwrap().iter().any(|t| t["name"] == "create_app"));
+    }
+
+    #[test]
+    fn remote_create_summary_never_returns_the_deploy_token() {
+        let mut ok = json!({ "name": "blog", "workflow_committed": true, "commit_sha": "abc123" });
+        remote_create_summary(&mut ok);
+        assert!(ok["next"].as_str().unwrap().contains("sha: \"abc123\""));
+
+        let mut failed = json!({
+            "name": "blog", "workflow_committed": false, "github_error": "403",
+            "deploy_token": "secret", "workflow": "name: litehouse deploy"
+        });
+        remote_create_summary(&mut failed);
+        assert!(failed.get("deploy_token").is_none());
+        assert!(failed.get("workflow").is_none());
+        assert!(failed["next"].as_str().unwrap().contains("rotate_token"));
+        assert!(!failed.to_string().contains("secret"));
+    }
+
 }
