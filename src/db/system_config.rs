@@ -257,6 +257,50 @@ pub async fn get_last_nightly_restart_date(pool: &Pool<Sqlite>) -> Result<Option
     Ok(record.and_then(|r| r.last_nightly_restart_date))
 }
 
+/// Save (replace) the GitHub token the server uses to set up a new app's
+/// repo from the admin UI / remote MCP (`config_type = 'github_token'`).
+/// Runtime-checked query (no `.sqlx` offline entry needed).
+#[instrument(skip(pool, token))]
+pub async fn set_github_token(pool: &Pool<Sqlite>, token: &str) -> Result<()> {
+    let now = crate::models::now();
+    sqlx::query(
+        r#"
+        INSERT INTO system_config (id, config_type, github_token, created_at, updated_at)
+        VALUES (?, 'github_token', ?, ?, ?)
+        ON CONFLICT(config_type) DO UPDATE SET
+            github_token = excluded.github_token,
+            updated_at = excluded.updated_at
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(token)
+    .bind(now.clone())
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The server-side GitHub token, if one is configured.
+#[instrument(skip(pool))]
+pub async fn get_github_token(pool: &Pool<Sqlite>) -> Result<Option<String>> {
+    let token: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT github_token FROM system_config WHERE config_type = 'github_token'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(token.flatten().filter(|t| !t.is_empty()))
+}
+
+/// Remove the server-side GitHub token.
+#[instrument(skip(pool))]
+pub async fn delete_github_token(pool: &Pool<Sqlite>) -> Result<()> {
+    sqlx::query("DELETE FROM system_config WHERE config_type = 'github_token'")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,4 +612,16 @@ mod tests {
         assert_eq!(retrieved.succeeded, vec!["app2".to_string()]);
         assert_eq!(retrieved.ran_at, "2026-07-04T00:00:00Z");
     }
+
+    #[tokio::test]
+    async fn github_token_set_replace_delete() {
+        let pool = get_test_pool().await;
+        assert_eq!(get_github_token(&pool).await.unwrap(), None);
+        set_github_token(&pool, "ghp_one").await.unwrap();
+        set_github_token(&pool, "ghp_two").await.unwrap();
+        assert_eq!(get_github_token(&pool).await.unwrap().as_deref(), Some("ghp_two"));
+        delete_github_token(&pool).await.unwrap();
+        assert_eq!(get_github_token(&pool).await.unwrap(), None);
+    }
+
 }

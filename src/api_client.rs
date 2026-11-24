@@ -181,6 +181,28 @@ impl ApiClient {
         }).await
     }
 
+    /// `POST /apps/launch` — create an app from a GitHub repo using the
+    /// server's own GitHub token (remote MCP `create_app`). Returns the
+    /// server's JSON summary as-is.
+    pub async fn launch_app(
+        &self,
+        app_name: &str,
+        repo: &str,
+        rotate_token: bool,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{}/apps/launch", self.config.base_url);
+        let payload =
+            serde_json::json!({ "name": app_name, "repo": repo, "rotate_token": rotate_token });
+        self.execute_request(|client, auth_header| {
+            let mut req = client.post(&url).json(&payload);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await
+    }
+
     pub async fn start_app(&self, app_name: &str) -> Result<()> {
         let url = format!("{}/apps/{}/start", self.config.base_url, app_name);
 
@@ -655,6 +677,54 @@ impl ApiClient {
         }).await?;
 
         println!("GHCR token deleted successfully");
+        Ok(())
+    }
+
+    /// `POST /config/github` — store the server-side GitHub token (checked
+    /// against GitHub by the server).
+    pub async fn set_github_token(&self, token: &str) -> Result<()> {
+        let url = format!("{}/config/github", self.config.base_url);
+        let payload = serde_json::json!({ "token": token });
+        let msg = self
+            .execute_request_text(|client, auth_header| {
+                let mut req = client.post(&url).json(&payload);
+                if let Some(header) = auth_header {
+                    req = req.header("Authorization", header);
+                }
+                req
+            })
+            .await?;
+        println!("{msg}");
+        Ok(())
+    }
+
+    /// `GET /config/github` — redacted token, its login and scopes.
+    pub async fn get_github_token(&self) -> Result<()> {
+        let url = format!("{}/config/github", self.config.base_url);
+        let config: serde_json::Value = self
+            .execute_request(|client, auth_header| {
+                let mut req = client.get(&url);
+                if let Some(header) = auth_header {
+                    req = req.header("Authorization", header);
+                }
+                req
+            })
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&config)?);
+        Ok(())
+    }
+
+    pub async fn delete_github_token(&self) -> Result<()> {
+        let url = format!("{}/config/github", self.config.base_url);
+        self.execute_request_text(|client, auth_header| {
+            let mut req = client.delete(&url);
+            if let Some(header) = auth_header {
+                req = req.header("Authorization", header);
+            }
+            req
+        })
+        .await?;
+        println!("GitHub token deleted");
         Ok(())
     }
 

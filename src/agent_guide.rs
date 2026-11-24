@@ -22,5 +22,5 @@ token into the chat. Ask before `delete_app` or rotating tokens.";
 pub const MCP_REMOTE_INSTRUCTIONS: &str = "This is the remote litehouse MCP \
 endpoint: pass `sha` as the full hex commit sha (refs like HEAD can't be \
 resolved here), `list_deploys` waits at most 120s per call (call again while \
-the deploy is still in progress), and `create_app` isn't available (run \
-`lh create` locally).";
+the deploy is still in progress), and `create_app` takes `repo` and uses the \
+server's own GitHub token: wait on the `commit_sha` it returns.";

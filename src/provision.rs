@@ -71,31 +71,9 @@ pub async fn provision_app(
     let setup = async {
         let token =
             crate::commands::github_login::resolve_github_token(allow_interactive).await?;
-        crate::github::actions::put_actions_secret(
-            &token,
-            owner,
-            repo_name,
-            "LITEHOUSE_DEPLOY_TOKEN",
-            &create_result.deploy_token,
-        )
-        .await
-        .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
-
         let workflow =
-            crate::workflow::render_deploy_workflow(
-            owner, repo_name, app_name, &hook_url, &platform,
-        );
-        crate::github::actions::put_file(
-            &token,
-            owner,
-            repo_name,
-            ".github/workflows/litehouse-deploy.yml",
-            &workflow,
-            "Add litehouse deploy workflow",
-        )
-        .await
-        .context("committing .github/workflows/litehouse-deploy.yml")?;
-
+            crate::workflow::render_deploy_workflow(owner, repo_name, app_name, &hook_url, &platform);
+        wire_repo(&token, owner, repo_name, &create_result.deploy_token, &workflow).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
@@ -119,6 +97,74 @@ pub async fn provision_app(
         repo,
         workflow_committed: true,
     })
+}
+
+/// Set the `LITEHOUSE_DEPLOY_TOKEN` Actions secret on `owner/repo`, then
+/// commit the rendered deploy `workflow`; returns the commit's sha. Secret first: the commit lands on
+/// the default branch and starts the first deploy, which needs the secret.
+/// Shared by `lh create` (client-side token) and the server's
+/// `POST /api/apps/launch` (server-side token).
+pub async fn wire_repo(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    deploy_token: &str,
+    workflow: &str,
+) -> Result<Option<String>> {
+    crate::github::actions::put_actions_secret(
+        token,
+        owner,
+        repo,
+        "LITEHOUSE_DEPLOY_TOKEN",
+        deploy_token,
+    )
+    .await
+    .context("setting LITEHOUSE_DEPLOY_TOKEN secret")?;
+
+    crate::github::actions::put_file(
+        token,
+        owner,
+        repo,
+        WORKFLOW_PATH,
+        workflow,
+        "Add litehouse deploy workflow",
+    )
+    .await
+    .with_context(|| format!("committing {}", WORKFLOW_PATH))
+}
+
+/// Where the deploy workflow lives in an app's repo.
+pub const WORKFLOW_PATH: &str = ".github/workflows/litehouse-deploy.yml";
+
+/// Accept a repo as "owner/name", a github.com HTTPS URL, or an SSH remote
+/// (`git@github.com:owner/name.git`), and return `(owner, name)`.
+pub fn parse_repo_arg(input: &str) -> Result<(String, String)> {
+    let input = input.trim().trim_end_matches('/');
+    let parsed = if input.contains("github.com") {
+        let input = if input.starts_with("github.com/") {
+            format!("https://{input}")
+        } else {
+            input.to_string()
+        };
+        crate::github::api::parse_repo_url(&input).ok()
+    } else {
+        input
+            .trim_end_matches(".git")
+            .split_once('/')
+            .map(|(o, n)| (o.to_string(), n.to_string()))
+    };
+    let valid = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    };
+    match parsed {
+        Some((owner, name)) if valid(&owner) && valid(&name) => Ok((owner, name)),
+        _ => Err(anyhow!(
+            "'{}' isn't a GitHub repo: use owner/name or https://github.com/owner/name",
+            input
+        )),
+    }
 }
 
 /// Infer "owner/name" from the `origin` git remote in the current directory.
@@ -146,4 +192,33 @@ pub fn infer_repo_from_git() -> Result<String> {
     })?;
 
     Ok(format!("{}/{}", owner, repo))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_repo_arg_accepts_common_forms() {
+        let want = ("dan".to_string(), "my-app".to_string());
+        for input in [
+            "dan/my-app",
+            " dan/my-app.git ",
+            "https://github.com/dan/my-app",
+            "https://github.com/dan/my-app.git",
+            "https://github.com/dan/my-app/",
+            "https://github.com/dan/my-app/tree/main",
+            "github.com/dan/my-app",
+            "git@github.com:dan/my-app.git",
+        ] {
+            assert_eq!(parse_repo_arg(input).unwrap(), want, "{input}");
+        }
+    }
+
+    #[test]
+    fn parse_repo_arg_rejects_junk() {
+        for input in ["", "dan", "dan/", "/app", "https://gitlab.com/dan/app", "dan/my app", "a/b/c"] {
+            assert!(parse_repo_arg(input).is_err(), "{input}");
+        }
+    }
 }

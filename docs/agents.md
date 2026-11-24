@@ -200,7 +200,20 @@ admin UI's settings page has copy-ready snippets.
   <url>`, then `/mcp` to sign in), or send the admin token as
   `--header "Authorization: Bearer $LITEHOUSE_TOKEN"`.
 
-Remote differences: `create_app` isn't available (it needs your GitHub
-token; run `lh create` locally), `sha` must be the full hex commit sha
-(the server can't resolve `HEAD`), and `list_deploys` waits at most 120s
-per call, so call it again while the deploy is still in progress.
+Remote differences: `sha` must be the full hex commit sha (the server
+can't resolve `HEAD`), and `list_deploys` waits at most 120s per call, so
+call it again while the deploy is still in progress.
+
+`create_app` works remotely with the **server's** GitHub token instead of
+yours: the admin sets it once with `lh config github set --token <PAT>`
+(classic PAT with `repo` + `workflow`, or a fine-grained token with
+Contents, Secrets and Workflows read/write on the repos). Pass `app_name`
+and `repo` (`owner/name` or a github.com URL). The server checks the repo
+exists and has a root `Dockerfile` (a missing one is a `warnings` entry),
+sets `LITEHOUSE_DEPLOY_TOKEN`, and commits the deploy workflow to the
+default branch. That commit starts the first build: wait on it with
+`list_deploys` `{wait: true, sha: <commit_sha>}` from the result. A
+private repo makes a private image, so the server also needs a GHCR read
+token (`lh config ghcr set`). The deploy token is never returned over MCP;
+if GitHub setup fails after the app is created, fix the token and call
+`create_app` again with `rotate_token: true`.

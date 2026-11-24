@@ -36,6 +36,7 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
     let protected_routes = Router::new()
         .route("/apps", get(list_apps))
         .route("/apps", post(create_app))
+        .route("/apps/launch", post(launch_app))
         .route("/apps/summary", get(apps_summary))
         .route("/apps/:name/summary", get(app_summary))
         .route("/apps/:name/metrics", get(get_app_metrics))
@@ -64,6 +65,9 @@ pub fn create_api_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/config/ghcr", post(set_ghcr_config))
         .route("/config/ghcr", get(get_ghcr_config))
         .route("/config/ghcr", delete(delete_ghcr_config))
+        .route("/config/github", post(set_github_config))
+        .route("/config/github", get(get_github_config))
+        .route("/config/github", delete(delete_github_config))
         .route("/backups/run", post(run_backup_now))
         .route("/backups/status", get(get_backup_status))
         .route("/backups/catalog", get(get_backup_catalog))
@@ -1060,110 +1064,350 @@ async fn create_app(
         let s = state.read().await;
         (s.db_pool.clone(), s.server_config.clone())
     };
+    match register_app(
+        &pool,
+        &server_config,
+        &payload.name,
+        payload.repo.as_deref(),
+        payload.rotate_token,
+    )
+    .await
+    {
+        Ok((status, created)) => (status, Json(created)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
 
-    let existing = match db::app::get_by_name(&pool, &payload.name).await {
-        Ok(existing) => existing,
-        Err(e) => return internal(e).into_response(),
-    };
+/// The server half of creating an app, shared by `POST /api/apps` (the CLI's
+/// `lh create`) and `POST /api/apps/launch` (admin UI, remote MCP): validate
+/// the name, create the DB row + volume, link `repo`, mint a deploy token.
+/// With `rotate_token`, an existing app is re-linked and gets a fresh token
+/// (200); a new app is 201.
+async fn register_app(
+    pool: &sqlx::Pool<sqlx::Sqlite>,
+    server_config: &ServerConfig,
+    name: &str,
+    repo: Option<&str>,
+    rotate_token: bool,
+) -> Result<(StatusCode, CreateAppResponse), (StatusCode, String)> {
+    let existing = db::app::get_by_name(pool, name).await.map_err(internal)?;
 
     // Only new names are checked, so apps created before this rule keep working.
-    if existing.is_none()
-        && let Err(msg) = validate_new_app_name(&payload.name, server_config.admin_label())
-    {
-        return (StatusCode::BAD_REQUEST, msg).into_response();
+    if existing.is_none() {
+        validate_new_app_name(name, server_config.admin_label())
+            .map_err(|msg| (StatusCode::BAD_REQUEST, msg))?;
     }
 
     if let Some(existing) = existing {
-        if !payload.rotate_token {
-            return (
-                StatusCode::CONFLICT,
-                format!("App '{}' already exists", payload.name),
-            )
-                .into_response();
+        if !rotate_token {
+            return Err((StatusCode::CONFLICT, format!("App '{}' already exists", name)));
         }
 
         // Order matters: persist the repo (full-row save) BEFORE minting the
         // token hash. save() writes every column, so doing it after
         // set_deploy_token_hash would silently revert the fresh hash and leave
         // the GitHub secret out of sync with the server.
-        if let Some(repo) = &payload.repo {
+        if let Some(repo) = repo {
             let mut updated = existing.clone();
-            updated.repo = Some(repo.clone());
-            if let Err(e) = db::app::save(&pool, &updated).await {
-                return internal(e).into_response();
-            }
+            updated.repo = Some(repo.to_string());
+            db::app::save(pool, &updated).await.map_err(internal)?;
         }
 
         let token = crate::auth::generate_token();
         let hash = crate::auth::hash_token(&token);
-        if let Err(e) = db::app::set_deploy_token_hash(&pool, &existing.id, &hash).await {
-            return internal(e).into_response();
-        }
+        db::app::set_deploy_token_hash(pool, &existing.id, &hash)
+            .await
+            .map_err(internal)?;
 
-        return (
+        return Ok((
             StatusCode::OK,
-            Json(CreateAppResponse {
+            CreateAppResponse {
                 id: existing.id,
                 name: existing.name.clone(),
                 state: existing.state.to_string(),
                 deploy_token: token,
-                url: app_url(&existing.name, &server_config),
-            }),
-        )
-            .into_response();
+                url: app_url(&existing.name, server_config),
+            },
+        ));
     }
 
-    if let Err(e) = create::execute(&pool, &payload.name).await {
-        tracing::error!("Failed to create app '{}': {}", payload.name, e);
-        return (
+    if let Err(e) = create::execute(pool, name).await {
+        tracing::error!("Failed to create app '{}': {}", name, e);
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to create app: {}", e),
-        )
-            .into_response();
+        ));
     }
 
-    let mut app = match db::app::get_by_name(&pool, &payload.name).await {
+    let mut app = match db::app::get_by_name(pool, name).await {
         Ok(Some(app)) => app,
         Ok(None) => {
-            tracing::error!("App '{}' created but could not be retrieved", payload.name);
-            return (
+            tracing::error!("App '{}' created but could not be retrieved", name);
+            return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "App created but could not be retrieved",
-            )
-                .into_response();
+                "App created but could not be retrieved".to_string(),
+            ));
         }
         Err(e) => {
-            tracing::error!("App '{}' created but failed to retrieve: {}", payload.name, e);
-            return internal(e).into_response();
+            tracing::error!("App '{}' created but failed to retrieve: {}", name, e);
+            return Err(internal(e));
         }
     };
 
-    if let Some(repo) = &payload.repo {
-        app.repo = Some(repo.clone());
-        if let Err(e) = db::app::save(&pool, &app).await {
+    if let Some(repo) = repo {
+        app.repo = Some(repo.to_string());
+        if let Err(e) = db::app::save(pool, &app).await {
             tracing::error!("App '{}' created but failed to save repo: {}", app.name, e);
-            return internal(e).into_response();
+            return Err(internal(e));
         }
     }
 
     let token = crate::auth::generate_token();
     let hash = crate::auth::hash_token(&token);
-    if let Err(e) = db::app::set_deploy_token_hash(&pool, &app.id, &hash).await {
+    if let Err(e) = db::app::set_deploy_token_hash(pool, &app.id, &hash).await {
         tracing::error!("App '{}' created but failed to set deploy token: {}", app.name, e);
-        return internal(e).into_response();
+        return Err(internal(e));
     }
 
-    (
+    Ok((
         StatusCode::CREATED,
-        Json(CreateAppResponse {
+        CreateAppResponse {
             id: app.id,
             name: app.name.clone(),
             state: app.state.to_string(),
             deploy_token: token,
-            url: app_url(&app.name, &server_config),
-        }),
+            url: app_url(&app.name, server_config),
+        },
+    ))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LaunchAppRequest {
+    name: String,
+    /// "owner/name", a github.com URL, or an SSH remote.
+    repo: String,
+    /// Re-link an existing app: mint a fresh deploy token and re-commit the
+    /// workflow (same as `lh create --rotate-token`).
+    #[serde(default)]
+    rotate_token: bool,
+    /// Don't touch GitHub: create the app and return the deploy token and
+    /// workflow for the caller to install by hand. Used when no server-side
+    /// GitHub token is configured.
+    #[serde(default)]
+    manual: bool,
+}
+
+/// What `POST /api/apps/launch` did. `deploy_token` and `workflow` are only
+/// present when the repo still needs setting up by hand (`manual`, or the
+/// GitHub step failed after the app was created): they are what to install.
+#[derive(Debug, serde::Serialize)]
+struct LaunchAppResponse {
+    name: String,
+    url: String,
+    repo: String,
+    /// True once the secret is set and the workflow committed. The commit
+    /// itself starts the first build + deploy in GitHub Actions.
+    workflow_committed: bool,
+    default_branch: Option<String>,
+    /// The workflow commit: the first deploy is for this sha, so
+    /// `lh deploys <app> --wait --sha <it>` / MCP `list_deploys` waits on it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit_sha: Option<String>,
+    /// Things that will likely make the first deploy fail.
+    warnings: Vec<String>,
+    /// Set when the app was created but GitHub setup failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    github_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deploy_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workflow: Option<String>,
+    workflow_path: &'static str,
+    hook_url: String,
+}
+
+/// `POST /api/apps/launch` — create an app from a GitHub repo in one step,
+/// with no client-side GitHub token: the admin UI's "new app" form and the
+/// remote MCP `create_app` tool. The server's own GitHub token (Settings,
+/// `lh config github set`) sets the `LITEHOUSE_DEPLOY_TOKEN` secret and
+/// commits the deploy workflow, which starts the first deploy. The repo is
+/// checked before anything is created, so a typo'd repo leaves no app behind.
+#[instrument(skip(state, headers, payload), fields(name = %payload.name, repo = %payload.repo))]
+async fn launch_app(
+    State(state): State<Arc<RwLock<AppState>>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<LaunchAppRequest>,
+) -> impl IntoResponse {
+    let (pool, server_config, docker) = {
+        let s = state.read().await;
+        (s.db_pool.clone(), s.server_config.clone(), s.docker.clone())
+    };
+
+    let (owner, repo_name) = match crate::provision::parse_repo_arg(&payload.repo) {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+
+    // Fail on the name before touching GitHub.
+    match db::app::get_by_name(&pool, &payload.name).await {
+        Ok(Some(_)) if !payload.rotate_token => {
+            return (
+                StatusCode::CONFLICT,
+                format!(
+                    "App '{}' already exists. Pick another name, or re-link it with rotate_token.",
+                    payload.name
+                ),
+            )
+                .into_response();
+        }
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(msg) = validate_new_app_name(&payload.name, server_config.admin_label()) {
+                return (StatusCode::BAD_REQUEST, msg).into_response();
+            }
+        }
+        Err(e) => return internal(e).into_response(),
+    }
+
+    let github_token = if payload.manual {
+        None
+    } else {
+        match db_system_config::get_github_token(&pool).await {
+            Ok(Some(t)) => Some(t),
+            Ok(None) => {
+                return (
+                    StatusCode::PRECONDITION_FAILED,
+                    "No GitHub token is configured on the server, so it can't set up the repo. \
+                     Add one under Settings > GitHub token (needs `repo` and `workflow` scopes) \
+                     or `lh config github set --token ...`, or create the app with manual setup."
+                        .to_string(),
+                )
+                    .into_response();
+            }
+            Err(e) => return internal(e).into_response(),
+        }
+    };
+
+    let mut warnings = Vec::new();
+    let mut owner = owner;
+    let mut repo_name = repo_name;
+    let mut default_branch = None;
+    if let Some(token) = &github_token {
+        let check = match crate::github::actions::check_repo(token, &owner, &repo_name).await {
+            Ok(c) => c,
+            Err(e) => return (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        };
+        if check.admin == Some(false) {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "The server's GitHub token can read {} but isn't an admin of it, so it \
+                     can't set the deploy secret.",
+                    check.full_name
+                ),
+            )
+                .into_response();
+        }
+        if let Some((o, r)) = check.full_name.split_once('/') {
+            owner = o.to_string();
+            repo_name = r.to_string();
+        }
+        if !check.has_dockerfile {
+            warnings.push(format!(
+                "No Dockerfile at the root of {} on {}: the build will fail until one is added.",
+                check.full_name, check.default_branch
+            ));
+        }
+        if check.private
+            && matches!(db_system_config::get_ghcr_token(&pool).await, Ok(None))
+        {
+            warnings.push(
+                "The repo is private, so its image on ghcr.io will be too, and no GHCR read \
+                 token is configured: the server won't be able to pull it. Add one under \
+                 Settings > GHCR read token."
+                    .to_string(),
+            );
+        }
+        default_branch = Some(check.default_branch);
+    }
+    let repo = format!("{owner}/{repo_name}");
+
+    let hook_url = format!(
+        "{}/api/hooks/deploy",
+        crate::oauth::public_base(&headers, &server_config)
+    );
+    let platform = crate::docker::host_platform(&docker)
+        .await
+        .unwrap_or_else(|| crate::workflow::DEFAULT_PLATFORM.to_string());
+    let mut workflow = crate::workflow::render_deploy_workflow(
+        &owner,
+        &repo_name,
+        &payload.name,
+        &hook_url,
+        &platform,
+    );
+    if let Some(branch) = &default_branch {
+        workflow = crate::workflow::with_default_branch(&workflow, branch);
+    }
+
+    let (status, created) = match register_app(
+        &pool,
+        &server_config,
+        &payload.name,
+        Some(&repo),
+        payload.rotate_token,
     )
-        .into_response()
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+
+    let mut response = LaunchAppResponse {
+        name: created.name.clone(),
+        url: created.url.clone(),
+        repo: repo.clone(),
+        workflow_committed: false,
+        default_branch,
+        commit_sha: None,
+        warnings,
+        github_error: None,
+        deploy_token: None,
+        workflow: None,
+        workflow_path: crate::provision::WORKFLOW_PATH,
+        hook_url,
+    };
+
+    match &github_token {
+        Some(token) => {
+            match crate::provision::wire_repo(
+                token,
+                &owner,
+                &repo_name,
+                &created.deploy_token,
+                &workflow,
+            )
+            .await
+            {
+                Ok(sha) => {
+                    response.workflow_committed = true;
+                    response.commit_sha = sha;
+                }
+                Err(e) => {
+                    tracing::warn!("app '{}' created but GitHub setup failed: {e:#}", created.name);
+                    response.github_error = Some(format!("{e:#}"));
+                    response.deploy_token = Some(created.deploy_token);
+                    response.workflow = Some(workflow);
+                }
+            }
+        }
+        None => {
+            response.deploy_token = Some(created.deploy_token);
+            response.workflow = Some(workflow);
+        }
+    }
+
+    (status, Json(response)).into_response()
 }
 
 /// Best-effort URL an app will be reachable at, for display purposes only.
@@ -1796,6 +2040,108 @@ async fn delete_ghcr_config(State(state): State<Arc<RwLock<AppState>>>) -> impl 
 }
 
 #[derive(Debug, serde::Serialize)]
+struct GithubConfigResponse {
+    configured: bool,
+    /// Redacted to its type prefix, like the GHCR token.
+    token: Option<String>,
+    /// Account the token belongs to and its classic scopes (absent for
+    /// fine-grained tokens), checked live. `error` if GitHub rejected it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    login: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scopes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Classic-token scopes needed to set Actions secrets and commit workflow
+/// files. Fine-grained tokens report no scopes and are taken on trust.
+fn missing_github_scopes(scopes: &Option<Vec<String>>) -> Vec<&'static str> {
+    let Some(scopes) = scopes else { return vec![] };
+    ["repo", "workflow"]
+        .into_iter()
+        .filter(|need| !scopes.iter().any(|s| s == need))
+        .collect()
+}
+
+/// `POST /api/config/github` — save the token the server uses to set up a
+/// new app's repo (admin UI "new app", remote MCP `create_app`). Checked
+/// against GitHub first: a rejected token or one missing `repo`/`workflow`
+/// is refused rather than stored.
+#[instrument(skip(state, payload))]
+async fn set_github_config(
+    State(state): State<Arc<RwLock<AppState>>>,
+    Json(payload): Json<SetGhcrConfigRequest>,
+) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    let token = payload.token.trim();
+    let identity = match crate::github::actions::token_identity(token).await {
+        Ok(i) => i,
+        Err(e) => return (StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+    };
+    let missing = missing_github_scopes(&identity.scopes);
+    if !missing.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "That token is missing the {} scope{}: litehouse needs `repo` (to set the \
+                 deploy secret) and `workflow` (to commit the deploy workflow).",
+                missing.join(" and "),
+                if missing.len() > 1 { "s" } else { "" }
+            ),
+        )
+            .into_response();
+    }
+    match db_system_config::set_github_token(&pool, token).await {
+        Ok(()) => (
+            StatusCode::OK,
+            format!("GitHub token for {} saved", identity.login),
+        )
+            .into_response(),
+        Err(e) => internal(e).into_response(),
+    }
+}
+
+#[instrument(skip(state))]
+async fn get_github_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    match db_system_config::get_github_token(&pool).await {
+        Ok(Some(token)) => {
+            let (login, scopes, error) = match crate::github::actions::token_identity(&token).await {
+                Ok(i) => (Some(i.login), i.scopes, None),
+                Err(e) => (None, None, Some(format!("{e:#}"))),
+            };
+            Json(GithubConfigResponse {
+                configured: true,
+                token: Some(redact_token(&token)),
+                login,
+                scopes,
+                error,
+            })
+            .into_response()
+        }
+        Ok(None) => Json(GithubConfigResponse {
+            configured: false,
+            token: None,
+            login: None,
+            scopes: None,
+            error: None,
+        })
+        .into_response(),
+        Err(e) => internal(e).into_response(),
+    }
+}
+
+#[instrument(skip(state))]
+async fn delete_github_config(State(state): State<Arc<RwLock<AppState>>>) -> impl IntoResponse {
+    let pool = state.read().await.db_pool.clone();
+    match db_system_config::delete_github_token(&pool).await {
+        Ok(()) => (StatusCode::OK, "GitHub token deleted").into_response(),
+        Err(e) => internal(e).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
 struct BackupStatusResponse {
     last_backup_date: Option<String>,
     last_backup_report: Option<crate::backup::BackupReport>,
@@ -1983,6 +2329,57 @@ mod storage_api_tests {
         db::app::save(&pool, &app).await.unwrap();
         let token = crate::storage::token_for_app(&pool, &app).await.unwrap();
         (app, token)
+    }
+
+    fn launch_body(name: &str, repo: &str) -> Body {
+        Body::from(serde_json::json!({ "name": name, "repo": repo }).to_string())
+    }
+
+    async fn post_launch(state: &Arc<RwLock<AppState>>, body: Body) -> (StatusCode, String) {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/apps/launch")
+            .header(header::AUTHORIZATION, "Bearer admin")
+            .header(header::CONTENT_TYPE, "application/json");
+        let resp = create_api_router(state.clone())
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    #[tokio::test]
+    async fn launch_rejects_bad_input_before_creating_anything() {
+        let state = test_state().await;
+        let pool = state.read().await.db_pool.clone();
+
+        let (s, msg) = post_launch(&state, launch_body("newapp", "not a repo")).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{msg}");
+
+        let (s, msg) = post_launch(&state, launch_body("Bad_Name", "dan/app")).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{msg}");
+
+        // No server-side GitHub token: refused, and no app row left behind.
+        let (s, msg) = post_launch(&state, launch_body("newapp", "https://github.com/dan/app")).await;
+        assert_eq!(s, StatusCode::PRECONDITION_FAILED, "{msg}");
+        assert!(msg.contains("GitHub token"), "{msg}");
+        assert!(db::app::get_by_name(&pool, "newapp").await.unwrap().is_none());
+
+        // An existing name is a conflict unless re-linking.
+        db::app::save(&pool, &App::new("taken").unwrap()).await.unwrap();
+        let (s, msg) = post_launch(&state, launch_body("taken", "dan/app")).await;
+        assert_eq!(s, StatusCode::CONFLICT, "{msg}");
+    }
+
+    #[test]
+    fn github_scope_check() {
+        let scopes = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert!(missing_github_scopes(&None).is_empty(), "fine-grained tokens pass");
+        assert!(missing_github_scopes(&scopes(&["repo", "workflow", "read:packages"])).is_empty());
+        assert_eq!(missing_github_scopes(&scopes(&["repo"])), vec!["workflow"]);
+        assert_eq!(missing_github_scopes(&scopes(&[])), vec!["repo", "workflow"]);
     }
 
     #[tokio::test]
